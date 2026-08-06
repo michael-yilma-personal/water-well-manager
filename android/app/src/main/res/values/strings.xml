@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Water Well Manager</string>
+    <string name="title_activity_main">Water Well Manager</string>
+    <string name="package_name">com.jaguarsllc.drillpro</string>
+    <string name="custom_url_scheme">com.jaguarsllc.drillpro</string>
+</resources>

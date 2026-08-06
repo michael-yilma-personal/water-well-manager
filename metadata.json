@@ -1,0 +1,6 @@
+{
+  "name": "Water Well Drilling Manager",
+  "description": "Professional mobile-first drilling management application for water well drilling companies with offline-first synchronization, pipe logging, lithology tracking, and automated PDF/Excel reports.",
+  "requestFramePermissions": ["geolocation", "camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

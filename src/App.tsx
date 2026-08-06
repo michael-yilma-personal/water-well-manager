@@ -1,0 +1,588 @@
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+import React, { useState, useEffect } from 'react';
+import {
+  ActivePipeTimer,
+  AppSettings,
+  Borehole,
+  DrillingEvent,
+  EventType,
+  PipeRecord,
+  User,
+} from './types';
+import { DrillingStorage, SAMPLE_USERS, createRecordId } from './services/storage';
+import { Header } from './components/Header';
+import { BottomNav, NavTab } from './components/BottomNav';
+import { RigControlView } from './components/views/RigControlView';
+import { PipeLogView } from './components/views/PipeLogView';
+import { NPTView } from './components/views/NPTView';
+import { AnalyticsView } from './components/views/AnalyticsView';
+import { EndPipeModal } from './components/modals/EndPipeModal';
+import { EventModal } from './components/modals/EventModal';
+import { NewBoreholeModal } from './components/modals/NewBoreholeModal';
+import { SettingsModal } from './components/modals/SettingsModal';
+import { ProfileModal } from './components/modals/ProfileModal';
+import { UserManagementModal } from './components/modals/UserManagementModal';
+import {
+  generateShiftReportPDF,
+  generateBoreholeExcelReport,
+} from './utils/reports';
+import { playAlertSound, triggerVibration } from './utils/audio';
+import { useAndroidBackButton } from './utils/useAndroidBackButton';
+
+export default function App() {
+  // Storage instance
+  const [storage] = useState(() => new DrillingStorage());
+
+  // Application state
+  const [settings, setSettings] = useState<AppSettings>(() =>
+    storage.getSettings()
+  );
+  const [currentUser, setCurrentUser] = useState<User>(
+    () => storage.getCurrentUser() || SAMPLE_USERS[0]
+  );
+  const [users, setUsers] = useState<User[]>(() => storage.getUsers());
+  const [boreholes, setBoreholes] = useState<Borehole[]>(() =>
+    storage.getBoreholes()
+  );
+  const [activeBoreholeId, setActiveBoreholeId] = useState<string>(() => {
+    const active = storage.getActiveBorehole();
+    return active?.id || storage.getBoreholes()[0]?.id || '';
+  });
+
+  const activeBorehole =
+    boreholes.find((b) => b.id === activeBoreholeId) || boreholes[0];
+
+  const [pipeRecords, setPipeRecords] = useState<PipeRecord[]>(() =>
+    activeBorehole ? storage.getPipeRecords(activeBorehole.id) : []
+  );
+  const [events, setEvents] = useState<DrillingEvent[]>(() =>
+    activeBorehole ? storage.getEvents(activeBorehole.id) : []
+  );
+
+  // Active pipe timer
+  const [activeTimer, setActiveTimer] = useState<ActivePipeTimer>(() =>
+    activeBorehole
+      ? storage.getActiveTimer(activeBorehole.id)
+      : {
+          boreholeId: '',
+          pipeNumber: 1,
+          startTime: '',
+          startDepth: 0,
+          formation: 'Topsoil',
+          isActive: false,
+        }
+  );
+
+  // Active navigation tab
+  const [activeTab, setActiveTab] = useState<NavTab>('rig');
+
+  // Modals state
+  const [isEndPipeModalOpen, setIsEndPipeModalOpen] = useState(false);
+  const [isEventModalOpen, setIsEventModalOpen] = useState(false);
+  const [selectedEventType, setSelectedEventType] =
+    useState<EventType>('Breakdown');
+  const [isNewBoreholeModalOpen, setIsNewBoreholeModalOpen] = useState(false);
+  const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
+  const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
+  const [isUserManagementOpen, setIsUserManagementOpen] = useState(false);
+
+  // Reload records when active borehole changes
+  useEffect(() => {
+    if (activeBorehole) {
+      setPipeRecords(storage.getPipeRecords(activeBorehole.id));
+      setEvents(storage.getEvents(activeBorehole.id));
+      setActiveTimer(storage.getActiveTimer(activeBorehole.id));
+    }
+  }, [activeBoreholeId, activeBorehole?.id, storage]);
+
+  // Online / Offline synchronization listener
+  const [isOnline, setIsOnline] = useState<boolean>(navigator.onLine);
+  useEffect(() => {
+    const handleOnline = () => {
+      setIsOnline(true);
+      storage.syncPendingRecordsToCloud();
+      setPipeRecords(storage.getPipeRecords(activeBorehole.id));
+      setEvents(storage.getEvents(activeBorehole.id));
+      setBoreholes(storage.getBoreholes());
+    };
+    const handleOffline = () => setIsOnline(false);
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, [activeBorehole?.id, storage]);
+
+  // Handle START PIPE
+  const handleStartPipe = () => {
+    if (!activeBorehole) return;
+
+    const nextPipeNum =
+      pipeRecords.length > 0
+        ? Math.max(...pipeRecords.map((r) => r.pipeNumber)) + 1
+        : 1;
+
+    const nowIso = new Date().toISOString();
+    const defaultPipeLength = Number(
+      activeBorehole.defaultPipeLength || settings.defaultPipeLength || 4.55
+    );
+    const newTimer: ActivePipeTimer = {
+      boreholeId: activeBorehole.id,
+      pipeNumber: nextPipeNum,
+      startTime: nowIso,
+      startDepth: activeBorehole.currentDepth,
+      pipeLength: defaultPipeLength,
+      formation:
+        pipeRecords.length > 0
+          ? pipeRecords[pipeRecords.length - 1].formation
+          : settings.defaultFormation || 'Topsoil',
+      bitType: activeBorehole.bitType || settings.defaultBitType || 'DTH Hammer - Button Bit',
+      bitDiameter: activeBorehole.bitDiameter || settings.defaultBitDiameter || 8.5,
+      operator: currentUser.name,
+      isActive: true,
+    };
+
+    storage.saveActiveTimer(newTimer);
+    setActiveTimer(newTimer);
+  };
+
+  // Handle END PIPE modal open
+  const handleOpenEndPipeModal = () => {
+    setIsEndPipeModalOpen(true);
+  };
+
+  // Handle END PIPE submit. The modal emits a draft without an id — mint one here
+  // so every save appends instead of matching a previous record on `undefined`.
+  const handleSavePipeRecord = (draft: Omit<PipeRecord, 'id'>) => {
+    if (!activeBorehole) return;
+
+    const record: PipeRecord = { ...draft, id: createRecordId('pipe') };
+
+    // Save record to local storage & queue cloud sync. Storage owns the depth
+    // update (currentDepth only ever advances to the deepest recorded pipe).
+    storage.savePipeRecord(record);
+    const nextBoreholes = storage.getBoreholes();
+    setBoreholes(nextBoreholes);
+
+    const updatedBorehole =
+      nextBoreholes.find((b) => b.id === activeBorehole.id) || activeBorehole;
+
+    // Reset active timer, ready for the next pipe
+    const resetTimer: ActivePipeTimer = {
+      boreholeId: activeBorehole.id,
+      pipeNumber: record.pipeNumber + 1,
+      startTime: '',
+      startDepth: updatedBorehole.currentDepth,
+      formation: record.formation,
+      operator: currentUser.name,
+      isActive: false,
+    };
+    storage.saveActiveTimer(resetTimer);
+    setActiveTimer(resetTimer);
+
+    // Refresh state
+    setPipeRecords(storage.getPipeRecords(activeBorehole.id));
+  };
+
+  // Handle saving NPT / Drilling Event
+  const handleSaveEvent = (draft: Omit<DrillingEvent, 'id'>) => {
+    if (!activeBorehole) return;
+    storage.saveEvent({ ...draft, id: createRecordId('ev') });
+    setEvents(storage.getEvents(activeBorehole.id));
+  };
+
+  // Handle deleting pipe record
+  const handleDeletePipeRecord = (id: string) => {
+    if (!activeBorehole) return;
+    storage.deletePipeRecord(activeBorehole.id, id);
+    setPipeRecords(storage.getPipeRecords(activeBorehole.id));
+  };
+
+  // Handle deleting event
+  const handleDeleteEvent = (id: string) => {
+    if (!activeBorehole) return;
+    storage.deleteEvent(activeBorehole.id, id);
+    setEvents(storage.getEvents(activeBorehole.id));
+  };
+
+  const handleSelectBorehole = (boreholeId: string) => {
+    storage.setActiveBorehole(boreholeId);
+    setActiveBoreholeId(boreholeId);
+  };
+
+  // Handle creating new borehole
+  const handleCreateBorehole = (newBh: Borehole) => {
+    storage.saveBorehole(newBh);
+    storage.setActiveBorehole(newBh.id);
+    const list = storage.getBoreholes();
+    setBoreholes(list);
+    setActiveBoreholeId(newBh.id);
+    setPipeRecords([]);
+    setEvents([]);
+    setActiveTimer({
+      boreholeId: newBh.id,
+      pipeNumber: 1,
+      startTime: '',
+      startDepth: 0,
+      formation: settings.defaultFormation || 'Topsoil',
+      isActive: false,
+    });
+    setIsNewBoreholeModalOpen(false);
+    setActiveTab('rig');
+  };
+
+  const handleDeleteBorehole = (boreholeId: string) => {
+    if (!boreholeId) return;
+    storage.deleteBorehole(boreholeId);
+    const list = storage.getBoreholes();
+    setBoreholes(list);
+    const nextActive = list.find((bh) => bh.id === boreholeId)
+      ? list[0]
+      : list.find((bh) => bh.id === activeBoreholeId) || list[0];
+    if (nextActive) {
+      storage.setActiveBorehole(nextActive.id);
+      setActiveBoreholeId(nextActive.id);
+      setPipeRecords(storage.getPipeRecords(nextActive.id));
+      setEvents(storage.getEvents(nextActive.id));
+      setActiveTimer(storage.getActiveTimer(nextActive.id));
+    } else {
+      setActiveBoreholeId('');
+      setPipeRecords([]);
+      setEvents([]);
+      setActiveTimer({
+        boreholeId: '',
+        pipeNumber: 1,
+        startTime: '',
+        startDepth: 0,
+        formation: settings.defaultFormation || 'Topsoil',
+        isActive: false,
+      });
+    }
+  };
+
+  // Handle updating borehole default pipe length
+  const handleUpdateBoreholePipeLength = (newLen: number) => {
+    if (!activeBorehole) return;
+    const updated: Borehole = {
+      ...activeBorehole,
+      defaultPipeLength: newLen,
+      updatedAt: new Date().toISOString(),
+    };
+    storage.saveBorehole(updated);
+    setBoreholes(storage.getBoreholes());
+  };
+
+  // Handle saving App settings
+  const handleSaveSettings = (newSet: AppSettings) => {
+    storage.saveSettings(newSet);
+    setSettings(newSet);
+  };
+
+  const handleSaveProfile = (newUser: User) => {
+    storage.saveUser(newUser);
+    storage.setCurrentUser(newUser.id);
+    setUsers(storage.getUsers());
+    setCurrentUser(newUser);
+  };
+
+  const handleSaveManagedUser = (user: User) => {
+    storage.saveUser(user);
+    const nextUsers = storage.getUsers();
+    setUsers(nextUsers);
+
+    // Keep the active profile in sync when the edited user is the active one.
+    const nextUser =
+      nextUsers.find((candidate) => candidate.id === user.id) || user;
+    if (currentUser.id === user.id) {
+      storage.setCurrentUser(nextUser.id);
+      setCurrentUser(nextUser);
+    }
+  };
+
+  const handleDeleteManagedUser = (userId: string) => {
+    storage.deleteUser(userId);
+    let remaining = storage.getUsers();
+
+    // Never leave the rig without a profile to log records against.
+    if (remaining.length === 0) {
+      storage.saveUser(SAMPLE_USERS[0]);
+      remaining = storage.getUsers();
+    }
+    setUsers(remaining);
+
+    if (currentUser.id === userId) {
+      // storage.deleteUser already re-points the stored active id; mirror it here.
+      const fallback = remaining[0];
+      storage.setCurrentUser(fallback.id);
+      setCurrentUser(fallback);
+    }
+  };
+
+  const handleChangeUser = (userId: string) => {
+    const match = users.find((u) => u.id === userId);
+    if (match) {
+      storage.setCurrentUser(userId);
+      setCurrentUser(match);
+    }
+  };
+
+  // Handle resetting demo data
+  const handleResetDemoData = () => {
+    storage.resetToDemoData();
+    const list = storage.getBoreholes();
+    setBoreholes(list);
+    if (list[0]) {
+      storage.setActiveBorehole(list[0].id);
+      setActiveBoreholeId(list[0].id);
+      setPipeRecords(storage.getPipeRecords(list[0].id));
+      setEvents(storage.getEvents(list[0].id));
+      setActiveTimer(storage.getActiveTimer(list[0].id));
+    }
+  };
+
+  // Manual cloud sync
+  const handleManualSync = () => {
+    storage.syncPendingRecordsToCloud();
+    setPipeRecords(storage.getPipeRecords(activeBorehole.id));
+    setEvents(storage.getEvents(activeBorehole.id));
+    setBoreholes(storage.getBoreholes());
+    playAlertSound(true);
+    triggerVibration([80, 40, 80]);
+  };
+
+  // Android Back: unwind one layer of UI rather than closing the app.
+  const closeTopModal = React.useCallback(() => {
+    const open: [boolean, (v: boolean) => void][] = [
+      [isEndPipeModalOpen, setIsEndPipeModalOpen],
+      [isEventModalOpen, setIsEventModalOpen],
+      [isNewBoreholeModalOpen, setIsNewBoreholeModalOpen],
+      [isSettingsModalOpen, setIsSettingsModalOpen],
+      [isProfileModalOpen, setIsProfileModalOpen],
+      [isUserManagementOpen, setIsUserManagementOpen],
+    ];
+    const top = open.find(([isOpen]) => isOpen);
+    if (!top) return false;
+    top[1](false);
+    return true;
+  }, [
+    isEndPipeModalOpen,
+    isEventModalOpen,
+    isNewBoreholeModalOpen,
+    isSettingsModalOpen,
+    isProfileModalOpen,
+    isUserManagementOpen,
+  ]);
+
+  const goToRootTab = React.useCallback(() => {
+    if (activeTab === 'rig') return false;
+    setActiveTab('rig');
+    return true;
+  }, [activeTab]);
+
+  useAndroidBackButton({ closeTopModal, goToRootTab });
+
+  const sunlightMode = settings.sunlightMode;
+
+  // Exports are async now that they write through the native filesystem. A
+  // rejected promise here would otherwise fail exactly the way the Android
+  // download bug did — silently, with the driller left staring at a button
+  // that appears to do nothing.
+  const runExport = (task: () => Promise<void>) => {
+    task().catch((err) => {
+      console.error('Export failed', err);
+      alert(
+        `Export failed: ${err instanceof Error ? err.message : String(err)}`
+      );
+    });
+  };
+
+  return (
+    <div
+      className={`min-h-screen flex flex-col font-sans select-none antialiased ${
+        sunlightMode
+          ? 'bg-black text-[#FFD700]'
+          : 'bg-[#0A0A0A] text-white'
+      }`}
+    >
+      {/* Header with Rig Info, Status, Role Switcher, & Theme */}
+      <Header
+        activeBorehole={activeBorehole}
+        allBoreholes={boreholes}
+        onSelectBorehole={handleSelectBorehole}
+        onOpenNewBorehole={() => setIsNewBoreholeModalOpen(true)}
+        onOpenSettings={() => setIsSettingsModalOpen(true)}
+        currentUser={currentUser}
+        allUsers={users}
+        onChangeUser={handleChangeUser}
+        sunlightMode={sunlightMode}
+        onToggleSunlightMode={() =>
+          handleSaveSettings({
+            ...settings,
+            sunlightMode: !settings.sunlightMode,
+          })
+        }
+        soundEnabled={settings.soundEnabled}
+        onToggleSound={() =>
+          handleSaveSettings({
+            ...settings,
+            soundEnabled: !settings.soundEnabled,
+          })
+        }
+        pendingSyncCount={storage.getPendingSyncCount()}
+        isSyncing={false}
+        onSyncNow={handleManualSync}
+        onOpenProfile={() => setIsProfileModalOpen(true)}
+        onOpenUserManagement={() => setIsUserManagementOpen(true)}
+      />
+
+      {/* Main Content Area */}
+      <main className="flex-1 flex flex-col pb-20">
+        {activeTab === 'rig' && (
+          <RigControlView
+            activeBorehole={activeBorehole}
+            activeTimer={activeTimer}
+            onStartPipe={handleStartPipe}
+            onOpenEndPipeModal={handleOpenEndPipeModal}
+            onOpenEventModal={(type) => {
+              setSelectedEventType(type);
+              setIsEventModalOpen(true);
+            }}
+            onOpenSettings={() => setIsSettingsModalOpen(true)}
+            pipeRecords={pipeRecords}
+            events={events}
+            currentUser={currentUser}
+            sunlightMode={sunlightMode}
+            onGenerateShiftReport={() =>
+              runExport(() =>
+                generateShiftReportPDF(activeBorehole, pipeRecords, events)
+              )
+            }
+            onExportExcel={() =>
+              runExport(() =>
+                generateBoreholeExcelReport(activeBorehole, pipeRecords, events)
+              )
+            }
+          />
+        )}
+
+        {activeTab === 'logs' && (
+          <PipeLogView
+            borehole={activeBorehole}
+            pipeRecords={pipeRecords}
+            onDeletePipe={handleDeletePipeRecord}
+            onExportPDF={() =>
+              runExport(() =>
+                generateShiftReportPDF(activeBorehole, pipeRecords, events)
+              )
+            }
+            onExportExcel={() =>
+              runExport(() =>
+                generateBoreholeExcelReport(activeBorehole, pipeRecords, events)
+              )
+            }
+            sunlightMode={sunlightMode}
+          />
+        )}
+
+        {activeTab === 'npt' && (
+          <NPTView
+            borehole={activeBorehole}
+            events={events}
+            onOpenEventModal={(type) => {
+              if (type) setSelectedEventType(type);
+              setIsEventModalOpen(true);
+            }}
+            onDeleteEvent={handleDeleteEvent}
+            sunlightMode={sunlightMode}
+          />
+        )}
+
+        {activeTab === 'analytics' && (
+          <AnalyticsView
+            borehole={activeBorehole}
+            pipeRecords={pipeRecords}
+            events={events}
+            sunlightMode={sunlightMode}
+          />
+        )}
+      </main>
+
+      {/* Fixed Bottom Navigation Bar (Driller Gloves Friendly) */}
+      <BottomNav
+        activeTab={activeTab}
+        onSelectTab={setActiveTab}
+        sunlightMode={sunlightMode}
+        pipeCount={pipeRecords.length}
+        nptCount={events.filter((e) => e.isNPT).length}
+      />
+
+      {/* MODALS */}
+      <EndPipeModal
+        isOpen={isEndPipeModalOpen}
+        onClose={() => setIsEndPipeModalOpen(false)}
+        activeTimer={activeTimer}
+        borehole={activeBorehole}
+        onSavePipe={handleSavePipeRecord}
+        sunlightMode={sunlightMode}
+      />
+
+      <EventModal
+        isOpen={isEventModalOpen}
+        onClose={() => setIsEventModalOpen(false)}
+        eventType={selectedEventType}
+        borehole={activeBorehole}
+        operator={currentUser.name}
+        onSaveEvent={handleSaveEvent}
+        sunlightMode={sunlightMode}
+      />
+
+      <NewBoreholeModal
+        isOpen={isNewBoreholeModalOpen}
+        onClose={() => setIsNewBoreholeModalOpen(false)}
+        onSave={handleCreateBorehole}
+        sunlightMode={sunlightMode}
+      />
+
+      <SettingsModal
+        isOpen={isSettingsModalOpen}
+        onClose={() => setIsSettingsModalOpen(false)}
+        settings={settings}
+        onSaveSettings={handleSaveSettings}
+        activeBorehole={activeBorehole}
+        onUpdateBoreholePipeLength={handleUpdateBoreholePipeLength}
+        sunlightMode={sunlightMode}
+        onOpenUserManagement={() => setIsUserManagementOpen(true)}
+        onResetDemoData={handleResetDemoData}
+        onDeleteCurrentProject={() => {
+          if (activeBorehole) {
+            handleDeleteBorehole(activeBorehole.id);
+          }
+        }}
+      />
+
+      <UserManagementModal
+        isOpen={isUserManagementOpen}
+        onClose={() => setIsUserManagementOpen(false)}
+        users={users}
+        currentUserId={currentUser.id}
+        onSaveUser={handleSaveManagedUser}
+        onDeleteUser={handleDeleteManagedUser}
+        onSetCurrentUser={handleChangeUser}
+        sunlightMode={sunlightMode}
+      />
+
+      <ProfileModal
+        isOpen={isProfileModalOpen}
+        onClose={() => setIsProfileModalOpen(false)}
+        onSave={handleSaveProfile}
+        sunlightMode={sunlightMode}
+      />
+    </div>
+  );
+}
