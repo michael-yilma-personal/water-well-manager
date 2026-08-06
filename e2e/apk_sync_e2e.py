@@ -31,14 +31,17 @@ print(f'{len(before_pipes)} pipe record(s) on server before\n')
 
 with apk_page() as (page, logs):
     body = page.inner_text('body')
-    check('APK shows the sign-in screen', 'link this device' in body.lower(),
-          body[:60].replace('\n', ' | '))
-
-    page.fill('input[type="email"]', 'driller1@example.com')
-    page.fill('input[type="password"]', 'TestPass123!')
-    page.get_by_role('button', name='Link this device').click()
-    page.wait_for_timeout(6000)
-    check('sign-in succeeds on device', 'CURRENT DEPTH' in page.inner_text('body'),
+    # A device that has been linked before never shows this again - that is the
+    # whole point of provisioning once, so the suite must tolerate both states.
+    needs_link = 'link this device' in body.lower()
+    if needs_link:
+        page.fill('input[type="email"]', 'driller1@example.com')
+        page.fill('input[type="password"]', 'TestPass123!')
+        page.get_by_role('button', name='Link this device').click()
+        page.wait_for_timeout(6000)
+    else:
+        print('  (device already linked; skipping sign-in)')
+    check('device is linked and the rig UI is up', 'CURRENT DEPTH' in page.inner_text('body'),
           page.inner_text('body')[:70].replace('\n', ' | '))
     page.screenshot(path=f'{OUT}/apk-signed-in.png')
 

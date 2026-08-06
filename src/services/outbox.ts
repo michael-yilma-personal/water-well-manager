@@ -22,6 +22,9 @@
 
 const STORAGE_KEY = 'wwdm_outbox';
 
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /** Give up retrying automatically after this many failures and park the item. */
 export const MAX_ATTEMPTS = 8;
 
@@ -151,6 +154,19 @@ export class Outbox {
     payload: unknown
   ): OutboxItem | null {
     if (isDemoPayload(payload)) return null;
+
+    // The server's primary keys are uuid columns, so a hand-rolled id shaped
+    // like `bh-1786022504143` is rejected outright and the record - plus
+    // everything referencing it - can never sync. Catching it here turns a
+    // silent, permanent sync failure into an obvious one at the point of the
+    // mistake.
+    if (!UUID_RE.test(entityId)) {
+      console.error(
+        `[outbox] refusing to queue ${entity} with non-uuid id "${entityId}". ` +
+          `Use createRecordId(); the server will not accept this.`
+      );
+      return null;
+    }
 
     if (op === 'delete') {
       // A record deleted before its upsert went out has nothing worth sending

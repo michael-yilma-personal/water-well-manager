@@ -46,8 +46,12 @@ with sync_playwright() as p:
     page.fill('input[type="password"]', 'TestPass123!')
     page.get_by_role('button', name='Link this device').click()
     page.wait_for_timeout(4000)
-    check('signing in reveals the rig UI', 'CURRENT DEPTH' in page.inner_text('body'),
-          page.inner_text('body')[:70].replace('\n', ' | '))
+    # Linking clears the seeded sample job, so a newly linked device correctly
+    # lands on the empty state rather than a fake borehole.
+    after_link = page.inner_text('body')
+    check('linking lands on a usable screen',
+          'No borehole on this device yet' in after_link or 'CURRENT DEPTH' in after_link,
+          after_link[:70].replace('\n', ' | '))
     page.screenshot(path=f'{OUT}/e2e-signed-in.png')
 
     # --- create a real borehole so records have a parent that is not demo ----

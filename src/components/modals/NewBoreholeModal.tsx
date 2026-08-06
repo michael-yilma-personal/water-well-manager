@@ -3,6 +3,7 @@ import { Borehole } from '../../types';
 import {
   BIT_TYPE_OPTIONS,
   BIT_DIAMETER_OPTIONS,
+  createRecordId,
 } from '../../services/storage';
 import { X, Plus, MapPin, Compass, Wrench, Building2 } from 'lucide-react';
 
@@ -57,7 +58,10 @@ export const NewBoreholeModal: React.FC<NewBoreholeModalProps> = ({
     if (!name || !project) return;
 
     const newBh: Borehole = {
-      id: `bh-${Date.now()}`,
+      // Must be a real UUID: the server's primary key is a uuid column, so a
+      // timestamp-shaped id is rejected outright and the borehole - along with
+      // every pipe record referencing it - can never sync.
+      id: createRecordId('bh'),
       name,
       project,
       client: client || 'Private Water Well',

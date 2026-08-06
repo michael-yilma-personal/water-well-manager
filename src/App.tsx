@@ -461,9 +461,47 @@ export default function App() {
   if (!signedIn && !skippedSignIn) {
     return (
       <SignInScreen
-        onSignedIn={() => setSignedIn(true)}
+        onSignedIn={() => {
+          // A linked device belongs to a real crew, so the seeded sample job
+          // is just a confusing fake borehole on the rig. Anything actually
+          // recorded before linking is kept and will still sync.
+          const removed = DrillingStorage.clearDemoData();
+          if (removed > 0) {
+            console.info(`[storage] cleared ${removed} sample record(s) on link`);
+          }
+          setBoreholes(storage.getBoreholes());
+          setActiveBoreholeId(storage.getActiveBorehole()?.id ?? '');
+          setSignedIn(true);
+        }}
         onSkip={() => setSkippedSignIn(true)}
       />
+    );
+  }
+
+  // A device with no boreholes is a real state, not an error: it is exactly what
+  // a crew sees the moment their device is linked and the sample job is cleared.
+  // Rendering the rig UI here would dereference an undefined active borehole.
+  if (!activeBorehole) {
+    return (
+      <div className="min-h-screen bg-[#0A0A0A] text-white flex flex-col items-center justify-center p-6 text-center">
+        <h1 className="text-2xl font-black tracking-tight">PERIPLUS DRILL</h1>
+        <p className="mt-2 mb-6 text-sm text-slate-400 font-semibold max-w-xs">
+          No borehole on this device yet. Create one to start logging pipes.
+          Everything is saved on the rig and uploads when you next have signal.
+        </p>
+        <button
+          onClick={() => setIsNewBoreholeModalOpen(true)}
+          className="px-6 py-3.5 rounded-xl bg-[#FFD700] text-black font-black uppercase tracking-wider border-b-4 border-yellow-700 active:translate-y-1"
+        >
+          Create a borehole
+        </button>
+        <NewBoreholeModal
+          isOpen={isNewBoreholeModalOpen}
+          onClose={() => setIsNewBoreholeModalOpen(false)}
+          onSave={handleCreateBorehole}
+          sunlightMode={sunlightMode}
+        />
+      </div>
     );
   }
 

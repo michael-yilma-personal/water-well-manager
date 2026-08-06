@@ -2,6 +2,13 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { Outbox, MAX_ATTEMPTS, PermanentSyncError, type OutboxItem } from './outbox';
 
+
+/** Deterministic, valid UUIDs for fixtures - the outbox rejects other shapes. */
+function uid(tag: string): string {
+  const hex = [...tag].reduce((a, c) => a + c.charCodeAt(0).toString(16), '').padEnd(12, '0').slice(0, 12);
+  return `00000000-0000-4000-8000-${hex}`;
+}
+
 function harness() {
   const store = new Map<string, string>();
   (globalThis as unknown as { localStorage: unknown }).localStorage = {
@@ -35,13 +42,13 @@ function transportThatFails(failing: string[] = []) {
 test('enqueue makes work pending and drain clears it', async () => {
   harness();
   const ob = new Outbox();
-  ob.enqueue('upsert', 'pipeRecord', 'p-1', { depth: 4.55 });
+  ob.enqueue('upsert', 'pipeRecord', uid('p-1'), { depth: 4.55 });
   assert.equal(ob.depth(), 1);
 
   const t = transportThatFails();
   const result = await ob.drain(t.send, Date.parse('2026-08-05T10:00:00Z'));
 
-  assert.deepEqual(t.sent, ['p-1']);
+  assert.deepEqual(t.sent, [uid('p-1')]);
   assert.equal(result.sent, 1);
   assert.equal(ob.depth(), 0);
 });
@@ -49,28 +56,28 @@ test('enqueue makes work pending and drain clears it', async () => {
 test('drains oldest first so a borehole lands before records referencing it', async () => {
   harness();
   const ob = new Outbox();
-  ob.enqueue('upsert', 'borehole', 'bh-1', {});
-  ob.enqueue('upsert', 'pipeRecord', 'p-1', {});
-  ob.enqueue('upsert', 'pipeRecord', 'p-2', {});
+  ob.enqueue('upsert', 'borehole', uid('bh-1'), {});
+  ob.enqueue('upsert', 'pipeRecord', uid('p-1'), {});
+  ob.enqueue('upsert', 'pipeRecord', uid('p-2'), {});
 
   const t = transportThatFails();
   await ob.drain(t.send, Date.now());
 
-  assert.deepEqual(t.sent, ['bh-1', 'p-1', 'p-2']);
+  assert.deepEqual(t.sent, [uid('bh-1'), uid('p-1'), uid('p-2')]);
 });
 
 test('a failing item does not block the items behind it', async () => {
   harness();
   const ob = new Outbox();
-  ob.enqueue('upload', 'photo', 'photo-big', {});
-  ob.enqueue('upsert', 'pipeRecord', 'p-1', {});
-  ob.enqueue('upsert', 'event', 'e-1', {});
+  ob.enqueue('upload', 'photo', uid('photo-big'), {});
+  ob.enqueue('upsert', 'pipeRecord', uid('p-1'), {});
+  ob.enqueue('upsert', 'event', uid('e-1'), {});
 
-  const t = transportThatFails(['photo-big']);
+  const t = transportThatFails([uid('photo-big')]);
   const result = await ob.drain(t.send, Date.now());
 
   // The stuck photo must not hold up the two small records behind it.
-  assert.deepEqual(t.sent, ['p-1', 'e-1']);
+  assert.deepEqual(t.sent, [uid('p-1'), uid('e-1')]);
   assert.equal(result.failed, 1);
   assert.equal(ob.depth(), 1, 'only the photo remains pending');
 });
@@ -78,9 +85,9 @@ test('a failing item does not block the items behind it', async () => {
 test('failure schedules a backoff instead of retrying immediately', async () => {
   harness();
   const ob = new Outbox();
-  ob.enqueue('upsert', 'pipeRecord', 'p-1', {});
+  ob.enqueue('upsert', 'pipeRecord', uid('p-1'), {});
 
-  const t = transportThatFails(['p-1']);
+  const t = transportThatFails([uid('p-1')]);
   const now = Date.parse('2026-08-05T10:00:00Z');
   await ob.drain(t.send, now);
   assert.equal(t.attempted.length, 1);
@@ -97,9 +104,9 @@ test('failure schedules a backoff instead of retrying immediately', async () => 
 test('an item that keeps failing is parked, never discarded', async () => {
   harness();
   const ob = new Outbox();
-  ob.enqueue('upsert', 'pipeRecord', 'p-1', { depth: 4.55 });
+  ob.enqueue('upsert', 'pipeRecord', uid('p-1'), { depth: 4.55 });
 
-  const t = transportThatFails(['p-1']);
+  const t = transportThatFails([uid('p-1')]);
   let now = Date.parse('2026-08-05T10:00:00Z');
   for (let i = 0; i < MAX_ATTEMPTS + 2; i++) {
     await ob.drain(t.send, now);
@@ -109,7 +116,7 @@ test('an item that keeps failing is parked, never discarded', async () => {
   assert.equal(ob.depth(), 0, 'parked work is not counted as pending');
   const parked = ob.parked();
   assert.equal(parked.length, 1);
-  assert.equal(parked[0].entityId, 'p-1');
+  assert.equal(parked[0].entityId, uid('p-1'));
   assert.deepEqual(parked[0].payload, { depth: 4.55 }, 'payload preserved for recovery');
   assert.match(parked[0].lastError ?? '', /network down/);
 });
@@ -117,13 +124,13 @@ test('an item that keeps failing is parked, never discarded', async () => {
 test('a permanent rejection parks immediately instead of retrying for days', async () => {
   harness();
   const ob = new Outbox();
-  ob.enqueue('upsert', 'pipeRecord', 'p-1', {});
-  ob.enqueue('upsert', 'pipeRecord', 'p-2', {});
+  ob.enqueue('upsert', 'pipeRecord', uid('p-1'), {});
+  ob.enqueue('upsert', 'pipeRecord', uid('p-2'), {});
 
   let calls = 0;
   await ob.drain(async (item) => {
     calls++;
-    if (item.entityId === 'p-1') {
+    if (item.entityId === uid('p-1')) {
       // e.g. the row belongs to another rig; no amount of waiting fixes it.
       throw new PermanentSyncError('row is owned by another user');
     }
@@ -133,16 +140,16 @@ test('a permanent rejection parks immediately instead of retrying for days', asy
   assert.equal(ob.depth(), 0);
   const parked = ob.parked();
   assert.equal(parked.length, 1);
-  assert.equal(parked[0].entityId, 'p-1');
+  assert.equal(parked[0].entityId, uid('p-1'));
   assert.equal(parked[0].attempts, 1, 'parked on the first attempt, not the eighth');
 });
 
 test('repeated edits to one record coalesce into a single upload', async () => {
   harness();
   const ob = new Outbox();
-  ob.enqueue('upsert', 'pipeRecord', 'p-1', { remarks: 'first' });
-  ob.enqueue('upsert', 'pipeRecord', 'p-1', { remarks: 'second' });
-  ob.enqueue('upsert', 'pipeRecord', 'p-1', { remarks: 'final' });
+  ob.enqueue('upsert', 'pipeRecord', uid('p-1'), { remarks: 'first' });
+  ob.enqueue('upsert', 'pipeRecord', uid('p-1'), { remarks: 'second' });
+  ob.enqueue('upsert', 'pipeRecord', uid('p-1'), { remarks: 'final' });
 
   assert.equal(ob.depth(), 1, 'three edits, one pending upload');
 
@@ -154,35 +161,35 @@ test('repeated edits to one record coalesce into a single upload', async () => {
 test('deleting a record that never uploaded cancels its pending upsert', async () => {
   harness();
   const ob = new Outbox();
-  ob.enqueue('upsert', 'pipeRecord', 'p-1', { remarks: 'typo' });
-  ob.enqueue('delete', 'pipeRecord', 'p-1', {});
+  ob.enqueue('upsert', 'pipeRecord', uid('p-1'), { remarks: 'typo' });
+  ob.enqueue('delete', 'pipeRecord', uid('p-1'), {});
 
   const t = transportThatFails();
   await ob.drain(t.send, Date.now());
 
   // Sending an upsert for a record we are about to delete is pure waste on 2G.
-  assert.deepEqual(t.attempted, ['p-1']);
+  assert.deepEqual(t.attempted, [uid('p-1')]);
   assert.equal(ob.depth(), 0);
 });
 
 test('demo seed data is never enqueued', () => {
   harness();
   const ob = new Outbox();
-  ob.enqueue('upsert', 'borehole', 'bh-2026-04', { name: 'Kibera', isDemo: true });
-  ob.enqueue('upsert', 'borehole', 'bh-real', { name: 'Real Site' });
+  ob.enqueue('upsert', 'borehole', uid('bh-2026-04'), { name: 'Kibera', isDemo: true });
+  ob.enqueue('upsert', 'borehole', uid('bh-real'), { name: 'Real Site' });
 
   assert.equal(ob.depth(), 1, 'only the real borehole is queued');
-  assert.equal(ob.pending()[0].entityId, 'bh-real');
+  assert.equal(ob.pending()[0].entityId, uid('bh-real'));
 });
 
 test('queue survives a reload', async () => {
   harness();
   const first = new Outbox();
-  first.enqueue('upsert', 'pipeRecord', 'p-1', { depth: 4.55 });
+  first.enqueue('upsert', 'pipeRecord', uid('p-1'), { depth: 4.55 });
 
   const reloaded = new Outbox();
   assert.equal(reloaded.depth(), 1);
-  assert.equal(reloaded.pending()[0].entityId, 'p-1');
+  assert.equal(reloaded.pending()[0].entityId, uid('p-1'));
 });
 
 test('enqueueing notifies subscribers so uploads can start immediately', async () => {
@@ -191,14 +198,14 @@ test('enqueueing notifies subscribers so uploads can start immediately', async (
   let nudges = 0;
   const off = ob.subscribe(() => nudges++);
 
-  ob.enqueue('upsert', 'pipeRecord', 'p-1', {});
+  ob.enqueue('upsert', 'pipeRecord', uid('p-1'), {});
   assert.equal(nudges, 1, 'a device already online must not sit on new work');
 
-  ob.enqueue('upsert', 'pipeRecord', 'p-1', { edited: true });
+  ob.enqueue('upsert', 'pipeRecord', uid('p-1'), { edited: true });
   assert.equal(nudges, 2, 'a coalesced edit still needs a drain');
 
   off();
-  ob.enqueue('upsert', 'pipeRecord', 'p-2', {});
+  ob.enqueue('upsert', 'pipeRecord', uid('p-2'), {});
   assert.equal(nudges, 2, 'unsubscribed listeners stop firing');
 });
 
@@ -207,6 +214,24 @@ test('demo data does not trigger a pointless drain', () => {
   const ob = new Outbox();
   let nudges = 0;
   ob.subscribe(() => nudges++);
-  ob.enqueue('upsert', 'borehole', 'bh-2026-04', { isDemo: true });
+  ob.enqueue('upsert', 'borehole', uid('bh-2026-04'), { isDemo: true });
   assert.equal(nudges, 0);
+});
+
+test('refuses to queue a record whose id is not a uuid', () => {
+  harness();
+  const ob = new Outbox();
+  const originalError = console.error;
+  const seen: string[] = [];
+  console.error = (msg: unknown) => void seen.push(String(msg));
+  try {
+    // The shape a hand-rolled `bh-${Date.now()}` produces. Postgres rejects it,
+    // so queueing it would strand the borehole and every record under it.
+    const queued = ob.enqueue('upsert', 'borehole', 'bh-1786022504143', { name: 'X' });
+    assert.equal(queued, null);
+    assert.equal(ob.depth(), 0);
+    assert.match(seen[0] ?? '', /non-uuid/);
+  } finally {
+    console.error = originalError;
+  }
 });

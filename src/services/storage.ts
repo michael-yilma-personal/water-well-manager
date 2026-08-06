@@ -813,6 +813,50 @@ export class DrillingStorage {
   }
 
   // Reset demo data to initial factory state
+  /**
+   * Drop the seeded sample data, keeping anything the crew actually recorded.
+   *
+   * Every install seeds a demo borehole with nineteen pipe records so the app
+   * is explorable before a real job exists. Once a device is linked to a real
+   * project that fake job is just confusing on the rig, so linking clears it.
+   *
+   * Returns the number of rows removed. Real records are identified by the
+   * absence of the isDemo flag and are never touched.
+   */
+  static clearDemoData(): number {
+    let removed = 0;
+    const prune = <T extends { isDemo?: boolean }>(key: string): T[] => {
+      const raw = localStorage.getItem(key);
+      if (!raw) return [];
+      let list: T[];
+      try {
+        list = JSON.parse(raw) as T[];
+      } catch {
+        return [];
+      }
+      const kept = list.filter((row) => !row?.isDemo);
+      removed += list.length - kept.length;
+      localStorage.setItem(key, JSON.stringify(kept));
+      return kept;
+    };
+
+    prune<PipeRecord>(STORAGE_KEYS.PIPE_RECORDS);
+    prune<DrillingEvent>(STORAGE_KEYS.EVENTS);
+    prune<ShiftLog>(STORAGE_KEYS.SHIFT_LOGS);
+    const boreholes = prune<Borehole>(STORAGE_KEYS.BOREHOLES);
+
+    // The active selection may have pointed at a borehole that just went away.
+    const activeId = localStorage.getItem(STORAGE_KEYS.ACTIVE_BOREHOLE_ID);
+    if (activeId && !boreholes.some((b) => b.id === activeId)) {
+      if (boreholes.length > 0) {
+        localStorage.setItem(STORAGE_KEYS.ACTIVE_BOREHOLE_ID, boreholes[0].id);
+      } else {
+        localStorage.removeItem(STORAGE_KEYS.ACTIVE_BOREHOLE_ID);
+      }
+    }
+    return removed;
+  }
+
   static resetToDemoData(): void {
     localStorage.removeItem(STORAGE_KEYS.BOREHOLES);
     localStorage.removeItem(STORAGE_KEYS.PIPE_RECORDS);

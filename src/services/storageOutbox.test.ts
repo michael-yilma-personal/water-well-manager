@@ -3,6 +3,13 @@ import test from 'node:test';
 import { DrillingStorage, getOutbox, resetOutbox } from './storage';
 import type { PipeRecord, DrillingEvent } from '../types';
 
+
+/** Deterministic, valid UUIDs for fixtures - the outbox rejects other shapes. */
+function uid(tag: string): string {
+  const hex = [...tag].reduce((a, c) => a + c.charCodeAt(0).toString(16), '').padEnd(12, '0').slice(0, 12);
+  return `00000000-0000-4000-8000-${hex}`;
+}
+
 function harness() {
   const store = new Map<string, string>();
   (globalThis as unknown as { localStorage: unknown }).localStorage = {
@@ -22,7 +29,7 @@ function harness() {
 function pipe(overrides: Partial<PipeRecord> = {}): PipeRecord {
   return {
     id: '',
-    boreholeId: 'bh-real',
+    boreholeId: '00000000-0000-4000-8000-00000000bb01',
     pipeNumber: 1,
     startDepth: 0,
     endDepth: 4.55,
@@ -98,7 +105,7 @@ test('the parent borehole is queued ahead of the record that references it', () 
     'wwdm_boreholes',
     JSON.stringify([
       {
-        id: 'bh-real',
+        id: '00000000-0000-4000-8000-00000000bh01'.replace('bh01', 'aa01'),
         name: 'BH-REAL',
         currentDepth: 0,
         gpsCoordinates: { lat: 0, lng: 0 },
@@ -108,7 +115,9 @@ test('the parent borehole is queued ahead of the record that references it', () 
   DrillingStorage.getPipeRecords();
   getOutbox().clear();
 
-  DrillingStorage.savePipeRecord(pipe({ id: '', boreholeId: 'bh-real' }));
+  DrillingStorage.savePipeRecord(
+    pipe({ id: '', boreholeId: '00000000-0000-4000-8000-00000000aa01' })
+  );
 
   const order = getOutbox().pending().map((q) => q.entity);
   const boreholeAt = order.indexOf('borehole');
@@ -153,7 +162,7 @@ test('saved events are queued and carry a uuid', () => {
 
   const saved = DrillingStorage.saveEvent({
     id: '',
-    boreholeId: 'bh-real',
+    boreholeId: '00000000-0000-4000-8000-00000000bb01',
     type: 'Breakdown',
     title: 'Hydraulic hose burst',
     timestamp: new Date().toISOString(),
@@ -173,4 +182,41 @@ test('saved events are queued and carry a uuid', () => {
   const queued = getOutbox().pending().filter((q) => q.entity === 'event');
   assert.equal(queued.length, 1);
   assert.equal(queued[0].entityId, saved.id);
+});
+
+test('linking a device clears sample data but keeps real records', () => {
+  harness();
+  DrillingStorage.getBoreholes();
+  DrillingStorage.getPipeRecords();
+  DrillingStorage.getEvents();
+  const seededPipes = DrillingStorage.getPipeRecords().length;
+  assert.ok(seededPipes > 0, 'expected seeded demo pipes');
+
+  // A record the crew actually logged, on a real borehole.
+  const real = DrillingStorage.savePipeRecord(pipe({ id: '', boreholeId: '00000000-0000-4000-8000-00000000bb01' }));
+
+  const removed = DrillingStorage.clearDemoData();
+
+  assert.ok(removed >= seededPipes, `removed ${removed}`);
+  const left = DrillingStorage.getPipeRecords();
+  assert.equal(left.length, 1, 'only the real record survives');
+  assert.equal(left[0].id, real.id);
+  assert.ok(
+    DrillingStorage.getBoreholes().every((b) => !b.isDemo),
+    'no demo boreholes remain'
+  );
+});
+
+test('clearing sample data leaves no dangling active borehole', () => {
+  harness();
+  DrillingStorage.getBoreholes();
+  DrillingStorage.setActiveBorehole('bh-2026-04');
+
+  DrillingStorage.clearDemoData();
+
+  const active = localStorage.getItem('wwdm_active_borehole_id');
+  assert.ok(
+    active === null || DrillingStorage.getBoreholes().some((b) => b.id === active),
+    `active borehole ${active} no longer exists`
+  );
 });
