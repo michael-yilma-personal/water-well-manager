@@ -355,7 +355,12 @@ export const Header: React.FC<HeaderProps> = ({
                 {getRoleIcon(currentUser.role)}
                 {currentUser.role}
               </span>
-              <span className="hidden sm:inline font-bold truncate max-w-[100px] min-w-0">{currentUser.name}</span>
+              {/* Shown at every width: this is the name that goes on each pipe record,
+                  and a shared phone signed in as the wrong person is exactly the
+                  mistake worth catching before a shift, not after. */}
+              <span className="font-bold truncate max-w-[72px] sm:max-w-[110px] min-w-0">
+                {currentUser.name}
+              </span>
               <ChevronDown className="w-3.5 h-3.5 opacity-70" />
             </button>
 

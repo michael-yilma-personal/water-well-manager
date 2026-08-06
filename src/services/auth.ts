@@ -82,6 +82,41 @@ export async function signOut(): Promise<void> {
   localStorage.removeItem(CACHED_USER_ID_KEY);
 }
 
+/**
+ * The signed-in account's own profile row.
+ *
+ * This is who actually did the work. Pipe records used to take their operator
+ * name from a local picker seeded with three hardcoded demo people, so a real
+ * driller's work was attributed to "James Wanjala" - a person who does not
+ * exist - while created_by recorded the true account. The drilling log and the
+ * audit trail disagreed.
+ */
+export async function fetchMyProfile(): Promise<{
+  id: string;
+  name: string;
+  role: string;
+  badgeNumber: string;
+} | null> {
+  const client = getSupabase();
+  if (!client) return null;
+  const { data: sess } = await client.auth.getSession();
+  const uid = sess.session?.user?.id;
+  if (!uid) return null;
+
+  const { data, error } = await client
+    .from('profiles')
+    .select('id, name, role, badge_number')
+    .eq('id', uid)
+    .single();
+  if (error || !data) return null;
+  return {
+    id: data.id as string,
+    name: (data.name as string) ?? '',
+    role: (data.role as string) ?? 'Driller',
+    badgeNumber: (data.badge_number as string) ?? '',
+  };
+}
+
 export async function getSession(): Promise<Session | null> {
   const client = getSupabase();
   if (!client) return null;

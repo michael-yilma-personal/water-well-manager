@@ -37,7 +37,7 @@ import { SyncWorker } from './services/syncWorker';
 import { createSupabaseTransport } from './services/syncTransport';
 import { createCompositeTransport, createPhotoTransport } from './services/photoTransport';
 import { getSupabase, isSupabaseConfigured } from './services/supabaseClient';
-import { getCurrentUserId, isProvisioned } from './services/auth';
+import { getCurrentUserId, isProvisioned, fetchMyProfile } from './services/auth';
 import { SignInScreen } from './components/SignInScreen';
 
 export default function App() {
@@ -124,6 +124,27 @@ export default function App() {
         onChange: () => setPendingSync(DrillingStorage.getPendingSyncCount()),
       })
   );
+
+  // A device linked before this behaviour existed still holds the fictional
+  // sample operators, so reconcile on every launch rather than only at sign-in.
+  useEffect(() => {
+    if (!signedIn || !isSupabaseConfigured()) return;
+    let alive = true;
+    fetchMyProfile()
+      .then((profile) => {
+        if (!alive || !profile) return;
+        if (currentUser.id === profile.id && currentUser.name === profile.name) return;
+        const me = DrillingStorage.adoptSignedInUser(profile);
+        setUsers([me]);
+        setCurrentUser(me);
+      })
+      .catch(() => {
+        // Offline: the cached identity from the last successful link stands.
+      });
+    return () => {
+      alive = false;
+    };
+  }, [signedIn, currentUser.id, currentUser.name]);
 
   // The worker listens for network-regained and app-resume, so a device that
   // spent the day out of coverage uploads as soon as it is opened in range.
@@ -514,7 +535,7 @@ export default function App() {
   if (!signedIn && !skippedSignIn) {
     return (
       <SignInScreen
-        onSignedIn={() => {
+        onSignedIn={async () => {
           // A linked device belongs to a real crew, so the seeded sample job
           // is just a confusing fake borehole on the rig. Anything actually
           // recorded before linking is kept and will still sync.
@@ -522,6 +543,18 @@ export default function App() {
           if (removed > 0) {
             console.info(`[storage] cleared ${removed} sample record(s) on link`);
           }
+
+          // The signed-in account becomes the operator. Previously the operator
+          // name came from a picker seeded with three fictional people, so a
+          // real driller's pipes were stamped with a demo name while created_by
+          // recorded the true account - the log and the audit trail disagreed.
+          const profile = await fetchMyProfile();
+          if (profile) {
+            const me = DrillingStorage.adoptSignedInUser(profile);
+            setUsers([me]);
+            setCurrentUser(me);
+          }
+
           setBoreholes(storage.getBoreholes());
           setActiveBoreholeId(storage.getActiveBorehole()?.id ?? '');
           setSignedIn(true);

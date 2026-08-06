@@ -22,6 +22,19 @@ import type { DrainResult, Outbox, OutboxTransport } from './outbox';
 /** Collapse a burst of saves into a single drain. */
 const ENQUEUE_DEBOUNCE_MS = 1200;
 
+/**
+ * Safety net for a missed connectivity event.
+ *
+ * The drain is normally triggered by networkStatusChange, but that event is not
+ * guaranteed - it was observed not firing at all when an Android device's
+ * radios came back, leaving a full queue sitting next to a working connection
+ * with nothing to wake it. On a rig that means a day's records staying on the
+ * phone until someone happens to reopen the app.
+ *
+ * This costs nothing when the queue is empty, which is almost always.
+ */
+const RETRY_INTERVAL_MS = 60_000;
+
 export interface SyncWorkerDeps {
   outbox: Outbox;
   transport: OutboxTransport;
@@ -35,6 +48,7 @@ export class SyncWorker {
   private draining = false;
   private teardown: Array<() => void> = [];
   private pendingNudge: ReturnType<typeof setTimeout> | null = null;
+  private ticker: ReturnType<typeof setInterval> | null = null;
 
   constructor(deps: SyncWorkerDeps) {
     this.deps = deps;
@@ -67,6 +81,14 @@ export class SyncWorker {
       unsubscribe();
       if (this.pendingNudge !== null) clearTimeout(this.pendingNudge);
       this.pendingNudge = null;
+    });
+
+    this.ticker = setInterval(() => {
+      if (this.deps.outbox.depth() > 0) void this.syncNow();
+    }, RETRY_INTERVAL_MS);
+    this.teardown.push(() => {
+      if (this.ticker !== null) clearInterval(this.ticker);
+      this.ticker = null;
     });
 
     // Catch up on whatever accumulated while the app was closed.

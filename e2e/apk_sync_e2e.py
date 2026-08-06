@@ -41,8 +41,12 @@ with apk_page() as (page, logs):
         page.wait_for_timeout(6000)
     else:
         print('  (device already linked; skipping sign-in)')
-    check('device is linked and the rig UI is up', 'CURRENT DEPTH' in page.inner_text('body'),
-          page.inner_text('body')[:70].replace('\n', ' | '))
+    # Linking clears the seeded sample job, so a freshly linked device lands on
+    # the empty state rather than a fake borehole.
+    linked = page.inner_text('body')
+    check('device is linked and usable',
+          'CURRENT DEPTH' in linked or 'No borehole on this device yet' in linked,
+          linked[:70].replace('\n', ' | '))
     page.screenshot(path=f'{OUT}/apk-signed-in.png')
 
     # the Capacitor plugins the worker depends on must actually be present

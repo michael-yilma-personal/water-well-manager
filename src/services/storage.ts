@@ -857,6 +857,31 @@ export class DrillingStorage {
     return removed;
   }
 
+  /**
+   * Make the signed-in account the only operator on this device.
+   *
+   * The seeded sample users are fake people. Leaving them selectable meant a
+   * real driller's pipe records could be stamped with a demo name while
+   * created_by recorded the true account, so the drilling log and the audit
+   * trail disagreed about who did the work.
+   */
+  static adoptSignedInUser(profile: {
+    id: string;
+    name: string;
+    role: string;
+    badgeNumber: string;
+  }): User {
+    const user: User = {
+      id: profile.id,
+      name: profile.name || 'Operator',
+      role: (profile.role as User['role']) ?? 'Driller',
+      badgeNumber: profile.badgeNumber || '',
+    };
+    localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify([user]));
+    localStorage.setItem(STORAGE_KEYS.CURRENT_USER_ID, user.id);
+    return user;
+  }
+
   static resetToDemoData(): void {
     localStorage.removeItem(STORAGE_KEYS.BOREHOLES);
     localStorage.removeItem(STORAGE_KEYS.PIPE_RECORDS);

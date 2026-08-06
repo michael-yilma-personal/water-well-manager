@@ -235,3 +235,20 @@ test('refuses to queue a record whose id is not a uuid', () => {
     console.error = originalError;
   }
 });
+
+test('a device already online must not sit on queued work', async () => {
+  harness();
+  const ob = new Outbox();
+  ob.enqueue('upsert', 'pipeRecord', uid('p-1'), {});
+  ob.enqueue('upsert', 'pipeRecord', uid('p-2'), {});
+
+  // Whatever wakes the worker - a connectivity event, an app resume, or the
+  // periodic safety net - a drain must clear everything that is due. The bug
+  // this guards against left three items sitting at attempts=0 next to a
+  // working connection because the OS event never arrived.
+  const t = transportThatFails();
+  const result = await ob.drain(t.send, Date.now());
+
+  assert.equal(result.sent, 2);
+  assert.equal(ob.depth(), 0, 'nothing may be left pending after a successful drain');
+});
