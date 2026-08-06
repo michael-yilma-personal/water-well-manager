@@ -97,7 +97,11 @@ export const Header: React.FC<HeaderProps> = ({
     >
       <div className="max-w-7xl mx-auto px-2.5 sm:px-4 py-2.5 sm:py-3 flex flex-wrap items-center justify-between gap-2 sm:gap-3">
         {/* Left: Branding & Borehole Selector */}
-        <div className="flex items-center gap-2 sm:gap-4 min-w-0 flex-1">
+        {/* A real floor, not min-w-0. min-w-0 let this group shrink below its
+            own contents, so the row never overflowed, never wrapped, and the
+            two groups collided instead. The floor makes the container wrap the
+            controls onto a second row once space runs out. */}
+        <div className="flex items-center gap-2 sm:gap-4 flex-1 min-w-[168px]">
           <div className="flex items-center gap-2 min-w-0">
             <div
               className={`w-10 h-10 sm:w-11 sm:h-11 rounded-xl flex items-center justify-center font-extrabold shrink-0 ${
@@ -108,7 +112,9 @@ export const Header: React.FC<HeaderProps> = ({
             >
               <Compass className="w-6 h-6 animate-pulse" />
             </div>
-            <div className="hidden sm:block">
+            {/* Held back to lg: between 640-1024px this wordmark consumed the
+                space the borehole selector and sync controls both needed. */}
+            <div className="hidden lg:block">
               <h1
                 className={`font-black text-base sm:text-lg tracking-tight leading-none ${
                   sunlightMode ? 'text-amber-300' : 'text-white'
@@ -230,7 +236,7 @@ export const Header: React.FC<HeaderProps> = ({
         </div>
 
         {/* Right: Sync Pill, User Role Switcher & High Sunlight Contrast Toggle */}
-        <div className="flex items-center flex-wrap justify-end gap-1.5 sm:gap-2.5 ml-auto">
+        <div className="flex items-center flex-wrap justify-end gap-1.5 sm:gap-2.5 ml-auto min-w-0">
           {/* Offline / Sync Status Badge */}
           <button
             onClick={onSyncNow}
@@ -349,7 +355,7 @@ export const Header: React.FC<HeaderProps> = ({
                 {getRoleIcon(currentUser.role)}
                 {currentUser.role}
               </span>
-              <span className="hidden sm:inline font-bold truncate max-w-[100px]">{currentUser.name}</span>
+              <span className="hidden sm:inline font-bold truncate max-w-[100px] min-w-0">{currentUser.name}</span>
               <ChevronDown className="w-3.5 h-3.5 opacity-70" />
             </button>
 
