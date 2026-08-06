@@ -157,11 +157,11 @@ export async function generateBoreholePDF(
     doc.addPage();
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(11);
-    doc.text('4. Field Events & Non-Productive Time (NPT)', 14, 20);
+    doc.text('4. Field Events & Downtime', 14, 20);
   } else {
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(11);
-    doc.text('4. Field Events & Non-Productive Time (NPT)', 14, yAfterPipes);
+    doc.text('4. Field Events & Downtime', 14, yAfterPipes);
   }
 
   const eventRows = events.map((ev) => [
@@ -169,7 +169,7 @@ export async function generateBoreholePDF(
     ev.type,
     `${ev.depthAtEvent.toFixed(1)} m`,
     ev.durationMinutes ? `${ev.durationMinutes} min` : '-',
-    ev.isNPT ? 'NPT' : 'Operation',
+    ev.isNPT ? 'Downtime' : 'Operation',
     ev.title,
     ev.operator,
   ]);
@@ -239,7 +239,7 @@ export async function generateShiftPDF(
       ['Driller on Duty', shiftLog.drillerName, 'Supervisor', shiftLog.supervisorName],
       ['Start Depth', `${shiftLog.startDepth} m`, 'End Depth', `${shiftLog.endDepth} m`],
       ['Meters Drilled Today', `${shiftLog.metersDrilledToday} m`, 'Fuel Used', `${shiftLog.fuelUsedLiters} Liters`],
-      ['Productive Hours', `${shiftLog.productiveHours} hrs`, 'NPT Hours', `${shiftLog.nonProductiveHours} hrs`],
+      ['Productive Hours', `${shiftLog.productiveHours} hrs`, 'Downtime Hours', `${shiftLog.nonProductiveHours} hrs`],
       ['Shift Notes', shiftLog.notes || 'Normal drilling operations.', '', ''],
     ],
     theme: 'grid',
@@ -350,14 +350,14 @@ export async function generateExcelReport(
     Title: ev.title,
     'Depth at Event (m)': ev.depthAtEvent,
     'Duration (min)': ev.durationMinutes || 0,
-    'NPT / Productive': ev.isNPT ? 'Non-Productive Time' : 'Operational',
+    'Downtime / Drilling': ev.isNPT ? 'Downtime' : 'Operational',
     Operator: ev.operator,
     'Fuel Liters': ev.details.fuelLiters || '',
     'Water Strike L/min': ev.details.waterStrikeLpm || '',
     Notes: ev.details.notes || '',
   }));
   const wsEvents = XLSX.utils.json_to_sheet(eventTable);
-  XLSX.utils.book_append_sheet(wb, wsEvents, 'Events & NPT');
+  XLSX.utils.book_append_sheet(wb, wsEvents, 'Events & Downtime');
 
   // Sheet 4: Shift Logs
   const shiftTable = shiftLogs.map((sh) => ({
@@ -369,7 +369,7 @@ export async function generateExcelReport(
     'End Depth (m)': sh.endDepth,
     'Meters Drilled': sh.metersDrilledToday,
     'Productive Hours': sh.productiveHours,
-    'NPT Hours': sh.nonProductiveHours,
+    'Downtime Hours': sh.nonProductiveHours,
     'Fuel Used (L)': sh.fuelUsedLiters,
     Notes: sh.notes,
   }));

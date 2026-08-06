@@ -133,13 +133,17 @@ debug build installed and `adb` on PATH.
       billing; free-tier retention may not be what you want.
 - [ ] Free projects **pause after ~1 week of inactivity**, after which sync
       fails until the project is restored from the dashboard.
+      `.github/workflows/keep-supabase-awake.yml` pings it every three days —
+      add `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` as repo secrets to
+      enable it. It doubles as a health check: a red run means sync is already
+      broken. Note GitHub disables scheduled workflows after 60 days of repo
+      inactivity, and that this works around a limit meant to reclaim idle
+      resources — a paid plan is the honest fix if the project matters
+      commercially.
 
 ## Known gaps
 
 - A saved photo is not viewable in the field app after the event is closed; the
   dashboard is where photos are reviewed.
-- A started pipe cannot be abandoned — the only exit is saving a record. Fixing
-  it needs a decision on whether an abandoned pipe should vanish or be logged as
-  NPT.
 - `admin.html` (~15 KB) is bundled into the APK. Harmless and RLS-protected,
   but it does not need to be there.

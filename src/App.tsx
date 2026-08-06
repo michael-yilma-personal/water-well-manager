@@ -439,6 +439,59 @@ export default function App() {
 
   useAndroidBackButton({ closeTopModal, goToRootTab });
 
+
+  /**
+   * Stop a pipe that was started by mistake.
+   *
+   * Previously the only exit from a running pipe was to save a record, which
+   * wrote fabricated depth into the drilling log - a two-second pipe once
+   * produced a penetration rate of 8190 m/hr. Cancelling records the lost time
+   * as a downtime event instead, so the abandonment is visible in the report
+   * rather than silently erased, and depth is untouched.
+   */
+  const handleCancelPipe = () => {
+    if (!activeBorehole || !activeTimer.isActive) return;
+    const startedAt = new Date(activeTimer.startTime);
+    const minutes = Math.max(
+      1,
+      Math.round((Date.now() - startedAt.getTime()) / 60000)
+    );
+    if (
+      !window.confirm(
+        `Cancel pipe #${activeTimer.pipeNumber}?\n\n` +
+          `No depth will be recorded. ${minutes} minute(s) will be logged as ` +
+          `downtime so the time is still accounted for.`
+      )
+    ) {
+      return;
+    }
+
+    storage.saveEvent({
+      id: createRecordId('ev'),
+      boreholeId: activeBorehole.id,
+      type: 'General Note',
+      title: `Pipe #${activeTimer.pipeNumber} cancelled before completion`,
+      timestamp: new Date().toISOString(),
+      durationMinutes: minutes,
+      isNPT: true,
+      operator: currentUser.name,
+      depthAtEvent: activeBorehole.currentDepth,
+      details: {
+        notes:
+          `Pipe #${activeTimer.pipeNumber} was started at ` +
+          `${startedAt.toLocaleTimeString()} and cancelled without recording ` +
+          `depth. Strata at the time: ${activeTimer.formation}.`,
+      },
+      synced: false,
+    });
+
+    storage.clearActiveTimer(activeBorehole.id);
+    setActiveTimer(storage.getActiveTimer(activeBorehole.id));
+    setEvents(storage.getEvents(activeBorehole.id));
+    setPendingSync(DrillingStorage.getPendingSyncCount());
+    triggerVibration([60, 30, 60]);
+  };
+
   const sunlightMode = settings.sunlightMode;
 
   // Exports are async now that they write through the native filesystem. A
@@ -564,6 +617,7 @@ export default function App() {
             activeTimer={activeTimer}
             onStartPipe={handleStartPipe}
             onOpenEndPipeModal={handleOpenEndPipeModal}
+            onCancelPipe={handleCancelPipe}
             onOpenEventModal={(type) => {
               setSelectedEventType(type);
               setIsEventModalOpen(true);

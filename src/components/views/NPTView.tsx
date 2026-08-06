@@ -60,7 +60,7 @@ export const NPTView: React.FC<NPTViewProps> = ({
           </div>
           <div>
             <h2 className="text-lg sm:text-xl font-black uppercase tracking-tight">
-              NON-PRODUCTIVE TIME (NPT) & RIG EVENT REGISTER
+              DOWNTIME &amp; RIG EVENT LOG
             </h2>
             <p className="text-xs opacity-80 font-bold">
               Track Mechanical Breakdowns, Tool Replacements, Strata Shifts, & Water Strikes
@@ -86,7 +86,7 @@ export const NPTView: React.FC<NPTViewProps> = ({
           }`}
         >
           <span className="text-[10px] uppercase font-black opacity-60">
-            Total Downtime (NPT)
+            Total Downtime
           </span>
           <span className="text-3xl font-black text-red-500 mt-1">
             {totalNPTHours} <span className="text-base font-bold">hrs</span>
@@ -202,7 +202,7 @@ export const NPTView: React.FC<NPTViewProps> = ({
               >
                 <th className="p-3">Time & Date</th>
                 <th className="p-3">Event Type</th>
-                <th className="p-3">NPT Downtime</th>
+                <th className="p-3">Downtime</th>
                 <th className="p-3">Depth (m)</th>
                 <th className="p-3">Description & Action Taken</th>
                 <th className="p-3">Logged By</th>

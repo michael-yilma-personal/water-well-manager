@@ -61,7 +61,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
 
   const timeBreakdownData = [
     { name: 'Drilling (Productive)', value: prodHours, color: '#4ADE80' },
-    { name: 'NPT (Downtime/Events)', value: nptHours, color: '#F87171' },
+    { name: 'Downtime', value: nptHours, color: '#F87171' },
   ];
 
   const FORMATION_COLORS = [
@@ -245,7 +245,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
         >
           <h3 className="font-black text-xs uppercase tracking-wider mb-2 flex items-center gap-1.5">
             <Clock className="w-4 h-4 text-emerald-500" /> Rig Efficiency
-            (Productive vs NPT)
+            (Drilling vs Downtime)
           </h3>
           <div className="h-44 w-full">
             <ResponsiveContainer width="100%" height="100%">
@@ -271,7 +271,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
             <span className="text-emerald-500">
               ● Productive: {prodHours} hrs
             </span>
-            <span className="text-red-500">● NPT: {nptHours} hrs</span>
+            <span className="text-red-500">● Downtime: {nptHours} hrs</span>
           </div>
         </div>
 

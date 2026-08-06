@@ -1,0 +1,50 @@
+# Free Supabase projects pause after roughly a week without API activity, and a
+# paused project makes the field app's sync fail until someone restores it from
+# the dashboard. A crew that goes quiet between jobs can easily cross that line.
+#
+# This makes one cheap, authenticated-by-publishable-key query every three days.
+# It is a real PostgREST request against the database, which is what the pause
+# timer watches. Row Level Security means it returns an empty array and exposes
+# nothing.
+#
+# Caveats worth knowing:
+#  - GitHub disables scheduled workflows after 60 days with no repo activity.
+#    If this repo goes quiet too, re-enable it in the Actions tab.
+#  - Cron here is best-effort; runs can be delayed under load. Three days gives
+#    plenty of slack against a ~7 day timer.
+#  - If the app is genuinely used every week, this is unnecessary.
+#  - This works around a limit that exists to reclaim idle resources. If the
+#    project matters commercially, a paid plan is the honest fix.
+name: Keep Supabase awake
+
+on:
+  schedule:
+    - cron: '17 6 */3 * *'
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Query the database
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
+        run: |
+          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_PUBLISHABLE_KEY" ]; then
+            echo "::error::Set the SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY repo secrets."
+            exit 1
+          fi
+          code=$(curl -s -o /tmp/body -w '%{http_code}' \
+            "$SUPABASE_URL/rest/v1/boreholes?select=id&limit=1" \
+            -H "apikey: $SUPABASE_PUBLISHABLE_KEY" \
+            -H "Authorization: Bearer $SUPABASE_PUBLISHABLE_KEY")
+          echo "HTTP $code"
+          # A paused project answers 503/502 rather than 200, so this also
+          # serves as a health check: a red run means sync is already broken.
+          if [ "$code" != "200" ]; then
+            echo "::error::Project did not answer normally (HTTP $code). It may be paused."
+            cat /tmp/body
+            exit 1
+          fi
+          echo "Project is awake."

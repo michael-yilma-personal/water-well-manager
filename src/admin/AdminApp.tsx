@@ -256,7 +256,7 @@ function BoreholeDetail({
         <Stat label="Pipes" value={String(live.length)} />
         <Stat label="Avg rate" value={`${avgRate.toFixed(1)} m/hr`} />
         <Stat
-          label="NPT"
+          label="Downtime"
           value={`${(nptMinutes / 60).toFixed(1)} hrs`}
           tone={nptMinutes > 0 ? 'text-rose-400' : undefined}
         />
@@ -326,13 +326,13 @@ function BoreholeDetail({
 
       <section className="px-6 pb-12">
         <h2 className="text-sm font-black uppercase tracking-wider text-slate-400 mb-2">
-          Events &amp; NPT {events ? `(${events.filter((e) => !e.deletedAt).length})` : ''}
+          Downtime &amp; events {events ? `(${events.filter((e) => !e.deletedAt).length})` : ''}
         </h2>
         <div className="overflow-x-auto rounded-lg border border-slate-800">
           <table className="w-full text-sm">
             <thead className="bg-slate-900 text-slate-400 text-[11px] uppercase tracking-wider">
               <tr>
-                {['When', 'Type', 'Title', 'Depth', 'Duration', 'NPT', 'Operator', 'Photo'].map((h) => (
+                {['When', 'Type', 'Title', 'Depth', 'Duration', 'Downtime', 'Operator', 'Photo'].map((h) => (
                   <th key={h} className="text-left p-2.5 font-black whitespace-nowrap">
                     {h}
                   </th>
@@ -352,7 +352,7 @@ function BoreholeDetail({
                     {e.durationMinutes ? `${e.durationMinutes} min` : '—'}
                   </td>
                   <td className={`p-2.5 font-black ${e.isNPT ? 'text-rose-400' : 'text-slate-500'}`}>
-                    {e.isNPT ? 'NPT' : '—'}
+                    {e.isNPT ? 'YES' : '—'}
                   </td>
                   <td className="p-2.5 whitespace-nowrap">{e.operator}</td>
                   <td className="p-2.5">

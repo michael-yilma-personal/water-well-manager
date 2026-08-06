@@ -35,6 +35,8 @@ interface RigControlViewProps {
   activeTimer: ActivePipeTimer;
   onStartPipe: () => void;
   onOpenEndPipeModal: () => void;
+  /** Stop a pipe started by mistake; recorded as downtime, never as depth. */
+  onCancelPipe: () => void;
   onOpenEventModal: (type: EventType) => void;
   onOpenSettings: () => void;
   pipeRecords: PipeRecord[];
@@ -50,6 +52,7 @@ export const RigControlView: React.FC<RigControlViewProps> = ({
   activeTimer,
   onStartPipe,
   onOpenEndPipeModal,
+  onCancelPipe,
   onOpenEventModal,
   onOpenSettings,
   pipeRecords,
@@ -304,6 +307,15 @@ export const RigControlView: React.FC<RigControlViewProps> = ({
                 >
                   End & Save Now →
                 </button>
+                {/* Without this the only way out of a pipe started by mistake
+                    was to save a bogus record, which corrupts the depth log. */}
+                <button
+                  onClick={onCancelPipe}
+                  title="Stop this pipe without recording depth. It is logged as downtime."
+                  className="px-3 py-2.5 rounded-xl font-black text-xs uppercase bg-transparent border border-white/40 text-white/90 hover:bg-white/10"
+                >
+                  Cancel Pipe
+                </button>
               </div>
             </div>
           )}
@@ -449,7 +461,7 @@ export const RigControlView: React.FC<RigControlViewProps> = ({
                 </div>
                 <div className="flex justify-between border-b border-white/10 pb-2">
                   <span className="text-xs opacity-60 font-bold">
-                    NPT (DOWNTIME)
+                    DOWNTIME
                   </span>
                   <span className="font-bold text-red-400">
                     {nptHoursTotal} hrs
