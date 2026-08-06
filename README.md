@@ -1,8 +1,8 @@
 # water-well-manager
 
-Field data-capture for water well drilling crews. Pipe-by-pipe logging, NPT
-event tracking, lithology analytics and PDF/Excel reporting, built to work with
-no connectivity and sync when signal returns.
+Field data-capture for water well drilling crews. Pipe-by-pipe logging, downtime
+and event tracking, lithology analytics and PDF/Excel reporting, built to work
+with no connectivity and sync when signal returns.
 
 Two front-ends share one codebase:
 
