@@ -56,6 +56,23 @@ export interface OutboxItem {
 
 export type OutboxTransport = (item: OutboxItem) => Promise<void>;
 
+/**
+ * A failure that retrying cannot fix - the row belongs to another user, or it
+ * violates a constraint. Backing off for days before surfacing it just delays
+ * the moment someone can act, so these park on the first attempt.
+ */
+export class PermanentSyncError extends Error {
+  readonly permanent = true;
+  constructor(message: string) {
+    super(message);
+    this.name = 'PermanentSyncError';
+  }
+}
+
+function isPermanent(err: unknown): boolean {
+  return (err as { permanent?: boolean } | null)?.permanent === true;
+}
+
 export interface DrainResult {
   sent: number;
   failed: number;
@@ -194,7 +211,7 @@ export class Outbox {
       } catch (err) {
         item.attempts++;
         item.lastError = err instanceof Error ? err.message : String(err);
-        if (item.attempts >= MAX_ATTEMPTS) {
+        if (isPermanent(err) || item.attempts >= MAX_ATTEMPTS) {
           item.parked = true;
           result.parked++;
         } else {

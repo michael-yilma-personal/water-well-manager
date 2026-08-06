@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { Outbox, MAX_ATTEMPTS, type OutboxItem } from './outbox';
+import { Outbox, MAX_ATTEMPTS, PermanentSyncError, type OutboxItem } from './outbox';
 
 function harness() {
   const store = new Map<string, string>();
@@ -112,6 +112,29 @@ test('an item that keeps failing is parked, never discarded', async () => {
   assert.equal(parked[0].entityId, 'p-1');
   assert.deepEqual(parked[0].payload, { depth: 4.55 }, 'payload preserved for recovery');
   assert.match(parked[0].lastError ?? '', /network down/);
+});
+
+test('a permanent rejection parks immediately instead of retrying for days', async () => {
+  harness();
+  const ob = new Outbox();
+  ob.enqueue('upsert', 'pipeRecord', 'p-1', {});
+  ob.enqueue('upsert', 'pipeRecord', 'p-2', {});
+
+  let calls = 0;
+  await ob.drain(async (item) => {
+    calls++;
+    if (item.entityId === 'p-1') {
+      // e.g. the row belongs to another rig; no amount of waiting fixes it.
+      throw new PermanentSyncError('row is owned by another user');
+    }
+  }, Date.now());
+
+  assert.equal(calls, 2, 'the healthy item still went out');
+  assert.equal(ob.depth(), 0);
+  const parked = ob.parked();
+  assert.equal(parked.length, 1);
+  assert.equal(parked[0].entityId, 'p-1');
+  assert.equal(parked[0].attempts, 1, 'parked on the first attempt, not the eighth');
 });
 
 test('repeated edits to one record coalesce into a single upload', async () => {
