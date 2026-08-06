@@ -1,0 +1,46 @@
+# Netlify deployment for the administrator dashboard.
+#
+# The Vite build emits two pages: index.html (the field app, which normally
+# ships inside the APK) and admin.html (the dashboard). The web deploy exists
+# for the administrator, so the root serves the dashboard; the field app stays
+# reachable at /index.html as a browser fallback for a supervisor on a laptop.
+#
+# VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY must be set as environment
+# variables in the Netlify UI (Site configuration -> Environment variables).
+# They are read at build time, so a deploy without them produces a site that
+# cannot reach the database. They are safe to expose - the publishable key
+# grants nothing on its own, because Row Level Security is enabled on every
+# table.
+
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+[build.environment]
+  NODE_VERSION = "22"
+
+# The administrator opens the bare domain and should land on the dashboard.
+[[redirects]]
+  from = "/"
+  to = "/admin.html"
+  status = 200          # rewrite, not a redirect: the URL stays clean
+  force = true
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "DENY"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+
+# Hashed asset filenames are immutable, so they can be cached hard.
+[[headers]]
+  for = "/assets/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+
+# HTML must not be cached, or a deploy would leave admins on the old bundle.
+[[headers]]
+  for = "/*.html"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
