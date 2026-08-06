@@ -9,6 +9,8 @@ import {
   BIT_TYPE_OPTIONS,
   BIT_DIAMETER_OPTIONS,
 } from '../../services/storage';
+import { preparePhoto } from '../../services/photos';
+import { queuePhotoUpload } from '../../services/photoQueue';
 import {
   X,
   CheckCircle2,
@@ -64,7 +66,12 @@ export const EventModal: React.FC<EventModalProps> = ({
   );
   const [waterStrikeLpm, setWaterStrikeLpm] = useState<number>(180);
   const [staticWaterLevel, setStaticWaterLevel] = useState<number>(22.0);
+  // previewUrl is a small data URL for display only. The record stores the
+  // photo's filename; the bytes live on the filesystem and upload separately.
   const [photoUrl, setPhotoUrl] = useState<string | undefined>(undefined);
+  const [photoPreview, setPhotoPreview] = useState<string | undefined>(undefined);
+  const [photoBusy, setPhotoBusy] = useState(false);
+  const [photoError, setPhotoError] = useState<string | null>(null);
 
   // This modal stays mounted between opens, so reset every field each time it
   // opens — not just when the event type changes. Otherwise the previous event's
@@ -126,14 +133,23 @@ export const EventModal: React.FC<EventModalProps> = ({
 
   if (!isOpen || !eventType) return null;
 
-  const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onload = (ev) => {
-        setPhotoUrl(ev.target?.result as string);
-      };
-      reader.readAsDataURL(file);
+    if (!file) return;
+    setPhotoBusy(true);
+    setPhotoError(null);
+    try {
+      // Downscale and write to the filesystem rather than holding a base64
+      // copy in the record: a single 3MB photo would otherwise consume most of
+      // the ~5MB localStorage quota and take the rest of the log down with it.
+      const prepared = await preparePhoto(file);
+      setPhotoUrl(prepared.fileName);
+      setPhotoPreview(prepared.previewUrl);
+      queuePhotoUpload(prepared);
+    } catch (err) {
+      setPhotoError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPhotoBusy(false);
     }
   };
 
@@ -447,16 +463,16 @@ export const EventModal: React.FC<EventModalProps> = ({
                   className="hidden"
                 />
               </label>
-              {photoUrl && (
+              {photoPreview && (
                 <span className="text-xs text-emerald-400 font-bold">
                   ✓ Photo Attached
                 </span>
               )}
             </div>
-            {photoUrl && (
+            {photoPreview && (
               <div className="relative mt-2 rounded-lg overflow-hidden border border-slate-700 max-h-48">
                 <img
-                  src={photoUrl}
+                  src={photoPreview}
                   alt="Site sample"
                   className="w-full h-full object-cover"
                 />

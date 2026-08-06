@@ -96,9 +96,32 @@ function isDemoPayload(payload: unknown): boolean {
 
 export class Outbox {
   private items: OutboxItem[];
+  private listeners = new Set<() => void>();
 
   constructor() {
     this.items = this.read();
+  }
+
+  /**
+   * Notified whenever work is added.
+   *
+   * Without this the queue only drained on a network change, an app resume, or
+   * a manual tap - so a device that was already online when the driller started
+   * logging would accumulate records all day and upload none of them.
+   */
+  subscribe(listener: () => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  private notify(): void {
+    for (const listener of this.listeners) {
+      try {
+        listener();
+      } catch {
+        // A misbehaving listener must not break the write path.
+      }
+    }
   }
 
   private read(): OutboxItem[] {
@@ -147,6 +170,7 @@ export class Outbox {
       if (existing) {
         existing.payload = payload;
         this.write();
+        this.notify();
         return existing;
       }
     }
@@ -163,6 +187,7 @@ export class Outbox {
     };
     this.items.push(item);
     this.write();
+    this.notify();
     return item;
   }
 

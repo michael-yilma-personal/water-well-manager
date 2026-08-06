@@ -18,10 +18,14 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js';
  * import time.
  */
 
-const url = import.meta.env.VITE_SUPABASE_URL as string | undefined;
-const publishableKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY as
-  | string
-  | undefined;
+// `import.meta.env` only exists under Vite. Reading it directly throws in a
+// plain Node context such as the test runner, which would break importing any
+// module that transitively touches this one.
+const env: Partial<ImportMetaEnv> =
+  (import.meta as ImportMeta & { env?: ImportMetaEnv }).env ?? {};
+
+const url = env.VITE_SUPABASE_URL;
+const publishableKey = env.VITE_SUPABASE_PUBLISHABLE_KEY;
 
 let client: SupabaseClient | null = null;
 

@@ -35,6 +35,7 @@ import { useAndroidBackButton } from './utils/useAndroidBackButton';
 import { getOutbox } from './services/storage';
 import { SyncWorker } from './services/syncWorker';
 import { createSupabaseTransport } from './services/syncTransport';
+import { createCompositeTransport, createPhotoTransport } from './services/photoTransport';
 import { getSupabase, isSupabaseConfigured } from './services/supabaseClient';
 import { getCurrentUserId, isProvisioned } from './services/auth';
 import { SignInScreen } from './components/SignInScreen';
@@ -108,10 +109,18 @@ export default function App() {
     () =>
       new SyncWorker({
         outbox: getOutbox(),
-        transport: createSupabaseTransport({
-          getClient: getSupabase,
-          getUserId: getCurrentUserId,
-        }),
+        // Photos go to object storage, records go to tables, but they share
+        // one queue so ordering and retry behaviour stay consistent.
+        transport: createCompositeTransport(
+          createSupabaseTransport({
+            getClient: getSupabase,
+            getUserId: getCurrentUserId,
+          }),
+          createPhotoTransport({
+            getClient: getSupabase,
+            getUserId: getCurrentUserId,
+          })
+        ),
         onChange: () => setPendingSync(DrillingStorage.getPendingSyncCount()),
       })
   );

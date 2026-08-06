@@ -19,6 +19,9 @@ import type { DrainResult, Outbox, OutboxTransport } from './outbox';
  * it catches up the moment the driller opens the app.
  */
 
+/** Collapse a burst of saves into a single drain. */
+const ENQUEUE_DEBOUNCE_MS = 1200;
+
 export interface SyncWorkerDeps {
   outbox: Outbox;
   transport: OutboxTransport;
@@ -31,6 +34,7 @@ export class SyncWorker {
   private running = false;
   private draining = false;
   private teardown: Array<() => void> = [];
+  private pendingNudge: ReturnType<typeof setTimeout> | null = null;
 
   constructor(deps: SyncWorkerDeps) {
     this.deps = deps;
@@ -49,6 +53,21 @@ export class SyncWorker {
       void this.syncNow();
     });
     this.teardown.push(() => void appHandle.remove());
+
+    // Upload as work arrives. A short debounce collapses a burst of saves -
+    // ending a pipe writes the record and its borehole - into one drain.
+    const unsubscribe = this.deps.outbox.subscribe(() => {
+      if (this.pendingNudge !== null) clearTimeout(this.pendingNudge);
+      this.pendingNudge = setTimeout(() => {
+        this.pendingNudge = null;
+        void this.syncNow();
+      }, ENQUEUE_DEBOUNCE_MS);
+    });
+    this.teardown.push(() => {
+      unsubscribe();
+      if (this.pendingNudge !== null) clearTimeout(this.pendingNudge);
+      this.pendingNudge = null;
+    });
 
     // Catch up on whatever accumulated while the app was closed.
     void this.syncNow();

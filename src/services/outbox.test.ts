@@ -184,3 +184,29 @@ test('queue survives a reload', async () => {
   assert.equal(reloaded.depth(), 1);
   assert.equal(reloaded.pending()[0].entityId, 'p-1');
 });
+
+test('enqueueing notifies subscribers so uploads can start immediately', async () => {
+  harness();
+  const ob = new Outbox();
+  let nudges = 0;
+  const off = ob.subscribe(() => nudges++);
+
+  ob.enqueue('upsert', 'pipeRecord', 'p-1', {});
+  assert.equal(nudges, 1, 'a device already online must not sit on new work');
+
+  ob.enqueue('upsert', 'pipeRecord', 'p-1', { edited: true });
+  assert.equal(nudges, 2, 'a coalesced edit still needs a drain');
+
+  off();
+  ob.enqueue('upsert', 'pipeRecord', 'p-2', {});
+  assert.equal(nudges, 2, 'unsubscribed listeners stop firing');
+});
+
+test('demo data does not trigger a pointless drain', () => {
+  harness();
+  const ob = new Outbox();
+  let nudges = 0;
+  ob.subscribe(() => nudges++);
+  ob.enqueue('upsert', 'borehole', 'bh-2026-04', { isDemo: true });
+  assert.equal(nudges, 0);
+});

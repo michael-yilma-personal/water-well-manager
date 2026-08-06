@@ -12,7 +12,8 @@
     "test": "node --import tsx --test \"src/services/*.test.ts\"",
     "test:e2e": "python3 e2e/run_e2e.py",
     "test:rls": "python3 e2e/rls_e2e.py",
-    "test:sync": "python3 e2e/offline_sync_e2e.py"
+    "test:sync": "python3 e2e/offline_sync_e2e.py",
+    "test:photos": "python3 e2e/photo_e2e.py"
   },
   "dependencies": {
     "@capacitor/android": "^8.5.0",
