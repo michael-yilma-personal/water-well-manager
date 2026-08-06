@@ -122,11 +122,29 @@ debug build installed and `adb` on PATH.
 
 ## Before real use
 
-- [ ] **Delete the test accounts** (`driller1@`, `driller2@`, `admin1@example.com`)
-      and the boreholes they created. They exist so the e2e suites can run.
-- [ ] **Provision real accounts.** Signup is disabled, so create users in
-      Supabase → Authentication, then set the role:
-      `update public.profiles set role='Administrator' where id='<uuid>';`
+- [ ] **Provision real accounts.** Signup is disabled on purpose, so use:
+
+      ```bash
+      scripts/create-user.sh boss@company.com 'strong-password' Administrator "David Mutua" ADM-001
+      scripts/create-user.sh joe@company.com  'strong-password' Driller       "Joe Kamau"  DRL-110
+      ```
+
+      Roles are set here, never at signup: the database ignores any
+      client-supplied role, because an account choosing its own would be able to
+      read every crew's data.
+
+- [ ] **Delete the test accounts and their data**, once you no longer need the
+      e2e suites:
+
+      ```bash
+      scripts/delete-test-data.sh          # dry run, shows the counts
+      scripts/delete-test-data.sh --yes    # actually delete
+      ```
+
+      Order matters and the script handles it: `created_by` references
+      `auth.users` with NO ACTION, so deleting a driller who still has drilling
+      records fails outright. That constraint is deliberate — you should not be
+      able to delete a driller and orphan the record of who drilled.
 - [ ] **Back up `android/app/drillpro-release.jks`.** Lose it and you cannot
       ship updates to anyone who installed the release build.
 - [ ] **Check backup retention** on your Supabase plan. This log backs client
