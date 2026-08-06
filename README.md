@@ -62,6 +62,10 @@ that key and the data.
   `badge_number` are re-granted).
 - Photos live under `<uid>/` in a private bucket; the folder prefix is the
   authorisation check.
+- Account management runs in the `admin-users` Edge Function. Creating accounts
+  needs the service-role key, which would give anyone who opened DevTools
+  unrestricted access if it shipped in the bundle, so it stays server-side and
+  the function re-checks the caller's role on every request.
 
 Verify it at any time:
 
@@ -122,16 +126,17 @@ debug build installed and `adb` on PATH.
 
 ## Before real use
 
-- [ ] **Provision real accounts.** Signup is disabled on purpose, so use:
+- [ ] **Provision real accounts.** Signup is disabled on purpose. Add people
+      from the dashboard: **Crew → Add crew member**. Roles are set server-side,
+      never at signup, because an account choosing its own could read every
+      crew's data.
+
+      The first administrator has to come from the command line, since there is
+      nobody to sign in as yet:
 
       ```bash
       scripts/create-user.sh boss@company.com 'strong-password' Administrator "David Mutua" ADM-001
-      scripts/create-user.sh joe@company.com  'strong-password' Driller       "Joe Kamau"  DRL-110
       ```
-
-      Roles are set here, never at signup: the database ignores any
-      client-supplied role, because an account choosing its own would be able to
-      read every crew's data.
 
 - [ ] **Delete the test accounts and their data**, once you no longer need the
       e2e suites:
@@ -159,9 +164,28 @@ debug build installed and `adb` on PATH.
       resources — a paid plan is the honest fix if the project matters
       commercially.
 
+## Managing the crew
+
+**Crew** in the dashboard lists every account with its role, badge, how many
+records it has authored, and when it last signed in.
+
+Removing someone depends on whether they have logged work:
+
+- **No records** — the account is deleted outright.
+- **Has records** — the account is *disabled*, not deleted. Their pipe records
+  carry `created_by`, so erasing the account would destroy the record of who
+  drilled. They can no longer sign in; their name still resolves in reports.
+  Reversible with **Restore**.
+
 ## Known gaps
 
 - A saved photo is not viewable in the field app after the event is closed; the
   dashboard is where photos are reviewed.
 - `admin.html` (~15 KB) is bundled into the APK. Harmless and RLS-protected,
   but it does not need to be there.
+- **Supervisor grants nothing today.** The schema allows the role, but every
+  read policy keys off `is_admin()`, which only matches `Administrator`. A
+  Supervisor currently behaves exactly like a Driller. Crew-wide visibility
+  needs a crew/rig assignment before the role means anything.
+- There is no way to change your own password in the app; use Supabase →
+  Authentication.

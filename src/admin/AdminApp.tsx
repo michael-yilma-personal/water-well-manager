@@ -11,6 +11,7 @@ import {
   LogOut,
   RefreshCw,
   Search,
+  Users,
 } from 'lucide-react';
 import {
   fetchBoreholes,
@@ -25,6 +26,7 @@ import {
   type Profile,
 } from './adminApi';
 import { signIn, signOut, getSession } from '../services/auth';
+import { CrewView } from './CrewView';
 import { isSupabaseConfigured } from '../services/supabaseClient';
 import {
   generateBoreholeExcelReport,
@@ -379,10 +381,12 @@ function BoreholeList({
   onOpen,
   profiles,
   onSignOut,
+  onOpenCrew,
 }: {
   onOpen: (b: AdminBorehole) => void;
   profiles: Map<string, Profile>;
   onSignOut: () => void;
+  onOpenCrew: () => void;
 }) {
   const [rows, setRows] = useState<AdminBorehole[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -432,6 +436,12 @@ function BoreholeList({
             className="p-2 rounded bg-slate-800 border border-slate-700 disabled:opacity-50"
           >
             <RefreshCw className={`w-4 h-4 ${busy ? 'animate-spin' : ''}`} />
+          </button>
+          <button
+            onClick={onOpenCrew}
+            className="flex items-center gap-1.5 px-3 py-2 rounded bg-slate-800 border border-slate-700 text-xs font-black uppercase"
+          >
+            <Users className="w-4 h-4" /> Crew
           </button>
           <button
             onClick={onSignOut}
@@ -512,6 +522,7 @@ function BoreholeList({
 export default function AdminApp() {
   const [session, setSession] = useSession();
   const [selected, setSelected] = useState<AdminBorehole | null>(null);
+  const [showCrew, setShowCrew] = useState(false);
   const [profiles, setProfiles] = useState<Map<string, Profile>>(new Map());
 
   useEffect(() => {
@@ -522,6 +533,8 @@ export default function AdminApp() {
     return <div className="min-h-screen bg-slate-950 text-slate-500 grid place-items-center">Loading…</div>;
   }
   if (session === 'out') return <SignIn onIn={() => setSession('in')} />;
+
+  if (showCrew) return <CrewView onBack={() => setShowCrew(false)} />;
 
   if (selected) {
     return (
@@ -536,6 +549,7 @@ export default function AdminApp() {
     <BoreholeList
       profiles={profiles}
       onOpen={setSelected}
+      onOpenCrew={() => setShowCrew(true)}
       onSignOut={async () => {
         await signOut();
         setSession('out');
