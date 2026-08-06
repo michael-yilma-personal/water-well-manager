@@ -146,6 +146,18 @@ export default function App() {
     };
   }, [signedIn, currentUser.id, currentUser.name]);
 
+  // Keep the badge honest. The pending count was previously refreshed only
+  // after a drain or a manual tap, never when a record was saved - so the
+  // header sat on "Cloud Synced" while work was queued and unsent, which is
+  // precisely the reassurance a driller must not be given falsely.
+  useEffect(() => {
+    const unsubscribe = getOutbox().subscribe(() =>
+      setPendingSync(DrillingStorage.getPendingSyncCount())
+    );
+    setPendingSync(DrillingStorage.getPendingSyncCount());
+    return unsubscribe;
+  }, []);
+
   // The worker listens for network-regained and app-resume, so a device that
   // spent the day out of coverage uploads as soon as it is opened in range.
   useEffect(() => {

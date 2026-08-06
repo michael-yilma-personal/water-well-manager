@@ -259,7 +259,7 @@ export const Header: React.FC<HeaderProps> = ({
             {isSyncing ? (
               <>
                 <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                <span className="hidden sm:inline">Syncing...</span>
+                <span>Syncing…</span>
               </>
             ) : pendingSyncCount > 0 ? (
               <>
@@ -269,6 +269,9 @@ export const Header: React.FC<HeaderProps> = ({
             ) : (
               <>
                 <Cloud className="w-3.5 h-3.5 text-emerald-400" />
+                {/* A driller needs to read this at a glance, so the phone gets
+                    a short word rather than a bare icon. */}
+                <span className="sm:hidden">Synced</span>
                 <span className="hidden sm:inline">Cloud Synced</span>
               </>
             )}
