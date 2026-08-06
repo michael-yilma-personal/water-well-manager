@@ -33,6 +33,22 @@ export function resetOutbox(): void {
   outboxInstance = null;
 }
 
+/**
+ * Queue a record's parent borehole ahead of the record itself.
+ *
+ * The queue drains oldest-first, so a child sent before its parent exists on
+ * the server is rejected by the foreign key. That happens whenever a borehole
+ * was created through a path that did not queue it - one that predates syncing,
+ * or was restored from a backup. Upserts for the same row coalesce, so calling
+ * this on every save costs nothing.
+ */
+function enqueueParentFirst(boreholeId: string): void {
+  if (!boreholeId) return;
+  const borehole = DrillingStorage.getBoreholes().find((b) => b.id === boreholeId);
+  if (!borehole || borehole.isDemo) return;
+  getOutbox().enqueue('upsert', 'borehole', borehole.id, borehole);
+}
+
 const STORAGE_KEYS = {
   USERS: 'wwdm_users',
   CURRENT_USER_ID: 'wwdm_current_user_id',
@@ -556,9 +572,9 @@ export class DrillingStorage {
       list.push(stored);
     }
     localStorage.setItem(STORAGE_KEYS.PIPE_RECORDS, JSON.stringify(list));
-    getOutbox().enqueue('upsert', 'pipeRecord', stored.id, stored);
 
-    // Also update borehole currentDepth if this pipe pushes depth further
+    // Update borehole currentDepth if this pipe pushes depth further. This runs
+    // before the pipe is queued so the parent row is always sent first.
     const boreholes = this.getBoreholes();
     const bh = boreholes.find((b) => b.id === stored.boreholeId);
     if (bh && stored.endDepth > bh.currentDepth) {
@@ -566,6 +582,8 @@ export class DrillingStorage {
       bh.updatedAt = new Date().toISOString();
       this.saveBorehole(bh);
     }
+    enqueueParentFirst(stored.boreholeId);
+    getOutbox().enqueue('upsert', 'pipeRecord', stored.id, stored);
 
     return stored;
   }
@@ -621,6 +639,7 @@ export class DrillingStorage {
       list.unshift(stored);
     }
     localStorage.setItem(STORAGE_KEYS.EVENTS, JSON.stringify(list));
+    enqueueParentFirst(stored.boreholeId);
     getOutbox().enqueue('upsert', 'event', stored.id, stored);
     return stored;
   }
@@ -756,36 +775,13 @@ export class DrillingStorage {
     return getOutbox().parked().length;
   }
 
-  static async syncPendingRecordsToCloud(): Promise<{ pipesSynced: number; eventsSynced: number }> {
-    return this.synchronizeWithCloud();
-  }
-
-  // Mark all offline items as synced (simulates cloud synchronization)
-  static async synchronizeWithCloud(): Promise<{ pipesSynced: number; eventsSynced: number }> {
-    const pipes = this.getPipeRecords();
-    let pipesSynced = 0;
-    const updatedPipes = pipes.map((p) => {
-      if (!p.synced) {
-        pipesSynced++;
-        return { ...p, synced: true };
-      }
-      return p;
-    });
-    localStorage.setItem(STORAGE_KEYS.PIPE_RECORDS, JSON.stringify(updatedPipes));
-
-    const events = this.getEvents();
-    let eventsSynced = 0;
-    const updatedEvents = events.map((e) => {
-      if (!e.synced) {
-        eventsSynced++;
-        return { ...e, synced: true };
-      }
-      return e;
-    });
-    localStorage.setItem(STORAGE_KEYS.EVENTS, JSON.stringify(updatedEvents));
-
-    return { pipesSynced, eventsSynced };
-  }
+  /**
+   * Superseded by the outbox and SyncWorker.
+   *
+   * The previous implementation flipped every record's `synced` flag without
+   * making a network call, so the UI reported a successful upload while
+   * nothing had left the device.
+   */
 
   // Export full backup as JSON
   static exportAllData(): string {
@@ -907,11 +903,8 @@ export class DrillingStorage {
   getPendingSyncCount(): number {
     return DrillingStorage.getPendingSyncCount();
   }
-  synchronizeWithCloud(): Promise<{ pipesSynced: number; eventsSynced: number }> {
-    return DrillingStorage.synchronizeWithCloud();
-  }
-  syncPendingRecordsToCloud(): Promise<{ pipesSynced: number; eventsSynced: number }> {
-    return DrillingStorage.syncPendingRecordsToCloud();
+  getParkedSyncCount(): number {
+    return DrillingStorage.getParkedSyncCount();
   }
   exportAllData(): string {
     return DrillingStorage.exportAllData();

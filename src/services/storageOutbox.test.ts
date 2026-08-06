@@ -89,6 +89,38 @@ test('the pending badge reflects queue depth, not the stale synced flag', () => 
   );
 });
 
+test('the parent borehole is queued ahead of the record that references it', () => {
+  harness();
+  // A borehole that reached storage without being queued - restored from a
+  // backup, or created before syncing existed.
+  DrillingStorage.getBoreholes();
+  localStorage.setItem(
+    'wwdm_boreholes',
+    JSON.stringify([
+      {
+        id: 'bh-real',
+        name: 'BH-REAL',
+        currentDepth: 0,
+        gpsCoordinates: { lat: 0, lng: 0 },
+      },
+    ])
+  );
+  DrillingStorage.getPipeRecords();
+  getOutbox().clear();
+
+  DrillingStorage.savePipeRecord(pipe({ id: '', boreholeId: 'bh-real' }));
+
+  const order = getOutbox().pending().map((q) => q.entity);
+  const boreholeAt = order.indexOf('borehole');
+  const pipeAt = order.indexOf('pipeRecord');
+  assert.notEqual(boreholeAt, -1, 'parent must be queued at all');
+  assert.ok(
+    boreholeAt < pipeAt,
+    `the queue drains oldest-first, so a child sent first hits a foreign key ` +
+      `violation. Got order: ${order.join(', ')}`
+  );
+});
+
 test('deleting a saved record queues a delete', () => {
   harness();
   DrillingStorage.getPipeRecords();

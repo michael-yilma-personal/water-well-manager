@@ -32,6 +32,12 @@ import {
 } from './utils/reports';
 import { playAlertSound, triggerVibration } from './utils/audio';
 import { useAndroidBackButton } from './utils/useAndroidBackButton';
+import { getOutbox } from './services/storage';
+import { SyncWorker } from './services/syncWorker';
+import { createSupabaseTransport } from './services/syncTransport';
+import { getSupabase, isSupabaseConfigured } from './services/supabaseClient';
+import { getCurrentUserId, isProvisioned } from './services/auth';
+import { SignInScreen } from './components/SignInScreen';
 
 export default function App() {
   // Storage instance
@@ -90,6 +96,34 @@ export default function App() {
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
   const [isUserManagementOpen, setIsUserManagementOpen] = useState(false);
 
+  // Sync state
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [pendingSync, setPendingSync] = useState(() =>
+    DrillingStorage.getPendingSyncCount()
+  );
+  const [syncError, setSyncError] = useState<string | null>(null);
+  const [signedIn, setSignedIn] = useState(() => isProvisioned());
+
+  const [syncWorker] = useState(
+    () =>
+      new SyncWorker({
+        outbox: getOutbox(),
+        transport: createSupabaseTransport({
+          getClient: getSupabase,
+          getUserId: getCurrentUserId,
+        }),
+        onChange: () => setPendingSync(DrillingStorage.getPendingSyncCount()),
+      })
+  );
+
+  // The worker listens for network-regained and app-resume, so a device that
+  // spent the day out of coverage uploads as soon as it is opened in range.
+  useEffect(() => {
+    if (!signedIn || !isSupabaseConfigured()) return;
+    void syncWorker.start();
+    return () => syncWorker.stop();
+  }, [syncWorker, signedIn]);
+
   // Reload records when active borehole changes
   useEffect(() => {
     if (activeBorehole) {
@@ -99,25 +133,21 @@ export default function App() {
     }
   }, [activeBoreholeId, activeBorehole?.id, storage]);
 
-  // Online / Offline synchronization listener
+  // Connectivity is tracked only to label the UI. The actual upload trigger
+  // lives in SyncWorker, which uses @capacitor/network - navigator.onLine
+  // reports "online" for a WiFi association that has no route anywhere, which
+  // is exactly a rig-side access point with no uplink.
   const [isOnline, setIsOnline] = useState<boolean>(navigator.onLine);
   useEffect(() => {
-    const handleOnline = () => {
-      setIsOnline(true);
-      storage.syncPendingRecordsToCloud();
-      setPipeRecords(storage.getPipeRecords(activeBorehole.id));
-      setEvents(storage.getEvents(activeBorehole.id));
-      setBoreholes(storage.getBoreholes());
-    };
-    const handleOffline = () => setIsOnline(false);
-
-    window.addEventListener('online', handleOnline);
-    window.addEventListener('offline', handleOffline);
+    const on = () => setIsOnline(true);
+    const off = () => setIsOnline(false);
+    window.addEventListener('online', on);
+    window.addEventListener('offline', off);
     return () => {
-      window.removeEventListener('online', handleOnline);
-      window.removeEventListener('offline', handleOffline);
+      window.removeEventListener('online', on);
+      window.removeEventListener('offline', off);
     };
-  }, [activeBorehole?.id, storage]);
+  }, []);
 
   // Handle START PIPE
   const handleStartPipe = () => {
@@ -347,13 +377,26 @@ export default function App() {
   };
 
   // Manual cloud sync
-  const handleManualSync = () => {
-    storage.syncPendingRecordsToCloud();
-    setPipeRecords(storage.getPipeRecords(activeBorehole.id));
-    setEvents(storage.getEvents(activeBorehole.id));
-    setBoreholes(storage.getBoreholes());
-    playAlertSound(true);
-    triggerVibration([80, 40, 80]);
+  const handleManualSync = async () => {
+    if (isSyncing) return;
+    setIsSyncing(true);
+    try {
+      const result = await syncWorker.syncNow();
+      setPendingSync(storage.getPendingSyncCount());
+      if (result.failed > 0 && result.sent === 0) {
+        // Silence here would look identical to a successful upload, which is
+        // the failure mode this whole feature exists to remove.
+        const parked = getOutbox().parked();
+        const reason = parked[0]?.lastError ?? 'still offline';
+        setSyncError(`Could not upload ${result.failed} change(s): ${reason}`);
+      } else {
+        setSyncError(null);
+      }
+      playAlertSound(true);
+      triggerVibration([80, 40, 80]);
+    } finally {
+      setIsSyncing(false);
+    }
   };
 
   // Android Back: unwind one layer of UI rather than closing the app.
@@ -402,6 +445,19 @@ export default function App() {
     });
   };
 
+  // Provisioning happens once, where there is signal. "Work offline for now"
+  // is deliberately offered: a crew must be able to start logging before
+  // anyone has issued them an account.
+  const [skippedSignIn, setSkippedSignIn] = useState(false);
+  if (!signedIn && !skippedSignIn) {
+    return (
+      <SignInScreen
+        onSignedIn={() => setSignedIn(true)}
+        onSkip={() => setSkippedSignIn(true)}
+      />
+    );
+  }
+
   return (
     <div
       className={`min-h-screen flex flex-col font-sans select-none antialiased ${
@@ -434,14 +490,26 @@ export default function App() {
             soundEnabled: !settings.soundEnabled,
           })
         }
-        pendingSyncCount={storage.getPendingSyncCount()}
-        isSyncing={false}
+        pendingSyncCount={pendingSync}
+        isSyncing={isSyncing}
         onSyncNow={handleManualSync}
         onOpenProfile={() => setIsProfileModalOpen(true)}
         onOpenUserManagement={() => setIsUserManagementOpen(true)}
       />
 
       {/* Main Content Area */}
+      {syncError && (
+        <div className="mx-3 mt-2 p-2.5 rounded border border-rose-500/40 bg-rose-500/10 text-rose-300 text-[11px] font-bold flex items-start justify-between gap-2">
+          <span>{syncError}</span>
+          <button
+            onClick={() => setSyncError(null)}
+            className="shrink-0 underline uppercase tracking-wider"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
       <main className="flex-1 flex flex-col pb-20">
         {activeTab === 'rig' && (
           <RigControlView
