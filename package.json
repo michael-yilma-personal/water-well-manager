@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
-    "test": "node --import tsx --test src/services/storage.test.ts",
+    "test": "node --import tsx --test src/services/storage.test.ts src/services/outbox.test.ts src/services/idMigration.test.ts src/services/storageOutbox.test.ts",
     "test:e2e": "python3 e2e/run_e2e.py"
   },
   "dependencies": {

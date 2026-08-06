@@ -7,6 +7,31 @@ import {
   ShiftLog,
   User,
 } from '../types';
+import { Outbox } from './outbox';
+
+/**
+ * Queue of changes waiting to reach the server.
+ *
+ * Writes stay synchronous and local - a driller at a rig with no signal must
+ * never wait on, or be blocked by, the network. Saving just drops an operation
+ * here; a worker delivers it whenever connectivity returns.
+ */
+let outboxInstance: Outbox | null = null;
+export function getOutbox(): Outbox {
+  if (!outboxInstance) outboxInstance = new Outbox();
+  return outboxInstance;
+}
+
+/**
+ * Drop the cached queue so the next call re-reads localStorage.
+ *
+ * Needed wherever the underlying storage is swapped out from under us - tests
+ * substituting a fresh localStorage, and resetToDemoData() wiping records that
+ * queued operations still refer to.
+ */
+export function resetOutbox(): void {
+  outboxInstance = null;
+}
 
 const STORAGE_KEYS = {
   USERS: 'wwdm_users',
@@ -34,11 +59,33 @@ function cloneSeed<T>(seed: T[]): T[] {
   return JSON.parse(JSON.stringify(seed));
 }
 
-// Monotonic suffix so two saves inside the same millisecond can't collide.
-let idSequence = 0;
-export function createRecordId(prefix: string): string {
-  idSequence += 1;
-  return `${prefix}-${Date.now().toString(36)}-${idSequence.toString(36)}`;
+/**
+ * Stamp seeded rows as demo data.
+ *
+ * Every install seeds the same boreholes, pipe records and events, with ids
+ * that are identical across devices. Pushing those upstream would have ten
+ * rigs collide on one fake borehole and bury the admin dashboard in it, so the
+ * outbox drops anything carrying this flag. Real records the driller creates
+ * never get it.
+ */
+function markDemo<T extends { isDemo?: boolean }>(rows: T[]): T[] {
+  return rows.map((row) => ({ ...row, isDemo: true }));
+}
+
+/**
+ * Ids must be globally unique, not just unique on this device.
+ *
+ * The old scheme (`${prefix}-${Date.now().toString(36)}-${seq}`) used a
+ * device-local counter, so two rigs saving in the same millisecond produced the
+ * same id. Since the server upserts on primary key, that meant one crew
+ * silently overwriting another's record. A UUID also makes retries idempotent:
+ * replaying a queued upsert is harmless.
+ *
+ * The prefix is retained in the signature for call-site readability but no
+ * longer appears in the value.
+ */
+export function createRecordId(_prefix?: string): string {
+  return crypto.randomUUID();
 }
 
 // Records written before ids were assigned would all compare equal on `undefined`,
@@ -402,14 +449,14 @@ export class DrillingStorage {
   static getBoreholes(): Borehole[] {
     const raw = localStorage.getItem(STORAGE_KEYS.BOREHOLES);
     if (!raw) {
-      const seeded = cloneSeed(DEMO_BOREHOLES);
+      const seeded = markDemo(cloneSeed(DEMO_BOREHOLES));
       localStorage.setItem(STORAGE_KEYS.BOREHOLES, JSON.stringify(seeded));
       return seeded;
     }
     try {
       return JSON.parse(raw);
     } catch {
-      return cloneSeed(DEMO_BOREHOLES);
+      return markDemo(cloneSeed(DEMO_BOREHOLES));
     }
   }
 
@@ -422,6 +469,7 @@ export class DrillingStorage {
       list.unshift(borehole);
     }
     localStorage.setItem(STORAGE_KEYS.BOREHOLES, JSON.stringify(list));
+    getOutbox().enqueue('upsert', 'borehole', borehole.id, list[idx >= 0 ? idx : 0]);
   }
 
   static deleteBorehole(boreholeId: string): void {
@@ -472,13 +520,13 @@ export class DrillingStorage {
     const raw = localStorage.getItem(STORAGE_KEYS.PIPE_RECORDS);
     let list: PipeRecord[] = [];
     if (!raw) {
-      list = generateDemoPipeRecords();
+      list = markDemo(generateDemoPipeRecords());
       localStorage.setItem(STORAGE_KEYS.PIPE_RECORDS, JSON.stringify(list));
     } else {
       try {
         list = JSON.parse(raw);
       } catch {
-        list = generateDemoPipeRecords();
+        list = markDemo(generateDemoPipeRecords());
       }
       const healedPipes = withIds(list, 'pipe');
       if (healedPipes.healed) {
@@ -508,6 +556,7 @@ export class DrillingStorage {
       list.push(stored);
     }
     localStorage.setItem(STORAGE_KEYS.PIPE_RECORDS, JSON.stringify(list));
+    getOutbox().enqueue('upsert', 'pipeRecord', stored.id, stored);
 
     // Also update borehole currentDepth if this pipe pushes depth further
     const boreholes = this.getBoreholes();
@@ -526,21 +575,25 @@ export class DrillingStorage {
     // Without this guard an undefined id would filter out every id-less record.
     if (!recordId) return;
     const list = this.getPipeRecords();
+    // Look the record up before removing it: the outbox needs the row to tell
+    // demo seed data apart from a real record worth deleting server-side.
+    const removed = list.find((r) => r.id === recordId);
     const filtered = list.filter((r) => r.id !== recordId);
     localStorage.setItem(STORAGE_KEYS.PIPE_RECORDS, JSON.stringify(filtered));
+    if (removed) getOutbox().enqueue('delete', 'pipeRecord', recordId, removed);
   }
 
   static getEvents(boreholeId?: string): DrillingEvent[] {
     const raw = localStorage.getItem(STORAGE_KEYS.EVENTS);
     let list: DrillingEvent[] = [];
     if (!raw) {
-      list = cloneSeed(DEMO_EVENTS);
+      list = markDemo(cloneSeed(DEMO_EVENTS));
       localStorage.setItem(STORAGE_KEYS.EVENTS, JSON.stringify(list));
     } else {
       try {
         list = JSON.parse(raw);
       } catch {
-        list = cloneSeed(DEMO_EVENTS);
+        list = markDemo(cloneSeed(DEMO_EVENTS));
       }
       const healedEvents = withIds(list, 'ev');
       if (healedEvents.healed) {
@@ -568,6 +621,7 @@ export class DrillingStorage {
       list.unshift(stored);
     }
     localStorage.setItem(STORAGE_KEYS.EVENTS, JSON.stringify(list));
+    getOutbox().enqueue('upsert', 'event', stored.id, stored);
     return stored;
   }
 
@@ -575,21 +629,23 @@ export class DrillingStorage {
     const eventId = maybeEventId || idOrBh;
     if (!eventId) return;
     const list = this.getEvents();
+    const removed = list.find((e) => e.id === eventId);
     const filtered = list.filter((e) => e.id !== eventId);
     localStorage.setItem(STORAGE_KEYS.EVENTS, JSON.stringify(filtered));
+    if (removed) getOutbox().enqueue('delete', 'event', eventId, removed);
   }
 
   static getShiftLogs(boreholeId?: string): ShiftLog[] {
     const raw = localStorage.getItem(STORAGE_KEYS.SHIFT_LOGS);
     let list: ShiftLog[] = [];
     if (!raw) {
-      list = cloneSeed(DEMO_SHIFT_LOGS);
+      list = markDemo(cloneSeed(DEMO_SHIFT_LOGS));
       localStorage.setItem(STORAGE_KEYS.SHIFT_LOGS, JSON.stringify(list));
     } else {
       try {
         list = JSON.parse(raw);
       } catch {
-        list = cloneSeed(DEMO_SHIFT_LOGS);
+        list = markDemo(cloneSeed(DEMO_SHIFT_LOGS));
       }
     }
     if (boreholeId) {
@@ -607,6 +663,7 @@ export class DrillingStorage {
       list.unshift(log);
     }
     localStorage.setItem(STORAGE_KEYS.SHIFT_LOGS, JSON.stringify(list));
+    getOutbox().enqueue('upsert', 'shiftLog', log.id, log);
   }
 
   // Timers are stored per borehole. A single shared timer used to bleed across
@@ -682,10 +739,21 @@ export class DrillingStorage {
   }
 
   // Count pending sync records across all collections
+  /**
+   * How much work is genuinely waiting to reach the server.
+   *
+   * This used to count records whose `synced` flag was false, but that flag was
+   * only ever flipped by a simulated sync that made no network call - so the
+   * badge could read zero while nothing had actually been uploaded. It now
+   * reflects real queue depth.
+   */
   static getPendingSyncCount(): number {
-    const pipes = this.getPipeRecords().filter((p) => !p.synced).length;
-    const events = this.getEvents().filter((e) => !e.synced).length;
-    return pipes + events;
+    return getOutbox().depth();
+  }
+
+  /** Operations that exhausted their retries and need a human to look at them. */
+  static getParkedSyncCount(): number {
+    return getOutbox().parked().length;
   }
 
   static async syncPendingRecordsToCloud(): Promise<{ pipesSynced: number; eventsSynced: number }> {

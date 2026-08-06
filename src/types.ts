@@ -26,6 +26,13 @@ export interface WaterStrikeDetails {
 }
 
 export interface Borehole {
+  /**
+   * Seeded sample data. Identical on every install, so it must never be
+   * pushed to the server - ten phones would otherwise collide on one fake
+   * borehole and fill the admin dashboard with it. The outbox refuses to
+   * enqueue anything carrying this flag.
+   */
+  isDemo?: boolean;
   id: string;
   name: string;
   project: string;
@@ -48,6 +55,13 @@ export interface Borehole {
 }
 
 export interface PipeRecord {
+  /**
+   * Seeded sample data. Identical on every install, so it must never be
+   * pushed to the server - ten phones would otherwise collide on one fake
+   * borehole and fill the admin dashboard with it. The outbox refuses to
+   * enqueue anything carrying this flag.
+   */
+  isDemo?: boolean;
   id: string;
   boreholeId: string;
   pipeNumber: number;
@@ -84,6 +98,13 @@ export type EventType =
   | 'General Note';
 
 export interface DrillingEvent {
+  /**
+   * Seeded sample data. Identical on every install, so it must never be
+   * pushed to the server - ten phones would otherwise collide on one fake
+   * borehole and fill the admin dashboard with it. The outbox refuses to
+   * enqueue anything carrying this flag.
+   */
+  isDemo?: boolean;
   id: string;
   boreholeId: string;
   type: EventType;
@@ -111,6 +132,13 @@ export interface DrillingEvent {
 }
 
 export interface ShiftLog {
+  /**
+   * Seeded sample data. Identical on every install, so it must never be
+   * pushed to the server - ten phones would otherwise collide on one fake
+   * borehole and fill the admin dashboard with it. The outbox refuses to
+   * enqueue anything carrying this flag.
+   */
+  isDemo?: boolean;
   id: string;
   boreholeId: string;
   date: string; // YYYY-MM-DD
