@@ -6,6 +6,17 @@ import {defineConfig} from 'vite';
 export default defineConfig(() => {
   return {
     plugins: [react(), tailwindcss()],
+    build: {
+      rollupOptions: {
+        // Two entry points: the field app (index.html) and the administrator's
+        // dashboard (admin.html). They share the Supabase client, the row
+        // mappers and reports.ts rather than duplicating them.
+        input: {
+          main: path.resolve(__dirname, 'index.html'),
+          admin: path.resolve(__dirname, 'admin.html'),
+        },
+      },
+    },
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),
