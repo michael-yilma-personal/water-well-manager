@@ -598,7 +598,29 @@ export class DrillingStorage {
     const removed = list.find((r) => r.id === recordId);
     const filtered = list.filter((r) => r.id !== recordId);
     localStorage.setItem(STORAGE_KEYS.PIPE_RECORDS, JSON.stringify(filtered));
-    if (removed) getOutbox().enqueue('delete', 'pipeRecord', recordId, removed);
+    if (removed) {
+      getOutbox().enqueue('delete', 'pipeRecord', recordId, removed);
+      // savePipeRecord raises currentDepth; deleting has to lower it again.
+      // Left alone, the hole keeps the deleted pipe's end depth and the next
+      // pipe starts below the bottom of the hole, opening a gap of undrilled
+      // metres in a log that backs client billing.
+      this.recalculateCurrentDepth(removed.boreholeId);
+    }
+  }
+
+  /** Re-derive a borehole's depth from the pipes that actually remain. */
+  private static recalculateCurrentDepth(boreholeId: string): void {
+    const boreholes = this.getBoreholes();
+    const bh = boreholes.find((b) => b.id === boreholeId);
+    if (!bh) return;
+    const remaining = this.getPipeRecords().filter(
+      (r) => r.boreholeId === boreholeId
+    );
+    const deepest = remaining.reduce((max, r) => Math.max(max, r.endDepth), 0);
+    if (deepest === bh.currentDepth) return;
+    bh.currentDepth = deepest;
+    bh.updatedAt = new Date().toISOString();
+    this.saveBorehole(bh);
   }
 
   static getEvents(boreholeId?: string): DrillingEvent[] {

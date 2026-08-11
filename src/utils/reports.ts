@@ -4,6 +4,74 @@ import * as XLSX from 'xlsx';
 import { Borehole, DrillingEvent, PipeRecord, ShiftLog } from '../types';
 import { MIME_PDF, MIME_XLSX, saveReportFile } from './fileExport';
 
+export interface StrataBand {
+  formation: string;
+  startDepth: number;
+  endDepth: number;
+  thickness: number;
+  pipes: number;
+  avgRate: number;
+}
+
+/**
+ * Collapse a pipe log into the stratigraphic column the report prints.
+ *
+ * Bands are *contiguous runs* of one formation, not one row per formation name.
+ * Grouping by name reported a formation the hole re-entered as a single band
+ * spanning everything between the two encounters - basalt at 0-10m and 40-60m
+ * became one 0-60m/60m-thick row that overlapped the granite in between, and
+ * the thicknesses summed to more than the hole is deep.
+ *
+ * The rate is metres over hours for the whole band. Averaging the per-pipe
+ * rates instead is an average of averages: it weights a 20-second pipe the same
+ * as a two-hour one and reads far too fast.
+ */
+export function summariseStrata(pipeRecords: PipeRecord[]): StrataBand[] {
+  interface Accumulator {
+    formation: string;
+    startDepth: number;
+    endDepth: number;
+    pipes: number;
+    metres: number;
+    seconds: number;
+  }
+
+  const ordered = [...pipeRecords].sort((a, b) => a.startDepth - b.startDepth);
+  const bands: Accumulator[] = [];
+
+  for (const r of ordered) {
+    const current = bands[bands.length - 1];
+    if (current && current.formation === r.formation) {
+      current.endDepth = r.endDepth;
+      current.pipes++;
+      current.metres += r.endDepth - r.startDepth;
+      current.seconds += r.durationSeconds;
+    } else {
+      bands.push({
+        formation: r.formation,
+        startDepth: r.startDepth,
+        endDepth: r.endDepth,
+        pipes: 1,
+        metres: r.endDepth - r.startDepth,
+        seconds: r.durationSeconds,
+      });
+    }
+  }
+
+  return bands.map((b) => {
+    const hours = b.seconds / 3600;
+    return {
+      formation: b.formation,
+      startDepth: b.startDepth,
+      endDepth: b.endDepth,
+      thickness: Number((b.endDepth - b.startDepth).toFixed(2)),
+      pipes: b.pipes,
+      // A pipe saved with no elapsed time would divide by zero and print Infinity.
+      avgRate: hours > 0 ? b.metres / hours : 0,
+    };
+  });
+}
+
 /**
  * jsPDF's own `doc.save()` uses a browser-only download path that does nothing
  * inside the Android WebView, so we pull the bytes out and route them through
@@ -85,31 +153,12 @@ export async function generateBoreholePDF(
   doc.setFontSize(11);
   doc.text('2. Geological Strata & Lithology Summary', 14, yAfterMeta);
 
-  // Group strata
-  const strataMap = new Map<string, { start: number; end: number; pipes: number; totalSpeed: number }>();
-  pipeRecords.forEach((r) => {
-    const existing = strataMap.get(r.formation);
-    if (!existing) {
-      strataMap.set(r.formation, {
-        start: r.startDepth,
-        end: r.endDepth,
-        pipes: 1,
-        totalSpeed: r.penetrationRate,
-      });
-    } else {
-      existing.end = Math.max(existing.end, r.endDepth);
-      existing.start = Math.min(existing.start, r.startDepth);
-      existing.pipes++;
-      existing.totalSpeed += r.penetrationRate;
-    }
-  });
-
-  const strataRows = Array.from(strataMap.entries()).map(([formation, val]) => [
-    `${val.start.toFixed(1)} m - ${val.end.toFixed(1)} m`,
-    formation,
-    `${(val.end - val.start).toFixed(1)} m`,
-    val.pipes,
-    `${(val.totalSpeed / val.pipes).toFixed(2)} m/hr`,
+  const strataRows = summariseStrata(pipeRecords).map((band) => [
+    `${band.startDepth.toFixed(2)} m - ${band.endDepth.toFixed(2)} m`,
+    band.formation,
+    `${band.thickness.toFixed(2)} m`,
+    band.pipes,
+    `${band.avgRate.toFixed(2)} m/hr`,
   ]);
 
   autoTable(doc, {
@@ -130,7 +179,7 @@ export async function generateBoreholePDF(
 
   const pipeRows = pipeRecords.map((r) => [
     `#${r.pipeNumber}`,
-    `${r.startDepth.toFixed(1)} - ${r.endDepth.toFixed(1)}m`,
+    `${r.startDepth.toFixed(2)} - ${r.endDepth.toFixed(2)}m`,
     `${r.pipeLength.toFixed(2)}m`,
     `${Math.round(r.durationSeconds / 60)} min`,
     `${r.penetrationRate.toFixed(1)}`,
@@ -253,7 +302,7 @@ export async function generateShiftPDF(
 
   const pipeRows = pipesInShift.map((r) => [
     `#${r.pipeNumber}`,
-    `${r.startDepth.toFixed(1)} - ${r.endDepth.toFixed(1)}m`,
+    `${r.startDepth.toFixed(2)} - ${r.endDepth.toFixed(2)}m`,
     `${r.pipeLength}m`,
     `${Math.round(r.durationSeconds / 60)} min`,
     `${r.penetrationRate.toFixed(1)} m/hr`,

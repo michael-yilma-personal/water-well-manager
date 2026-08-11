@@ -274,6 +274,11 @@ export default function App() {
     if (!activeBorehole) return;
     storage.deletePipeRecord(activeBorehole.id, id);
     setPipeRecords(storage.getPipeRecords(activeBorehole.id));
+    // Deleting a pipe rolls the borehole's depth back, so the cached borehole
+    // is now stale. Without this the header keeps showing the deleted pipe's
+    // depth and - worse - the next pipe starts from it, leaving a gap of
+    // undrilled metres in the log.
+    setBoreholes(storage.getBoreholes());
   };
 
   // Handle deleting event

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { randomUUID } from 'node:crypto';
 import { DrillingStorage } from './storage';
 import type { Borehole, PipeRecord, DrillingEvent } from '../types';
 
@@ -436,4 +437,191 @@ test('deletes a borehole project and its related records', () => {
   assert.equal(remainingBoreholes.some((bh) => bh.id === 'bh-delete-me'), false);
   assert.equal(storage.getPipeRecords('bh-delete-me').length, 0);
   assert.equal(storage.getEvents('bh-delete-me').length, 0);
+});
+
+// --- deleting a pipe must roll the borehole depth back ----------------------
+// A deleted pipe left `currentDepth` at the deleted pipe's end depth, so the
+// next pipe started below the bottom of the hole and the log gained a gap of
+// undrilled metres it then billed for.
+
+function depthHarness() {
+  createStorageHarness();
+  const storage = new DrillingStorage();
+  storage.saveBorehole({
+    id: 'bh-depth',
+    name: 'BH-DEPTH',
+    project: 'Depth Project',
+    client: 'Test Client',
+    rigName: 'Rig #1',
+    targetDepth: 100,
+    currentDepth: 0,
+    defaultPipeLength: 4.55,
+    bitDiameter: 8.5,
+    bitType: 'DTH Hammer - Button Bit',
+    gpsCoordinates: { lat: 0, lng: 0 },
+    status: 'active',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    engineHoursStart: 10,
+    compressorHoursStart: 8,
+    currentEngineHours: 10,
+    currentCompressorHours: 8,
+    casingInstalledDepth: 0,
+  });
+  const addPipe = (id: string, n: number, start: number, end: number, boreholeId = 'bh-depth') =>
+    storage.savePipeRecord({
+      id,
+      boreholeId,
+      pipeNumber: n,
+      startDepth: start,
+      endDepth: end,
+      pipeLength: Number((end - start).toFixed(2)),
+      startTime: new Date().toISOString(),
+      endTime: new Date().toISOString(),
+      durationSeconds: 3600,
+      penetrationRate: 5,
+      formation: 'Weathered Basalt',
+      waterStrike: false,
+      airPressure: 240,
+      compressorPressure: 210,
+      bitType: 'DTH Hammer - Button Bit',
+      bitDiameter: 8.5,
+      operator: 'James',
+      gpsCoordinates: { lat: 0, lng: 0 },
+      remarks: 'Test',
+      synced: false,
+    });
+  const depthOf = (id = 'bh-depth') =>
+    storage.getBoreholes().find((b) => b.id === id)!.currentDepth;
+  return { storage, addPipe, depthOf };
+}
+
+test('deleting the deepest pipe rolls the borehole back to the pipe below it', () => {
+  const { storage, addPipe, depthOf } = depthHarness();
+  addPipe('p1', 1, 0, 4.55);
+  addPipe('p2', 2, 4.55, 9.1);
+  addPipe('p3', 3, 9.1, 13.65);
+  assert.equal(depthOf(), 13.65);
+
+  storage.deletePipeRecord('p3');
+
+  assert.equal(depthOf(), 9.1);
+});
+
+test('deleting the last remaining pipe returns the borehole to zero', () => {
+  const { storage, addPipe, depthOf } = depthHarness();
+  addPipe('p1', 1, 0, 4.55);
+
+  storage.deletePipeRecord('p1');
+
+  assert.equal(depthOf(), 0);
+});
+
+test('deleting a shallower pipe leaves the measured depth alone', () => {
+  const { storage, addPipe, depthOf } = depthHarness();
+  addPipe('p1', 1, 0, 4.55);
+  addPipe('p2', 2, 4.55, 9.1);
+
+  storage.deletePipeRecord('p1');
+
+  assert.equal(depthOf(), 9.1);
+});
+
+test('deleting a pipe does not disturb another borehole depth', () => {
+  const { storage, addPipe, depthOf } = depthHarness();
+  storage.saveBorehole({
+    id: 'bh-other',
+    name: 'BH-OTHER',
+    project: 'Other',
+    client: 'Test Client',
+    rigName: 'Rig #2',
+    targetDepth: 100,
+    currentDepth: 0,
+    defaultPipeLength: 4.55,
+    bitDiameter: 8.5,
+    bitType: 'DTH Hammer - Button Bit',
+    gpsCoordinates: { lat: 0, lng: 0 },
+    status: 'active',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    engineHoursStart: 10,
+    compressorHoursStart: 8,
+    currentEngineHours: 10,
+    currentCompressorHours: 8,
+    casingInstalledDepth: 0,
+  });
+  addPipe('p1', 1, 0, 4.55);
+  addPipe('o1', 1, 0, 20, 'bh-other');
+
+  storage.deletePipeRecord('p1');
+
+  assert.equal(depthOf('bh-other'), 20);
+});
+
+test('the corrected depth is queued so the server does not keep the deleted pipe depth', () => {
+  // Real uuids: the outbox refuses to queue anything else, so the shorthand ids
+  // the tests above use would leave the queue empty and prove nothing.
+  const bhId = randomUUID();
+  const p1 = randomUUID();
+  const p2 = randomUUID();
+  createStorageHarness();
+  const storage = new DrillingStorage();
+  storage.saveBorehole({
+    id: bhId,
+    name: 'BH-QUEUE',
+    project: 'Queue Project',
+    client: 'Test Client',
+    rigName: 'Rig #1',
+    targetDepth: 100,
+    currentDepth: 0,
+    defaultPipeLength: 4.55,
+    bitDiameter: 8.5,
+    bitType: 'DTH Hammer - Button Bit',
+    gpsCoordinates: { lat: 0, lng: 0 },
+    status: 'active',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    engineHoursStart: 10,
+    compressorHoursStart: 8,
+    currentEngineHours: 10,
+    currentCompressorHours: 8,
+    casingInstalledDepth: 0,
+  });
+  const add = (id: string, n: number, start: number, end: number) =>
+    storage.savePipeRecord({
+      id,
+      boreholeId: bhId,
+      pipeNumber: n,
+      startDepth: start,
+      endDepth: end,
+      pipeLength: Number((end - start).toFixed(2)),
+      startTime: new Date().toISOString(),
+      endTime: new Date().toISOString(),
+      durationSeconds: 3600,
+      penetrationRate: 5,
+      formation: 'Weathered Basalt',
+      waterStrike: false,
+      airPressure: 240,
+      compressorPressure: 210,
+      bitType: 'DTH Hammer - Button Bit',
+      bitDiameter: 8.5,
+      operator: 'James',
+      gpsCoordinates: { lat: 0, lng: 0 },
+      remarks: 'Test',
+      synced: false,
+    });
+  add(p1, 1, 0, 4.55);
+  add(p2, 2, 4.55, 9.1);
+
+  storage.deletePipeRecord(p2);
+
+  // Upserts collapse into one queue slot per record, so assert on the pending
+  // borehole payload rather than expecting a freshly appended entry.
+  const queue = JSON.parse(localStorage.getItem('wwdm_outbox') ?? '[]');
+  const pending = queue.find(
+    (o: { entity: string; op: string; entityId: string }) =>
+      o.entity === 'borehole' && o.op === 'upsert' && o.entityId === bhId
+  );
+  assert.ok(pending, 'expected a pending borehole upsert carrying the new depth');
+  assert.equal(pending.payload.currentDepth, 4.55);
 });
