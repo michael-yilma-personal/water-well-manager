@@ -114,7 +114,7 @@ are rejected as downgrades.
 
 ```bash
 npm run lint            # tsc --noEmit
-npm test                # 67 unit tests
+npm test                # 79 unit tests
 npm run test:e2e        # rls, new-crew, offline sync, photos, dashboard
 npm run test:apk        # offline capture -> sync on a connected device
 npm run test:apk-photos # photo pipeline on a connected device
