@@ -1,10 +1,84 @@
 @import "tailwindcss";
 
 @layer base {
+  :root {
+    /* Type: a system face for prose, the mono kept where it earns its place.
+       The mono is not decoration - depths, times and pipe numbers sit in
+       columns and have to line up down the screen. Everything else reads
+       faster in the platform face, which already ships optical sizing and
+       legibility tuning that a code font does not. */
+    --font-text: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+      "Helvetica Neue", Arial, sans-serif;
+    --font-data: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco,
+      Consolas, "Liberation Mono", "Courier New", monospace;
+  }
+
   body {
-    font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    font-family: var(--font-text);
+    /* Spacing in rem so a larger system text size grows the layout with the
+       text instead of bursting it. */
+    font-size: 100%;
+    line-height: 1.5;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    -webkit-tap-highlight-color: transparent;
+    /* No rubber-band on the document itself - the views scroll, the app frame
+       does not. On Android this is what stops the whole screen sliding when a
+       list hits its end. */
+    overscroll-behavior-y: none;
+  }
+
+  /* Tracking is size-specific. Letters read too far apart as they grow, so
+     display text tightens; small text opens up slightly to stay legible on a
+     dusty screen at arm's length. One letter-spacing for every size is wrong
+     somewhere. */
+  h1, .type-display {
+    letter-spacing: -0.022em;
+    line-height: 1.08;
+  }
+
+  h2, .type-title {
+    letter-spacing: -0.014em;
+    line-height: 1.18;
+  }
+
+  h3, .type-heading {
+    letter-spacing: -0.008em;
+    line-height: 1.28;
+  }
+
+  /* Field labels: small, upper-case, and the one place positive tracking is
+     right - caps set tight are a smear at 10px. */
+  .type-label {
+    letter-spacing: 0.06em;
+    line-height: 1.35;
+  }
+
+  /* Numbers that belong to a column. Tabular figures keep a depth readout from
+     jittering as the digits change. */
+  .type-data, input[type="number"] {
+    font-family: var(--font-data);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0;
+  }
+}
+
+@layer utilities {
+  /* Android gesture bar / notch. */
+  .pb-safe {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  .pt-safe {
+    padding-top: env(safe-area-inset-top);
+  }
+
+  /* Where floating chrome overlaps scrolling content, fade the content out
+     under it instead of drawing a hard 1px rule. The divider says "two boxes";
+     the fade says "this continues underneath". */
+  .scroll-edge-bottom {
+    -webkit-mask-image: linear-gradient(to bottom, black calc(100% - 20px), transparent);
+    mask-image: linear-gradient(to bottom, black calc(100% - 20px), transparent);
   }
 }
 
@@ -25,4 +99,37 @@
 
 ::-webkit-scrollbar-thumb:hover {
   background: rgba(255, 215, 0, 0.8);
+}
+
+/* Reduced motion is not "no feedback" - the components swap springs for
+   cross-fades themselves. This is the backstop for anything animated in CSS,
+   including the pulsing compass in the header, which is a slow looping
+   oscillation of exactly the kind that should not run when someone has asked
+   for less movement. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Frost the glass when translucency is unwelcome. Sunlight mode sets this on
+   the elements directly; this covers the OS-level setting. */
+@media (prefers-reduced-transparency: reduce) {
+  .material {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+}
+
+@media (prefers-contrast: more) {
+  .material {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    border-color: currentColor !important;
+  }
 }

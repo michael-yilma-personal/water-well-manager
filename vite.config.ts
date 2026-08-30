@@ -5,6 +5,12 @@ import {defineConfig} from 'vite';
 
 export default defineConfig(() => {
   return {
+    // Relative asset paths, not absolute. The default '/' hard-codes the domain
+    // root, so a build copied into a subdirectory - 77builders.com/drill/ - asks
+    // for /assets/main.js instead of /drill/assets/main.js, gets a 404, and
+    // renders an empty page. './' keeps the same build working at the root, in
+    // any subdirectory, and inside the Capacitor WebView.
+    base: './',
     plugins: [react(), tailwindcss()],
     build: {
       rollupOptions: {

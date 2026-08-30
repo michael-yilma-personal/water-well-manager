@@ -10,7 +10,7 @@
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
     "test": "node --import tsx --test \"src/services/*.test.ts\" \"src/utils/*.test.ts\"",
-    "test:e2e": "npm run test:rls && npm run test:newcrew && npm run test:identity && npm run test:sync && npm run test:badge && npm run test:cancel && npm run test:photos && npm run test:layout && npm run test:crew && npm run test:dashboard",
+    "test:e2e": "npm run test:rls && npm run test:newcrew && npm run test:identity && npm run test:sync && npm run test:badge && npm run test:parked && npm run test:cancel && npm run test:photos && npm run test:layout && npm run test:crew && npm run test:dashboard",
     "test:rls": "python3 e2e/rls_e2e.py",
     "test:sync": "python3 e2e/offline_sync_e2e.py",
     "test:photos": "python3 e2e/photo_e2e.py",
@@ -22,7 +22,8 @@
     "test:layout": "python3 e2e/header_layout_e2e.py",
     "test:crew": "python3 e2e/crew_e2e.py",
     "test:identity": "python3 e2e/operator_identity_e2e.py",
-    "test:badge": "python3 e2e/sync_badge_e2e.py"
+    "test:badge": "python3 e2e/sync_badge_e2e.py",
+    "test:parked": "python3 e2e/parked_badge_e2e.py"
   },
   "dependencies": {
     "@capacitor/android": "^8.5.0",

@@ -16,6 +16,7 @@ import {
   Wrench,
   AlertTriangle,
 } from 'lucide-react';
+import { ModalShell } from '../../ui/ModalShell';
 
 interface EndPipeModalProps {
   isOpen: boolean;
@@ -73,8 +74,6 @@ export const EndPipeModal: React.FC<EndPipeModalProps> = ({
     setBitDiameter(activeTimer.bitDiameter || borehole.bitDiameter);
     setRemarks(activeTimer.remarks || '');
   }, [isOpen, activeTimer.pipeNumber]);
-
-  if (!isOpen) return null;
 
   // Calculate automatic metrics
   const endTime = new Date().toISOString();
@@ -135,9 +134,16 @@ export const EndPipeModal: React.FC<EndPipeModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4">
+    <ModalShell
+      isOpen={isOpen}
+      onClose={onClose}
+      sunlightMode={sunlightMode}
+      maxWidth="max-w-2xl"
+      zIndex={50}
+      label="End pipe"
+    >
       <div
-        className={`w-full max-w-2xl rounded-2xl border shadow-2xl overflow-hidden transition-colors ${
+        className={`w-full flex flex-col min-h-0 max-h-full rounded-2xl border shadow-2xl overflow-hidden transition-colors ${
           sunlightMode
             ? 'bg-zinc-950 border-amber-400 text-amber-300'
             : 'bg-slate-900 border-slate-700 text-white'
@@ -173,7 +179,7 @@ export const EndPipeModal: React.FC<EndPipeModalProps> = ({
         </div>
 
         {/* Form */}
-        <form onSubmit={handleSave} className="p-4 sm:p-6 space-y-5 max-h-[80vh] overflow-y-auto">
+        <form onSubmit={handleSave} className="p-4 sm:p-6 space-y-5 flex-1 min-h-0 overflow-y-auto">
           {/* Automatic Telemetry Card */}
           <div
             className={`p-4 rounded-xl border grid grid-cols-2 sm:grid-cols-4 gap-3 text-center ${
@@ -255,7 +261,7 @@ export const EndPipeModal: React.FC<EndPipeModalProps> = ({
               <div className="flex items-center gap-2">
                 <Droplets
                   className={`w-5 h-5 ${
-                    waterStrike ? 'text-cyan-400 animate-bounce' : 'opacity-60'
+                    waterStrike ? 'text-cyan-400' : 'opacity-60'
                   }`}
                 />
                 <div>
@@ -270,7 +276,7 @@ export const EndPipeModal: React.FC<EndPipeModalProps> = ({
               <button
                 type="button"
                 onClick={() => setWaterStrike(!waterStrike)}
-                className={`px-4 py-2 rounded-xl font-black text-xs tracking-wider uppercase transition-all ${
+                className={`px-4 py-2 rounded-xl font-black text-xs tracking-wider uppercase transition-colors duration-150 active:scale-95 ${
                   waterStrike
                     ? 'bg-cyan-500 text-black shadow-lg shadow-cyan-500/30'
                     : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
@@ -395,7 +401,7 @@ export const EndPipeModal: React.FC<EndPipeModalProps> = ({
           <div className="pt-2 flex flex-col sm:flex-row gap-3">
             <button
               type="submit"
-              className={`flex-1 py-4 px-6 rounded-2xl font-black text-base sm:text-lg uppercase tracking-wider flex items-center justify-center gap-2 shadow-lg transition-transform active:scale-95 ${
+              className={`flex-1 py-4 px-6 rounded-2xl font-black text-base sm:text-lg uppercase tracking-wider flex items-center justify-center gap-2 shadow-lg active:scale-95 ${
                 sunlightMode
                   ? 'bg-amber-400 text-black hover:bg-amber-300 shadow-amber-900/40'
                   : 'bg-gradient-to-r from-emerald-600 to-teal-600 text-white hover:from-emerald-500 hover:to-teal-500 shadow-emerald-900/30'
@@ -414,6 +420,6 @@ export const EndPipeModal: React.FC<EndPipeModalProps> = ({
           </div>
         </form>
       </div>
-    </div>
+    </ModalShell>
   );
 };

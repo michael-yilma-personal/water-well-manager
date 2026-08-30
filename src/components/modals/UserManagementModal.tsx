@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { User, UserRole } from '../../types';
 import { X, Users, Plus, Trash2, PencilLine } from 'lucide-react';
+import { ModalShell } from '../../ui/ModalShell';
 
 interface UserManagementModalProps {
   isOpen: boolean;
@@ -27,8 +28,6 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
   const [draftRole, setDraftRole] = useState<UserRole>('Driller');
   const [draftBadge, setDraftBadge] = useState('');
   const [editingUserId, setEditingUserId] = useState<string | null>(null);
-
-  if (!isOpen) return null;
 
   const resetForm = () => {
     setDraftName('');
@@ -60,8 +59,15 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-[70] bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4">
-      <div className={`w-full max-w-2xl rounded-xl border-2 shadow-2xl overflow-hidden ${sunlightMode ? 'bg-zinc-950 border-[#FFD700] text-[#FFD700]' : 'bg-[#1A1A1A] border-[#D1D1D1]/40 text-white'}`}>
+    <ModalShell
+      isOpen={isOpen}
+      onClose={onClose}
+      sunlightMode={sunlightMode}
+      maxWidth="max-w-2xl"
+      zIndex={70}
+      label="User management"
+    >
+      <div className={`w-full flex flex-col min-h-0 max-h-full rounded-xl border-2 shadow-2xl overflow-hidden ${sunlightMode ? 'bg-zinc-950 border-[#FFD700] text-[#FFD700]' : 'bg-[#1A1A1A] border-[#D1D1D1]/40 text-white'}`}>
         <div className={`px-4 sm:px-6 py-4 border-b-2 flex items-center justify-between ${sunlightMode ? 'bg-[#FFD700] text-black border-black' : 'bg-black text-white border-[#FFD700]/50'}`}>
           <div className="flex items-center gap-3">
             <div className={`p-2 rounded ${sunlightMode ? 'bg-black text-[#FFD700]' : 'bg-[#FFD700] text-black'}`}>
@@ -77,7 +83,7 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
           </button>
         </div>
 
-        <div className="p-4 sm:p-6 space-y-4 max-h-[80vh] overflow-y-auto">
+        <div className="p-4 sm:p-6 space-y-4 flex-1 min-h-0 overflow-y-auto">
           <form onSubmit={handleSubmit} className="rounded-lg border border-zinc-700 bg-zinc-900/50 p-3 sm:p-4 space-y-3">
             <div className="flex items-center gap-2 text-sm font-black uppercase tracking-wider">
               <Plus className="w-4 h-4" />
@@ -176,6 +182,6 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
           </div>
         </div>
       </div>
-    </div>
+    </ModalShell>
   );
 };

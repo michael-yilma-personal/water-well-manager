@@ -3,7 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import { AnimatePresence, motion } from 'motion/react';
 import {
   ActivePipeTimer,
   AppSettings,
@@ -39,6 +40,8 @@ import { createCompositeTransport, createPhotoTransport } from './services/photo
 import { getSupabase, isSupabaseConfigured } from './services/supabaseClient';
 import { getCurrentUserId, isProvisioned, fetchMyProfile } from './services/auth';
 import { SignInScreen } from './components/SignInScreen';
+import { SPRING_DEFAULT, CROSSFADE } from './ui/springs';
+import { useReducedMotion } from './ui/prefs';
 
 export default function App() {
   // Storage instance
@@ -84,8 +87,22 @@ export default function App() {
         }
   );
 
+  const reducedMotion = useReducedMotion();
+
   // Active navigation tab
   const [activeTab, setActiveTab] = useState<NavTab>('rig');
+
+  // Which way the next view should travel. The tabs sit in a row, so moving
+  // right in the nav has to move the content left - if the panel slid the same
+  // way regardless, the bar and the screen would be telling you two different
+  // stories about where you just went.
+  const TAB_ORDER: NavTab[] = ['rig', 'logs', 'npt', 'analytics'];
+  const tabDirection = useRef(1);
+  const handleSelectTab = (tab: NavTab) => {
+    tabDirection.current =
+      TAB_ORDER.indexOf(tab) >= TAB_ORDER.indexOf(activeTab) ? 1 : -1;
+    setActiveTab(tab);
+  };
 
   // Modals state
   const [isEndPipeModalOpen, setIsEndPipeModalOpen] = useState(false);
@@ -101,6 +118,11 @@ export default function App() {
   const [isSyncing, setIsSyncing] = useState(false);
   const [pendingSync, setPendingSync] = useState(() =>
     DrillingStorage.getPendingSyncCount()
+  );
+  // Tracked separately from pendingSync: parked work has stopped retrying, so
+  // it needs a person rather than more patience, and the badge says so.
+  const [parkedSync, setParkedSync] = useState(() =>
+    DrillingStorage.getParkedSyncCount()
   );
   const [syncError, setSyncError] = useState<string | null>(null);
   const [signedIn, setSignedIn] = useState(() => isProvisioned());
@@ -121,7 +143,10 @@ export default function App() {
             getUserId: getCurrentUserId,
           })
         ),
-        onChange: () => setPendingSync(DrillingStorage.getPendingSyncCount()),
+        onChange: () => {
+          setPendingSync(DrillingStorage.getPendingSyncCount());
+          setParkedSync(DrillingStorage.getParkedSyncCount());
+        },
       })
   );
 
@@ -151,10 +176,12 @@ export default function App() {
   // header sat on "Cloud Synced" while work was queued and unsent, which is
   // precisely the reassurance a driller must not be given falsely.
   useEffect(() => {
-    const unsubscribe = getOutbox().subscribe(() =>
-      setPendingSync(DrillingStorage.getPendingSyncCount())
-    );
-    setPendingSync(DrillingStorage.getPendingSyncCount());
+    const refresh = () => {
+      setPendingSync(DrillingStorage.getPendingSyncCount());
+      setParkedSync(DrillingStorage.getParkedSyncCount());
+    };
+    const unsubscribe = getOutbox().subscribe(refresh);
+    refresh();
     return unsubscribe;
   }, []);
 
@@ -428,8 +455,13 @@ export default function App() {
     if (isSyncing) return;
     setIsSyncing(true);
     try {
+      // Tapping the badge is the driller asking for another go, so give parked
+      // work one - otherwise the only route out of a parked queue is a
+      // reinstall, which takes the records with it.
+      if (getOutbox().parked().length > 0) getOutbox().retryParked();
       const result = await syncWorker.syncNow();
       setPendingSync(storage.getPendingSyncCount());
+      setParkedSync(storage.getParkedSyncCount());
       if (result.failed > 0 && result.sent === 0) {
         // Silence here would look identical to a successful upload, which is
         // the failure mode this whole feature exists to remove.
@@ -641,6 +673,7 @@ export default function App() {
           })
         }
         pendingSyncCount={pendingSync}
+        parkedSyncCount={parkedSync}
         isSyncing={isSyncing}
         onSyncNow={handleManualSync}
         onOpenProfile={() => setIsProfileModalOpen(true)}
@@ -660,7 +693,32 @@ export default function App() {
         </div>
       )}
 
-      <main className="flex-1 flex flex-col pb-20">
+      <main
+        className="flex-1 flex flex-col"
+        // Clearance for the nav bar plus whatever the gesture bar takes, so
+        // the last row of a pipe log is not parked underneath either.
+        style={{ paddingBottom: 'calc(5rem + env(safe-area-inset-bottom))' }}
+      >
+        <AnimatePresence mode="wait" initial={false} custom={tabDirection.current}>
+          <motion.div
+            key={activeTab}
+            className="flex-1 flex flex-col"
+            custom={tabDirection.current}
+            initial={
+              reducedMotion
+                ? { opacity: 0 }
+                : { opacity: 0, x: 24 * tabDirection.current }
+            }
+            animate={{ opacity: 1, x: 0 }}
+            // Out the way it came in: a view that arrived from the right
+            // leaves to the right.
+            exit={
+              reducedMotion
+                ? { opacity: 0 }
+                : { opacity: 0, x: -24 * tabDirection.current }
+            }
+            transition={reducedMotion ? CROSSFADE : SPRING_DEFAULT}
+          >
         {activeTab === 'rig' && (
           <RigControlView
             activeBorehole={activeBorehole}
@@ -730,12 +788,14 @@ export default function App() {
             sunlightMode={sunlightMode}
           />
         )}
+          </motion.div>
+        </AnimatePresence>
       </main>
 
       {/* Fixed Bottom Navigation Bar (Driller Gloves Friendly) */}
       <BottomNav
         activeTab={activeTab}
-        onSelectTab={setActiveTab}
+        onSelectTab={handleSelectTab}
         sunlightMode={sunlightMode}
         pipeCount={pipeRecords.length}
         nptCount={events.filter((e) => e.isNPT).length}

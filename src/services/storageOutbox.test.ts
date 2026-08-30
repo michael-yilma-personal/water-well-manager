@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { DrillingStorage, getOutbox, resetOutbox } from './storage';
+import { PermanentSyncError } from './outbox';
 import type { PipeRecord, DrillingEvent } from '../types';
 
 
@@ -219,4 +220,32 @@ test('clearing sample data leaves no dangling active borehole', () => {
     active === null || DrillingStorage.getBoreholes().some((b) => b.id === active),
     `active borehole ${active} no longer exists`
   );
+});
+
+
+/**
+ * The badge reads a single count. Parking removes an item from that count while
+ * the record is still sitting on the phone, so a permanent rejection turns the
+ * header green over work that never left the device - the exact reassurance a
+ * driller must not be given falsely.
+ */
+test('work parked by a permanent rejection is still counted as unsent', async () => {
+  harness();
+  DrillingStorage.getPipeRecords();
+  getOutbox().clear();
+
+  DrillingStorage.savePipeRecord(pipe({ id: '' }));
+  assert.equal(DrillingStorage.getPendingSyncCount(), 1);
+
+  // The server refuses it for good - RLS, a check constraint, a stale schema.
+  await getOutbox().drain(async () => {
+    throw new PermanentSyncError('insufficient_privilege');
+  });
+
+  // The record never reached the server, yet the count driving the badge
+  // has dropped to zero - parking silently removes it.
+  assert.equal(DrillingStorage.getPendingSyncCount(), 0);
+  assert.equal(DrillingStorage.getParkedSyncCount(), 1);
+  // ...so the count the header renders must not read zero.
+  assert.equal(DrillingStorage.getUnsyncedCount(), 1);
 });

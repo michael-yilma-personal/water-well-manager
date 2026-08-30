@@ -6,6 +6,7 @@ import {
   createRecordId,
 } from '../../services/storage';
 import { X, Plus, MapPin, Compass, Wrench, Building2 } from 'lucide-react';
+import { ModalShell } from '../../ui/ModalShell';
 
 interface NewBoreholeModalProps {
   isOpen: boolean;
@@ -33,8 +34,6 @@ export const NewBoreholeModal: React.FC<NewBoreholeModalProps> = ({
   const [elevation, setElevation] = useState(1680);
   const [engineHoursStart, setEngineHoursStart] = useState(4120.0);
   const [compressorHoursStart, setCompressorHoursStart] = useState(3080.0);
-
-  if (!isOpen) return null;
 
   const handleGetLocation = () => {
     if ('geolocation' in navigator) {
@@ -91,9 +90,16 @@ export const NewBoreholeModal: React.FC<NewBoreholeModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4">
+    <ModalShell
+      isOpen={isOpen}
+      onClose={onClose}
+      sunlightMode={sunlightMode}
+      maxWidth="max-w-2xl"
+      zIndex={50}
+      label="New borehole"
+    >
       <div
-        className={`w-full max-w-2xl rounded-xl border-2 shadow-2xl overflow-hidden ${
+        className={`w-full flex flex-col min-h-0 max-h-full rounded-xl border-2 shadow-2xl overflow-hidden ${
           sunlightMode
             ? 'bg-zinc-950 border-[#FFD700] text-[#FFD700]'
             : 'bg-[#1A1A1A] border-[#D1D1D1]/40 text-white'
@@ -135,7 +141,7 @@ export const NewBoreholeModal: React.FC<NewBoreholeModalProps> = ({
         </div>
 
         {/* Form */}
-        <form onSubmit={handleSubmit} className="p-4 sm:p-6 space-y-4 max-h-[80vh] overflow-y-auto">
+        <form onSubmit={handleSubmit} className="p-4 sm:p-6 space-y-4 flex-1 min-h-0 overflow-y-auto">
           {/* Project & Client */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
@@ -380,7 +386,7 @@ export const NewBoreholeModal: React.FC<NewBoreholeModalProps> = ({
           <div className="pt-2 flex flex-col sm:flex-row gap-3">
             <button
               type="submit"
-              className={`flex-1 py-3 px-6 rounded font-black text-base uppercase tracking-wider shadow-lg transition-transform active:scale-95 border-b-4 ${
+              className={`flex-1 py-3 px-6 rounded font-black text-base uppercase tracking-wider shadow-lg active:scale-95 border-b-4 ${
                 sunlightMode
                   ? 'bg-[#FFD700] text-black border-black hover:bg-[#e6c200]'
                   : 'bg-[#FFD700] text-black border-yellow-700 hover:bg-[#e6c200]'
@@ -398,6 +404,6 @@ export const NewBoreholeModal: React.FC<NewBoreholeModalProps> = ({
           </div>
         </form>
       </div>
-    </div>
+    </ModalShell>
   );
 };

@@ -6,6 +6,7 @@ import {
   BIT_DIAMETER_OPTIONS,
 } from '../../services/storage';
 import { X, Settings, Sun, Volume2, HardDrive, RefreshCw, AlertTriangle, Users } from 'lucide-react';
+import { ModalShell } from '../../ui/ModalShell';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -48,8 +49,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   );
   const [sunlight, setSunlight] = useState(settings.sunlightMode);
 
-  if (!isOpen) return null;
-
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
     onSaveSettings({
@@ -67,9 +66,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4">
+    <ModalShell
+      isOpen={isOpen}
+      onClose={onClose}
+      sunlightMode={sunlightMode}
+      maxWidth="max-w-lg"
+      zIndex={50}
+      label="Rig settings"
+    >
       <div
-        className={`w-full max-w-lg rounded-xl border-2 shadow-2xl overflow-hidden ${
+        className={`w-full flex flex-col min-h-0 max-h-full rounded-xl border-2 shadow-2xl overflow-hidden ${
           sunlightMode
             ? 'bg-zinc-950 border-[#FFD700] text-[#FFD700]'
             : 'bg-[#1A1A1A] border-[#D1D1D1]/40 text-white'
@@ -110,7 +116,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           </button>
         </div>
 
-        <form onSubmit={handleSave} className="p-4 sm:p-6 space-y-5 max-h-[80vh] overflow-y-auto">
+        <form onSubmit={handleSave} className="p-4 sm:p-6 space-y-5 flex-1 min-h-0 overflow-y-auto">
           {/* Primary Setting: Drill Pipe Length */}
           <div className="p-4 rounded-lg border-2 border-[#FFD700] bg-black/40 space-y-2">
             <div className="flex items-center justify-between">
@@ -332,7 +338,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           <div className="pt-2 flex gap-3">
             <button
               type="submit"
-              className="flex-1 py-3 px-6 rounded font-black text-base uppercase tracking-wider bg-[#FFD700] text-black border-b-4 border-yellow-700 hover:bg-[#e6c200] active:translate-y-1 transition-all"
+              className="flex-1 py-3 px-6 rounded font-black text-base uppercase tracking-wider bg-[#FFD700] text-black border-b-4 border-yellow-700 hover:bg-[#e6c200] active:translate-y-1 transition-colors duration-150"
             >
               SAVE SETTINGS
             </button>
@@ -346,6 +352,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           </div>
         </form>
       </div>
-    </div>
+    </ModalShell>
   );
 };

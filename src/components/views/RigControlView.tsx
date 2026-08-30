@@ -214,8 +214,11 @@ export const RigControlView: React.FC<RigControlViewProps> = ({
             {/* START PIPE Button */}
             <button
               onClick={handlePressStart}
+              onPointerDown={() => {
+                if (!activeTimer.isActive) triggerVibration([12]);
+              }}
               disabled={activeTimer.isActive}
-              className={`w-full sm:flex-1 min-h-[180px] sm:min-h-[220px] border-b-8 rounded-2xl flex flex-col items-center justify-center gap-2 sm:gap-4 p-4 active:border-b-0 active:translate-y-1 transition-all ${
+              className={`w-full sm:flex-1 touch-manipulation select-none min-h-[180px] sm:min-h-[220px] border-b-8 rounded-2xl flex flex-col items-center justify-center gap-2 sm:gap-4 p-4 active:border-b-0 active:translate-y-1 transition-colors duration-150 ${
                 activeTimer.isActive
                   ? 'bg-zinc-300 border-zinc-400 text-zinc-500 cursor-not-allowed opacity-60'
                   : sunlightMode
@@ -237,10 +240,13 @@ export const RigControlView: React.FC<RigControlViewProps> = ({
             {/* END PIPE Button */}
             <button
               onClick={handlePressEnd}
+              onPointerDown={() => {
+                if (activeTimer.isActive) triggerVibration([12]);
+              }}
               // Without a running timer there is no start time, so duration and
               // penetration rate would be recorded as NaN.
               disabled={!activeTimer.isActive}
-              className={`w-full sm:flex-1 min-h-[180px] sm:min-h-[220px] border-b-8 rounded-2xl flex flex-col items-center justify-center gap-2 sm:gap-4 p-4 active:border-b-0 active:translate-y-1 transition-all ${
+              className={`w-full sm:flex-1 touch-manipulation select-none min-h-[180px] sm:min-h-[220px] border-b-8 rounded-2xl flex flex-col items-center justify-center gap-2 sm:gap-4 p-4 active:border-b-0 active:translate-y-1 transition-colors duration-150 ${
                 !activeTimer.isActive
                   ? 'bg-zinc-300 border-zinc-400 text-zinc-500 cursor-not-allowed opacity-60'
                   : sunlightMode
@@ -271,15 +277,22 @@ export const RigControlView: React.FC<RigControlViewProps> = ({
           {/* Active Live Timer / Current Drill Pipe Banner (if drilling is active) */}
           {activeTimer.isActive && (
             <div
-              className={`p-3 sm:p-4 rounded-xl border-2 flex flex-col sm:flex-row items-center justify-between gap-3 animate-pulse ${
+              className={`p-3 sm:p-4 rounded-xl border-2 flex flex-col sm:flex-row items-center justify-between gap-3 ${
                 sunlightMode
                   ? 'bg-black border-[#FFD700] text-[#FFD700]'
                   : 'bg-emerald-950/80 border-emerald-500 text-emerald-200'
               }`}
             >
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-full bg-emerald-500 text-black font-black flex items-center justify-center text-lg shrink-0">
-                  <Flame className="w-6 h-6 animate-spin" />
+                <div className="relative w-10 h-10 rounded-full bg-emerald-500 text-black font-black flex items-center justify-center text-lg shrink-0">
+                  <Flame className="w-6 h-6" />
+                  {/* A small live dot instead of the whole banner pulsing. The
+                      thing that is actually moving is the elapsed timer; this
+                      just marks the panel as live without swamping it. */}
+                  <span className="absolute -top-0.5 -right-0.5 flex h-3 w-3">
+                    <span className="motion-safe:animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-300 opacity-75" />
+                    <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-400 border border-black/40" />
+                  </span>
                 </div>
                 <div>
                   <div className="font-black text-sm sm:text-base uppercase">
@@ -324,7 +337,7 @@ export const RigControlView: React.FC<RigControlViewProps> = ({
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
             <button
               onClick={() => onOpenEventModal('Breakdown')}
-              className={`border-2 font-bold text-xs sm:text-sm uppercase flex items-center justify-center p-2.5 rounded-lg transition-all active:scale-95 ${
+              className={`border-2 font-bold text-xs sm:text-sm uppercase flex items-center justify-center p-2.5 rounded-lg transition-colors duration-150 active:scale-95 ${
                 sunlightMode
                   ? 'bg-zinc-900 border-[#FFD700] text-[#FFD700] hover:bg-red-950 hover:text-red-300'
                   : 'bg-white border-[#D1D1D1] text-[#1A1A1A] hover:bg-red-50 hover:border-red-500 hover:text-red-700'
@@ -336,7 +349,7 @@ export const RigControlView: React.FC<RigControlViewProps> = ({
 
             <button
               onClick={() => onOpenEventModal('Rod Connection')}
-              className={`border-2 font-bold text-xs sm:text-sm uppercase flex items-center justify-center p-2.5 rounded-lg transition-all active:scale-95 ${
+              className={`border-2 font-bold text-xs sm:text-sm uppercase flex items-center justify-center p-2.5 rounded-lg transition-colors duration-150 active:scale-95 ${
                 sunlightMode
                   ? 'bg-zinc-900 border-[#FFD700] text-[#FFD700]'
                   : 'bg-white border-[#D1D1D1] text-[#1A1A1A]'
@@ -348,7 +361,7 @@ export const RigControlView: React.FC<RigControlViewProps> = ({
 
             <button
               onClick={() => onOpenEventModal('Bit Change')}
-              className={`border-2 font-bold text-xs sm:text-sm uppercase flex items-center justify-center p-2.5 rounded-lg transition-all active:scale-95 ${
+              className={`border-2 font-bold text-xs sm:text-sm uppercase flex items-center justify-center p-2.5 rounded-lg transition-colors duration-150 active:scale-95 ${
                 sunlightMode
                   ? 'bg-zinc-900 border-[#FFD700] text-[#FFD700]'
                   : 'bg-white border-[#D1D1D1] text-[#1A1A1A]'
@@ -360,7 +373,7 @@ export const RigControlView: React.FC<RigControlViewProps> = ({
 
             <button
               onClick={() => onOpenEventModal('Refueling')}
-              className={`border-2 font-bold text-xs sm:text-sm uppercase flex items-center justify-center p-2.5 rounded-lg transition-all active:scale-95 ${
+              className={`border-2 font-bold text-xs sm:text-sm uppercase flex items-center justify-center p-2.5 rounded-lg transition-colors duration-150 active:scale-95 ${
                 sunlightMode
                   ? 'bg-zinc-900 border-[#FFD700] text-[#FFD700]'
                   : 'bg-white border-[#D1D1D1] text-[#1A1A1A]'
@@ -372,7 +385,7 @@ export const RigControlView: React.FC<RigControlViewProps> = ({
 
             <button
               onClick={() => onOpenEventModal('Maintenance')}
-              className={`border-2 font-bold text-xs sm:text-sm uppercase flex items-center justify-center p-2.5 rounded-lg transition-all active:scale-95 ${
+              className={`border-2 font-bold text-xs sm:text-sm uppercase flex items-center justify-center p-2.5 rounded-lg transition-colors duration-150 active:scale-95 ${
                 sunlightMode
                   ? 'bg-zinc-900 border-[#FFD700] text-[#FFD700]'
                   : 'bg-white border-[#D1D1D1] text-[#1A1A1A]'
@@ -384,19 +397,19 @@ export const RigControlView: React.FC<RigControlViewProps> = ({
 
             <button
               onClick={() => onOpenEventModal('Water Strike')}
-              className={`border-2 font-extrabold text-xs sm:text-sm uppercase flex items-center justify-center p-2.5 rounded-lg transition-all active:scale-95 ${
+              className={`border-2 font-extrabold text-xs sm:text-sm uppercase flex items-center justify-center p-2.5 rounded-lg transition-colors duration-150 active:scale-95 ${
                 sunlightMode
                   ? 'bg-cyan-950 border-cyan-400 text-cyan-300'
                   : 'bg-green-50 border-[#4ADE80] text-[#166534]'
               }`}
             >
-              <Droplets className="w-4 h-4 mr-1.5 text-cyan-400 shrink-0 animate-bounce" />
+              <Droplets className="w-4 h-4 mr-1.5 text-cyan-400 shrink-0" />
               Water Strike
             </button>
 
             <button
               onClick={() => onOpenEventModal('Change Formation')}
-              className={`border-2 font-bold text-xs sm:text-sm uppercase flex items-center justify-center p-2.5 rounded-lg transition-all active:scale-95 ${
+              className={`border-2 font-bold text-xs sm:text-sm uppercase flex items-center justify-center p-2.5 rounded-lg transition-colors duration-150 active:scale-95 ${
                 sunlightMode
                   ? 'bg-zinc-900 border-[#FFD700] text-[#FFD700]'
                   : 'bg-white border-[#D1D1D1] text-[#1A1A1A]'
@@ -408,7 +421,7 @@ export const RigControlView: React.FC<RigControlViewProps> = ({
 
             <button
               onClick={() => onOpenEventModal('Take Photo')}
-              className="bg-[#3B82F6] hover:bg-blue-600 text-white font-bold text-xs sm:text-sm uppercase flex items-center justify-center p-2.5 rounded-lg transition-all active:scale-95 shadow-md"
+              className="bg-[#3B82F6] hover:bg-blue-600 text-white font-bold text-xs sm:text-sm uppercase flex items-center justify-center p-2.5 rounded-lg transition-colors duration-150 active:scale-95 shadow-md"
             >
               <Camera className="w-4 h-4 mr-1.5 shrink-0" />
               Take Photo

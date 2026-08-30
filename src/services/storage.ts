@@ -798,6 +798,18 @@ export class DrillingStorage {
   }
 
   /**
+   * Everything still on this device, retryable or not.
+   *
+   * getPendingSyncCount() deliberately excludes parked work, so on its own it
+   * reads zero the moment an item is given up on - and the header went green
+   * over records that never left the phone. Anything the driller can still
+   * lose has to be counted here.
+   */
+  static getUnsyncedCount(): number {
+    return this.getPendingSyncCount() + this.getParkedSyncCount();
+  }
+
+  /**
    * Superseded by the outbox and SyncWorker.
    *
    * The previous implementation flipped every record's `synced` flag without
@@ -996,6 +1008,9 @@ export class DrillingStorage {
   }
   getParkedSyncCount(): number {
     return DrillingStorage.getParkedSyncCount();
+  }
+  getUnsyncedCount(): number {
+    return DrillingStorage.getUnsyncedCount();
   }
   exportAllData(): string {
     return DrillingStorage.exportAllData();
