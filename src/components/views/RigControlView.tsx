@@ -18,6 +18,7 @@ import {
   Square,
   Wrench,
   AlertTriangle,
+  ShieldAlert,
   Droplets,
   Layers,
   Fuel,
@@ -63,6 +64,10 @@ export const RigControlView: React.FC<RigControlViewProps> = ({
   onExportExcel,
 }) => {
   const [elapsedSeconds, setElapsedSeconds] = useState<number>(0);
+
+  // Role comes from the profile row adopted at sign-in, not from the local user
+  // list, so this matches what RLS will decide at upload time.
+  const isAdministrator = currentUser.role === 'Administrator';
 
   // Live timer update
   useEffect(() => {
@@ -209,6 +214,28 @@ export const RigControlView: React.FC<RigControlViewProps> = ({
             </div>
           </div>
 
+          {/*
+            Administrators may read the drilling record but not author it: the
+            insert policy is `created_by = auth.uid() and not is_admin()`. Left
+            unsaid, an administrator could log a whole shift and only find out
+            at upload time, by which point the records sit in a queue this
+            account can never drain.
+          */}
+          {isAdministrator && (
+            <div className="w-full rounded-xl border border-amber-500/50 bg-amber-500/10 p-3 flex items-start gap-2.5">
+              <ShieldAlert className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+              <div className="min-w-0">
+                <div className="text-xs font-black uppercase tracking-wider text-amber-300">
+                  Administrator - read only
+                </div>
+                <div className="text-[11px] opacity-80 mt-0.5">
+                  Administrators review the drilling record but cannot log field
+                  data. Sign in as a Driller to record pipes and events.
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* TWO LARGE BUTTONS: START PIPE / END PIPE (Glove Friendly & Bright Sunlight Optimized) */}
           <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 w-full mt-1">
             {/* START PIPE Button */}
@@ -217,9 +244,9 @@ export const RigControlView: React.FC<RigControlViewProps> = ({
               onPointerDown={() => {
                 if (!activeTimer.isActive) triggerVibration([12]);
               }}
-              disabled={activeTimer.isActive}
+              disabled={activeTimer.isActive || isAdministrator}
               className={`w-full sm:flex-1 touch-manipulation select-none min-h-[180px] sm:min-h-[220px] border-b-8 rounded-2xl flex flex-col items-center justify-center gap-2 sm:gap-4 p-4 active:border-b-0 active:translate-y-1 transition-colors duration-150 ${
-                activeTimer.isActive
+                activeTimer.isActive || isAdministrator
                   ? 'bg-zinc-300 border-zinc-400 text-zinc-500 cursor-not-allowed opacity-60'
                   : sunlightMode
                     ? 'bg-[#FFD700] hover:bg-[#e6c200] border-yellow-800 text-black shadow-2xl shadow-amber-900/40'
@@ -337,7 +364,8 @@ export const RigControlView: React.FC<RigControlViewProps> = ({
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
             <button
               onClick={() => onOpenEventModal('Breakdown')}
-              className={`border-2 font-bold text-xs sm:text-sm uppercase flex items-center justify-center p-2.5 rounded-lg transition-colors duration-150 active:scale-95 ${
+              disabled={isAdministrator}
+              className={`border-2 font-bold text-xs sm:text-sm uppercase flex items-center justify-center p-2.5 rounded-lg transition-colors duration-150 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed ${
                 sunlightMode
                   ? 'bg-zinc-900 border-[#FFD700] text-[#FFD700] hover:bg-red-950 hover:text-red-300'
                   : 'bg-white border-[#D1D1D1] text-[#1A1A1A] hover:bg-red-50 hover:border-red-500 hover:text-red-700'
@@ -349,7 +377,8 @@ export const RigControlView: React.FC<RigControlViewProps> = ({
 
             <button
               onClick={() => onOpenEventModal('Rod Connection')}
-              className={`border-2 font-bold text-xs sm:text-sm uppercase flex items-center justify-center p-2.5 rounded-lg transition-colors duration-150 active:scale-95 ${
+              disabled={isAdministrator}
+              className={`border-2 font-bold text-xs sm:text-sm uppercase flex items-center justify-center p-2.5 rounded-lg transition-colors duration-150 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed ${
                 sunlightMode
                   ? 'bg-zinc-900 border-[#FFD700] text-[#FFD700]'
                   : 'bg-white border-[#D1D1D1] text-[#1A1A1A]'
@@ -361,7 +390,8 @@ export const RigControlView: React.FC<RigControlViewProps> = ({
 
             <button
               onClick={() => onOpenEventModal('Bit Change')}
-              className={`border-2 font-bold text-xs sm:text-sm uppercase flex items-center justify-center p-2.5 rounded-lg transition-colors duration-150 active:scale-95 ${
+              disabled={isAdministrator}
+              className={`border-2 font-bold text-xs sm:text-sm uppercase flex items-center justify-center p-2.5 rounded-lg transition-colors duration-150 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed ${
                 sunlightMode
                   ? 'bg-zinc-900 border-[#FFD700] text-[#FFD700]'
                   : 'bg-white border-[#D1D1D1] text-[#1A1A1A]'
@@ -373,7 +403,8 @@ export const RigControlView: React.FC<RigControlViewProps> = ({
 
             <button
               onClick={() => onOpenEventModal('Refueling')}
-              className={`border-2 font-bold text-xs sm:text-sm uppercase flex items-center justify-center p-2.5 rounded-lg transition-colors duration-150 active:scale-95 ${
+              disabled={isAdministrator}
+              className={`border-2 font-bold text-xs sm:text-sm uppercase flex items-center justify-center p-2.5 rounded-lg transition-colors duration-150 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed ${
                 sunlightMode
                   ? 'bg-zinc-900 border-[#FFD700] text-[#FFD700]'
                   : 'bg-white border-[#D1D1D1] text-[#1A1A1A]'
@@ -385,7 +416,8 @@ export const RigControlView: React.FC<RigControlViewProps> = ({
 
             <button
               onClick={() => onOpenEventModal('Maintenance')}
-              className={`border-2 font-bold text-xs sm:text-sm uppercase flex items-center justify-center p-2.5 rounded-lg transition-colors duration-150 active:scale-95 ${
+              disabled={isAdministrator}
+              className={`border-2 font-bold text-xs sm:text-sm uppercase flex items-center justify-center p-2.5 rounded-lg transition-colors duration-150 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed ${
                 sunlightMode
                   ? 'bg-zinc-900 border-[#FFD700] text-[#FFD700]'
                   : 'bg-white border-[#D1D1D1] text-[#1A1A1A]'
@@ -397,6 +429,7 @@ export const RigControlView: React.FC<RigControlViewProps> = ({
 
             <button
               onClick={() => onOpenEventModal('Water Strike')}
+              disabled={isAdministrator}
               className={`border-2 font-extrabold text-xs sm:text-sm uppercase flex items-center justify-center p-2.5 rounded-lg transition-colors duration-150 active:scale-95 ${
                 sunlightMode
                   ? 'bg-cyan-950 border-cyan-400 text-cyan-300'
@@ -409,7 +442,8 @@ export const RigControlView: React.FC<RigControlViewProps> = ({
 
             <button
               onClick={() => onOpenEventModal('Change Formation')}
-              className={`border-2 font-bold text-xs sm:text-sm uppercase flex items-center justify-center p-2.5 rounded-lg transition-colors duration-150 active:scale-95 ${
+              disabled={isAdministrator}
+              className={`border-2 font-bold text-xs sm:text-sm uppercase flex items-center justify-center p-2.5 rounded-lg transition-colors duration-150 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed ${
                 sunlightMode
                   ? 'bg-zinc-900 border-[#FFD700] text-[#FFD700]'
                   : 'bg-white border-[#D1D1D1] text-[#1A1A1A]'
@@ -421,6 +455,7 @@ export const RigControlView: React.FC<RigControlViewProps> = ({
 
             <button
               onClick={() => onOpenEventModal('Take Photo')}
+              disabled={isAdministrator}
               className="bg-[#3B82F6] hover:bg-blue-600 text-white font-bold text-xs sm:text-sm uppercase flex items-center justify-center p-2.5 rounded-lg transition-colors duration-150 active:scale-95 shadow-md"
             >
               <Camera className="w-4 h-4 mr-1.5 shrink-0" />
