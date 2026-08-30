@@ -49,6 +49,16 @@ function enqueueParentFirst(boreholeId: string): void {
   getOutbox().enqueue('upsert', 'borehole', borehole.id, borehole);
 }
 
+/** One pull's worth of server state, already mapped to domain records. */
+export interface RemoteSnapshot {
+  boreholes: Borehole[];
+  pipeRecords: PipeRecord[];
+  events: DrillingEvent[];
+  shiftLogs: ShiftLog[];
+  /** Rows soft-deleted upstream. Uuids are unique across tables. */
+  deletedIds: string[];
+}
+
 const STORAGE_KEYS = {
   USERS: 'wwdm_users',
   CURRENT_USER_ID: 'wwdm_current_user_id',
@@ -59,6 +69,7 @@ const STORAGE_KEYS = {
   SHIFT_LOGS: 'wwdm_shift_logs',
   ACTIVE_TIMER: 'wwdm_active_timer',
   SETTINGS: 'wwdm_settings',
+  PULL_WATERMARK: 'wwdm_pull_watermark',
 };
 
 export const SAMPLE_USERS: User[] = [
@@ -810,6 +821,69 @@ export class DrillingStorage {
   }
 
   /**
+   * Fold the server's copy of this account's work back into local storage.
+   *
+   * The download is the easy half. The half that can destroy a day's drilling
+   * is what it lands on: a driller may have logged for hours out of coverage,
+   * and those records exist nowhere else until the outbox drains. So anything
+   * still queued or parked wins outright over the server's version of the same
+   * row, and the pull skips it entirely rather than merging field by field.
+   *
+   * Rows are written straight to localStorage rather than through save*(),
+   * which would queue every downloaded record straight back up and turn one
+   * pull into a permanent upload loop.
+   */
+  /**
+   * Newest `received_at` this device has already folded in, or null if never.
+   *
+   * Kept next to the records rather than in memory so a restart resumes where
+   * the last pull stopped instead of re-reading the account's whole history.
+   */
+  static getPullWatermark(): string | null {
+    return localStorage.getItem(STORAGE_KEYS.PULL_WATERMARK);
+  }
+
+  static setPullWatermark(watermark: string): void {
+    localStorage.setItem(STORAGE_KEYS.PULL_WATERMARK, watermark);
+  }
+
+  static mergeRemote(snapshot: RemoteSnapshot): void {
+    const outbox = getOutbox();
+    // Parked counts as unsent: it failed to upload, so the server's copy is
+    // older than what is on this device, not newer.
+    const unsent = new Set(
+      [...outbox.pending(), ...outbox.parked()].map((item) => item.entityId)
+    );
+    const deleted = new Set(snapshot.deletedIds);
+
+    const apply = <T extends { id: string }>(key: string, incoming: T[]): void => {
+      let local: T[] = [];
+      try {
+        const raw = localStorage.getItem(key);
+        local = raw ? (JSON.parse(raw) as T[]) : [];
+      } catch {
+        local = [];
+      }
+
+      const byId = new Map(local.map((row) => [row.id, row]));
+      for (const row of incoming) {
+        if (unsent.has(row.id)) continue;
+        byId.set(row.id, row);
+      }
+      for (const id of deleted) {
+        if (unsent.has(id)) continue;
+        byId.delete(id);
+      }
+      localStorage.setItem(key, JSON.stringify([...byId.values()]));
+    };
+
+    apply(STORAGE_KEYS.BOREHOLES, snapshot.boreholes);
+    apply(STORAGE_KEYS.PIPE_RECORDS, snapshot.pipeRecords);
+    apply(STORAGE_KEYS.EVENTS, snapshot.events);
+    apply(STORAGE_KEYS.SHIFT_LOGS, snapshot.shiftLogs);
+  }
+
+  /**
    * Superseded by the outbox and SyncWorker.
    *
    * The previous implementation flipped every record's `synced` flag without
@@ -1011,6 +1085,15 @@ export class DrillingStorage {
   }
   getUnsyncedCount(): number {
     return DrillingStorage.getUnsyncedCount();
+  }
+  getPullWatermark(): string | null {
+    return DrillingStorage.getPullWatermark();
+  }
+  setPullWatermark(watermark: string): void {
+    DrillingStorage.setPullWatermark(watermark);
+  }
+  mergeRemote(snapshot: RemoteSnapshot): void {
+    DrillingStorage.mergeRemote(snapshot);
   }
   exportAllData(): string {
     return DrillingStorage.exportAllData();

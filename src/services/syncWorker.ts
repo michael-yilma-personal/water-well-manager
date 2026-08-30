@@ -35,11 +35,28 @@ const ENQUEUE_DEBOUNCE_MS = 1200;
  */
 const RETRY_INTERVAL_MS = 60_000;
 
+/**
+ * How often to ask the server what it has that this device does not.
+ *
+ * Less frequent than the upload retry: a missed upload is a record that exists
+ * nowhere else, while a missed download is a record that is already safe and
+ * merely late. Network-regained, app-resume and launch all pull immediately, so
+ * this only covers a device left open and idle on the rig.
+ */
+const PULL_INTERVAL_MS = 5 * 60_000;
+
 export interface SyncWorkerDeps {
   outbox: Outbox;
   transport: OutboxTransport;
   /** Notified after every drain so the UI can refresh its pending count. */
   onChange?: (result: DrainResult) => void;
+  /**
+   * Fetch and merge whatever this account has on the server. Optional so an
+   * unconfigured build, and the existing tests, need not provide one.
+   */
+  pull?: () => Promise<boolean>;
+  /** Notified after a pull actually merged, so the UI can re-read storage. */
+  onPulled?: () => void;
 }
 
 export class SyncWorker {
@@ -49,6 +66,8 @@ export class SyncWorker {
   private teardown: Array<() => void> = [];
   private pendingNudge: ReturnType<typeof setTimeout> | null = null;
   private ticker: ReturnType<typeof setInterval> | null = null;
+  private pullTicker: ReturnType<typeof setInterval> | null = null;
+  private pulling = false;
 
   constructor(deps: SyncWorkerDeps) {
     this.deps = deps;
@@ -59,12 +78,17 @@ export class SyncWorker {
     this.running = true;
 
     const netHandle = await Network.addListener('networkStatusChange', (status) => {
-      if (status.connected) void this.syncNow();
+      if (!status.connected) return;
+      void this.syncNow();
+      void this.pullNow();
     });
     this.teardown.push(() => void netHandle.remove());
 
     const appHandle = await CapacitorApp.addListener('resume', () => {
       void this.syncNow();
+      // Coming back to the app is the moment a driller expects to see what the
+      // rest of the crew logged while this phone was in a pocket.
+      void this.pullNow();
     });
     this.teardown.push(() => void appHandle.remove());
 
@@ -91,8 +115,45 @@ export class SyncWorker {
       this.ticker = null;
     });
 
-    // Catch up on whatever accumulated while the app was closed.
+    this.pullTicker = setInterval(() => void this.pullNow(), PULL_INTERVAL_MS);
+    this.teardown.push(() => {
+      if (this.pullTicker !== null) clearInterval(this.pullTicker);
+      this.pullTicker = null;
+    });
+
+    // Catch up on whatever accumulated while the app was closed - in both
+    // directions. A device signing in for the first time has an empty queue and
+    // an empty store, so the pull is the only thing with anything to do.
     void this.syncNow();
+    void this.pullNow();
+  }
+
+  /**
+   * Fetch this account's server-side work and merge it in.
+   *
+   * Unlike syncNow this is not gated on queue depth: the case that matters most
+   * is a freshly linked device, where the outbox is empty and everything the
+   * driller is looking for is on the server.
+   */
+  async pullNow(): Promise<boolean> {
+    if (!this.deps.pull) return false;
+    if (this.pulling) return false;
+
+    const status = await Network.getStatus().catch(() => ({ connected: true }));
+    if (!status.connected) return false;
+
+    this.pulling = true;
+    try {
+      const merged = await this.deps.pull();
+      if (merged) this.deps.onPulled?.();
+      return merged;
+    } catch {
+      // A failed download is not lost data - the rows are still on the server
+      // and the watermark has not moved, so the next tick tries the same window.
+      return false;
+    } finally {
+      this.pulling = false;
+    }
   }
 
   stop(): void {

@@ -36,6 +36,7 @@ import { useAndroidBackButton } from './utils/useAndroidBackButton';
 import { getOutbox } from './services/storage';
 import { SyncWorker } from './services/syncWorker';
 import { createSupabaseTransport } from './services/syncTransport';
+import { createPullRunner, createSupabasePull } from './services/pullTransport';
 import { createCompositeTransport, createPhotoTransport } from './services/photoTransport';
 import { getSupabase, isSupabaseConfigured } from './services/supabaseClient';
 import { getCurrentUserId, isProvisioned, fetchMyProfile } from './services/auth';
@@ -127,6 +128,21 @@ export default function App() {
   const [syncError, setSyncError] = useState<string | null>(null);
   const [signedIn, setSignedIn] = useState(() => isProvisioned());
 
+  // Bumped after a pull merges, to make the views re-read local storage.
+  const [dataVersion, setDataVersion] = useState(0);
+
+  const [pullRunner] = useState(() =>
+    createPullRunner({
+      pull: createSupabasePull({
+        getClient: getSupabase,
+        getUserId: getCurrentUserId,
+      }),
+      readWatermark: () => DrillingStorage.getPullWatermark(),
+      writeWatermark: (w) => DrillingStorage.setPullWatermark(w),
+      merge: (snapshot) => DrillingStorage.mergeRemote(snapshot),
+    })
+  );
+
   const [syncWorker] = useState(
     () =>
       new SyncWorker({
@@ -147,6 +163,8 @@ export default function App() {
           setPendingSync(DrillingStorage.getPendingSyncCount());
           setParkedSync(DrillingStorage.getParkedSyncCount());
         },
+        pull: pullRunner,
+        onPulled: () => setDataVersion((v) => v + 1),
       })
   );
 
@@ -195,12 +213,16 @@ export default function App() {
 
   // Reload records when active borehole changes
   useEffect(() => {
+    // dataVersion is in the deps because a pull rewrites these collections
+    // directly in localStorage; without it the driller would keep looking at
+    // the pre-download state until they switched borehole.
+    setBoreholes(storage.getBoreholes());
     if (activeBorehole) {
       setPipeRecords(storage.getPipeRecords(activeBorehole.id));
       setEvents(storage.getEvents(activeBorehole.id));
       setActiveTimer(storage.getActiveTimer(activeBorehole.id));
     }
-  }, [activeBoreholeId, activeBorehole?.id, storage]);
+  }, [activeBoreholeId, activeBorehole?.id, storage, dataVersion]);
 
   // Connectivity is tracked only to label the UI. The actual upload trigger
   // lives in SyncWorker, which uses @capacitor/network - navigator.onLine
