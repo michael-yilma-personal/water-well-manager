@@ -19,6 +19,10 @@ interface SettingsModalProps {
   onResetDemoData: () => void;
   onDeleteCurrentProject: () => void;
   onOpenUserManagement: () => void;
+  /** Hand the phone to another driller. */
+  onSignOut: () => void;
+  /** Records still on this device. Signing out is refused while any remain. */
+  unsyncedCount: number;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -32,6 +36,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onResetDemoData,
   onDeleteCurrentProject,
   onOpenUserManagement,
+  onSignOut,
+  unsyncedCount,
 }) => {
   const [defaultPipeLength, setDefaultPipeLength] = useState(
     activeBorehole.defaultPipeLength || settings.defaultPipeLength || 4.55
@@ -306,6 +312,43 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   className="px-3 py-1.5 rounded text-xs font-black bg-red-600/20 text-red-400 border border-red-500/50 hover:bg-red-600/40"
                 >
                   Reset Demo Data
+                </button>
+              </div>
+
+              <div className="flex justify-between items-center gap-2">
+                <div>
+                  <div className="text-xs font-black uppercase text-rose-300">Sign Out / Switch Driller</div>
+                  <div className="text-[11px] opacity-70">
+                    {unsyncedCount > 0
+                      ? `${unsyncedCount} record(s) still on this phone. Upload them before switching.`
+                      : 'Unlinks this phone and clears its records. They stay on the server.'}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  disabled={unsyncedCount > 0}
+                  onClick={() => {
+                    // The transport stamps created_by when a record drains, so
+                    // anything still queued here would be credited to whoever
+                    // signs in next. The button is disabled in that case; this
+                    // second check keeps the guarantee if that ever changes.
+                    if (unsyncedCount > 0) return;
+                    if (
+                      window.confirm(
+                        'Sign out and clear this phone? Records already uploaded stay safe on the server and return when you sign in again.'
+                      )
+                    ) {
+                      onSignOut();
+                      onClose();
+                    }
+                  }}
+                  className={`px-3 py-1.5 rounded text-xs font-black border ${
+                    unsyncedCount > 0
+                      ? 'bg-zinc-700/40 text-zinc-500 border-zinc-600/50 cursor-not-allowed'
+                      : 'bg-red-600/20 text-red-400 border-red-500/50 hover:bg-red-600/40'
+                  }`}
+                >
+                  Sign Out
                 </button>
               </div>
 
