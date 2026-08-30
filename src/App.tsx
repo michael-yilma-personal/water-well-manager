@@ -25,8 +25,6 @@ import { EndPipeModal } from './components/modals/EndPipeModal';
 import { EventModal } from './components/modals/EventModal';
 import { NewBoreholeModal } from './components/modals/NewBoreholeModal';
 import { SettingsModal } from './components/modals/SettingsModal';
-import { ProfileModal } from './components/modals/ProfileModal';
-import { UserManagementModal } from './components/modals/UserManagementModal';
 import {
   generateShiftReportPDF,
   generateBoreholeExcelReport,
@@ -112,8 +110,6 @@ export default function App() {
     useState<EventType>('Breakdown');
   const [isNewBoreholeModalOpen, setIsNewBoreholeModalOpen] = useState(false);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
-  const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
-  const [isUserManagementOpen, setIsUserManagementOpen] = useState(false);
 
   // Sync state
   const [isSyncing, setIsSyncing] = useState(false);
@@ -410,53 +406,9 @@ export default function App() {
     setSettings(newSet);
   };
 
-  const handleSaveProfile = (newUser: User) => {
-    storage.saveUser(newUser);
-    storage.setCurrentUser(newUser.id);
-    setUsers(storage.getUsers());
-    setCurrentUser(newUser);
-  };
 
-  const handleSaveManagedUser = (user: User) => {
-    storage.saveUser(user);
-    const nextUsers = storage.getUsers();
-    setUsers(nextUsers);
 
-    // Keep the active profile in sync when the edited user is the active one.
-    const nextUser =
-      nextUsers.find((candidate) => candidate.id === user.id) || user;
-    if (currentUser.id === user.id) {
-      storage.setCurrentUser(nextUser.id);
-      setCurrentUser(nextUser);
-    }
-  };
 
-  const handleDeleteManagedUser = (userId: string) => {
-    storage.deleteUser(userId);
-    let remaining = storage.getUsers();
-
-    // Never leave the rig without a profile to log records against.
-    if (remaining.length === 0) {
-      storage.saveUser(SAMPLE_USERS[0]);
-      remaining = storage.getUsers();
-    }
-    setUsers(remaining);
-
-    if (currentUser.id === userId) {
-      // storage.deleteUser already re-points the stored active id; mirror it here.
-      const fallback = remaining[0];
-      storage.setCurrentUser(fallback.id);
-      setCurrentUser(fallback);
-    }
-  };
-
-  const handleChangeUser = (userId: string) => {
-    const match = users.find((u) => u.id === userId);
-    if (match) {
-      storage.setCurrentUser(userId);
-      setCurrentUser(match);
-    }
-  };
 
   // Handle resetting demo data
   const handleResetDemoData = () => {
@@ -526,8 +478,6 @@ export default function App() {
       [isEventModalOpen, setIsEventModalOpen],
       [isNewBoreholeModalOpen, setIsNewBoreholeModalOpen],
       [isSettingsModalOpen, setIsSettingsModalOpen],
-      [isProfileModalOpen, setIsProfileModalOpen],
-      [isUserManagementOpen, setIsUserManagementOpen],
     ];
     const top = open.find(([isOpen]) => isOpen);
     if (!top) return false;
@@ -538,8 +488,6 @@ export default function App() {
     isEventModalOpen,
     isNewBoreholeModalOpen,
     isSettingsModalOpen,
-    isProfileModalOpen,
-    isUserManagementOpen,
   ]);
 
   const goToRootTab = React.useCallback(() => {
@@ -697,8 +645,6 @@ export default function App() {
         onOpenNewBorehole={() => setIsNewBoreholeModalOpen(true)}
         onOpenSettings={() => setIsSettingsModalOpen(true)}
         currentUser={currentUser}
-        allUsers={users}
-        onChangeUser={handleChangeUser}
         sunlightMode={sunlightMode}
         onToggleSunlightMode={() =>
           handleSaveSettings({
@@ -717,8 +663,6 @@ export default function App() {
         parkedSyncCount={parkedSync}
         isSyncing={isSyncing}
         onSyncNow={handleManualSync}
-        onOpenProfile={() => setIsProfileModalOpen(true)}
-        onOpenUserManagement={() => setIsUserManagementOpen(true)}
       />
 
       {/* Main Content Area */}
@@ -877,7 +821,6 @@ export default function App() {
         activeBorehole={activeBorehole}
         onUpdateBoreholePipeLength={handleUpdateBoreholePipeLength}
         sunlightMode={sunlightMode}
-        onOpenUserManagement={() => setIsUserManagementOpen(true)}
         onSignOut={handleSignOut}
         pendingCount={pendingSync}
         parkedCount={parkedSync}
@@ -889,23 +832,7 @@ export default function App() {
         }}
       />
 
-      <UserManagementModal
-        isOpen={isUserManagementOpen}
-        onClose={() => setIsUserManagementOpen(false)}
-        users={users}
-        currentUserId={currentUser.id}
-        onSaveUser={handleSaveManagedUser}
-        onDeleteUser={handleDeleteManagedUser}
-        onSetCurrentUser={handleChangeUser}
-        sunlightMode={sunlightMode}
-      />
 
-      <ProfileModal
-        isOpen={isProfileModalOpen}
-        onClose={() => setIsProfileModalOpen(false)}
-        onSave={handleSaveProfile}
-        sunlightMode={sunlightMode}
-      />
     </div>
   );
 }
