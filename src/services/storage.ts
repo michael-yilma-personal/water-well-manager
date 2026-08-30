@@ -860,6 +860,10 @@ export class DrillingStorage {
    * to whoever is holding it.
    */
   static clearForAccountSwitch(): void {
+    // Parked work cannot be uploaded by this account and must not follow the
+    // handset into the next one. Pending work is not discarded here; the caller
+    // refuses to switch while any remains.
+    getOutbox().discardParked();
     // Emptied rather than removed: the getters re-seed demo data when their key
     // is missing, which would drop the next driller onto a sample borehole -
     // and a pipe logged against one of those cannot sync, because its parent is

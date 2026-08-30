@@ -222,6 +222,20 @@ export class Outbox {
     return this.items.filter((i) => i.parked);
   }
 
+  /**
+   * Throw away work that was given up on, keeping everything still retryable.
+   *
+   * Only for handing the phone to another driller. A parked record cannot be
+   * uploaded by this account - that is what parked it - and carrying it into
+   * the next session would credit this driller's work to whoever signs in
+   * next, since created_by is stamped when a record drains rather than when it
+   * was logged.
+   */
+  discardParked(): void {
+    this.items = this.items.filter((item) => !item.parked);
+    this.write();
+  }
+
   /** Re-arm parked work, e.g. after the user fixes a server-side problem. */
   retryParked(): void {
     for (const item of this.items) {
