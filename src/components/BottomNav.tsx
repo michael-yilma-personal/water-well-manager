@@ -1,10 +1,14 @@
 import React from 'react';
+import { motion } from 'motion/react';
 import {
   Compass,
   FileText,
   Activity,
   BarChart3,
 } from 'lucide-react';
+import { Pressable } from '../ui/Pressable';
+import { SPRING_DEFAULT, SPRING_MOMENTUM, motionSafe } from '../ui/springs';
+import { useReducedMotion, useReducedTransparency } from '../ui/prefs';
 
 export type NavTab = 'rig' | 'logs' | 'npt' | 'analytics';
 
@@ -23,6 +27,9 @@ export const BottomNav: React.FC<BottomNavProps> = ({
   pipeCount = 0,
   nptCount = 0,
 }) => {
+  const reducedMotion = useReducedMotion();
+  const solid = useReducedTransparency() || sunlightMode;
+
   const tabs: {
     id: NavTab;
     label: string;
@@ -55,47 +62,87 @@ export const BottomNav: React.FC<BottomNavProps> = ({
 
   return (
     <nav
-      className={`fixed bottom-0 left-0 right-0 z-40 border-t transition-colors ${
+      className={`material fixed bottom-0 left-0 right-0 z-40 border-t pb-safe ${
         sunlightMode
-          ? 'bg-black border-amber-400 text-amber-300 shadow-2xl shadow-amber-900/40'
-          : 'bg-[#1A1A1A] border-zinc-700 text-white shadow-lg'
+          ? 'border-amber-400 text-amber-300 shadow-2xl shadow-amber-900/40'
+          : 'border-zinc-700/80 text-white shadow-lg'
       }`}
+      style={
+        solid
+          ? { background: sunlightMode ? '#000000' : '#1A1A1A' }
+          : {
+              // Content scrolls underneath rather than being walled off by an
+              // opaque strip, so the list reads as continuing past the bar.
+              background: 'rgba(20, 20, 20, 0.82)',
+              backdropFilter: 'blur(24px) saturate(180%)',
+              WebkitBackdropFilter: 'blur(24px) saturate(180%)',
+              // A bright top edge is light catching the lip of the material.
+              // It also does the work the old hard divider did, without
+              // drawing a line across the screen.
+              boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.10), 0 -8px 24px rgba(0,0,0,0.45)',
+            }
+      }
     >
       <div className="max-w-7xl mx-auto px-2 flex items-center justify-around">
         {tabs.map((tab) => {
           const isActive = activeTab === tab.id;
           return (
-            <button
+            <Pressable
               key={tab.id}
               onClick={() => onSelectTab(tab.id)}
-              className={`relative flex-1 py-2.5 sm:py-3 px-1 flex flex-col items-center justify-center transition-all ${
+              aria-current={isActive ? 'page' : undefined}
+              haptic
+              pressScale={0.94}
+              // A nav target jabbed with a work glove: never below 44px, and
+              // the press state is what confirms the hit, not the tab change.
+              className={`relative flex-1 min-h-[56px] py-2.5 sm:py-3 px-1 flex flex-col items-center justify-center ${
                 isActive
                   ? sunlightMode
-                    ? 'text-black bg-[#FFD700] font-black shadow-md'
-                    : 'text-[#FFD700] bg-zinc-800 font-extrabold border-t-2 border-[#FFD700]'
+                    ? 'text-black font-black'
+                    : 'text-[#FFD700] font-extrabold'
                   : sunlightMode
-                    ? 'text-[#FFD700]/80 hover:bg-zinc-900 font-bold'
-                    : 'text-zinc-400 hover:text-white hover:bg-zinc-800/40 font-semibold'
+                    ? 'text-[#FFD700]/80 font-bold'
+                    : 'text-zinc-400 font-semibold'
               }`}
             >
+              {/* One indicator that travels between tabs rather than four that
+                  blink on and off. Seeing it move is what tells you where you
+                  came from and where you now are. */}
+              {isActive && (
+                <motion.span
+                  layoutId="bottom-nav-indicator"
+                  transition={motionSafe(SPRING_DEFAULT, reducedMotion)}
+                  className={`absolute inset-x-1 inset-y-0.5 rounded-lg -z-10 ${
+                    sunlightMode
+                      ? 'bg-[#FFD700]'
+                      : 'bg-zinc-800 border-t-2 border-[#FFD700]'
+                  }`}
+                />
+              )}
               <div className="relative">
                 {tab.icon}
                 {tab.badge !== undefined && (
-                  <span
-                    className={`absolute -top-1.5 -right-3.5 px-1.5 py-0.5 rounded-full text-[10px] font-black ${
+                  <motion.span
+                    // The count arrives with a little bounce because something
+                    // actually happened - a pipe was logged, a fault recorded.
+                    initial={{ scale: 0.4, opacity: 0 }}
+                    animate={{ scale: 1, opacity: 1 }}
+                    transition={motionSafe(SPRING_MOMENTUM, reducedMotion)}
+                    key={tab.badge}
+                    className={`type-data absolute -top-1.5 -right-3.5 px-1.5 py-0.5 rounded-full text-[10px] font-black ${
                       sunlightMode
                         ? 'bg-red-600 text-white'
                         : 'bg-[#FFD700] text-black'
                     }`}
                   >
                     {tab.badge}
-                  </span>
+                  </motion.span>
                 )}
               </div>
-              <span className="text-[11px] sm:text-xs mt-1 tracking-tight truncate max-w-full">
+              <span className="type-label text-[11px] sm:text-xs mt-1 truncate max-w-full">
                 {tab.label}
               </span>
-            </button>
+            </Pressable>
           );
         })}
       </div>

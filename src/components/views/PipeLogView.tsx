@@ -156,11 +156,7 @@ export const PipeLogView: React.FC<PipeLogViewProps> = ({
                 : 'bg-zinc-900 border-zinc-700 text-slate-300'
           }`}
         >
-          <Droplets
-            className={`w-4 h-4 ${
-              showWaterStrikesOnly ? 'animate-bounce' : ''
-            }`}
-          />
+          <Droplets className="w-4 h-4" />
           {showWaterStrikesOnly ? 'Showing Water Strikes Only' : `Water Strikes (${strikeCount})`}
         </button>
       </div>

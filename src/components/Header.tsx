@@ -1,10 +1,15 @@
 import React from 'react';
+import { AnimatePresence, motion } from 'motion/react';
+import { Pressable } from '../ui/Pressable';
+import { SPRING_DEFAULT, motionSafe } from '../ui/springs';
+import { useReducedMotion, useReducedTransparency } from '../ui/prefs';
 import {
   Borehole,
   User,
   UserRole
 } from '../types';
 import {
+  AlertTriangle,
   Cloud,
   CloudOff,
   RefreshCw,
@@ -37,6 +42,8 @@ interface HeaderProps {
   soundEnabled: boolean;
   onToggleSound: () => void;
   pendingSyncCount: number;
+  /** Work given up on. Needs a person, not another retry. */
+  parkedSyncCount: number;
   isSyncing: boolean;
   onSyncNow: () => void;
   onOpenProfile: () => void;
@@ -57,6 +64,7 @@ export const Header: React.FC<HeaderProps> = ({
   soundEnabled,
   onToggleSound,
   pendingSyncCount,
+  parkedSyncCount,
   isSyncing,
   onSyncNow,
   onOpenProfile,
@@ -64,6 +72,14 @@ export const Header: React.FC<HeaderProps> = ({
 }) => {
   const [showBoreholeMenu, setShowBoreholeMenu] = React.useState(false);
   const [showUserMenu, setShowUserMenu] = React.useState(false);
+  const reducedMotion = useReducedMotion();
+  const solid = useReducedTransparency() || sunlightMode;
+  const menuOpen = showBoreholeMenu || showUserMenu;
+
+  const closeMenus = () => {
+    setShowBoreholeMenu(false);
+    setShowUserMenu(false);
+  };
 
   const getRoleBadgeColor = (role: UserRole) => {
     switch (role) {
@@ -89,12 +105,35 @@ export const Header: React.FC<HeaderProps> = ({
 
   return (
     <header
-      className={`sticky top-0 z-40 border-b transition-colors ${
+      className={`material sticky top-0 z-40 border-b pt-safe transition-colors ${
         sunlightMode
-          ? 'bg-black border-amber-400 text-amber-300 shadow-lg shadow-amber-900/40'
-          : 'bg-slate-900 border-slate-700 text-white shadow-md'
+          ? 'border-amber-400 text-amber-300 shadow-lg shadow-amber-900/40'
+          : 'border-slate-700/80 text-white shadow-md'
       }`}
+      style={
+        solid
+          ? { background: sunlightMode ? '#000000' : '#0F172A' }
+          : {
+              // Floating chrome with the rig screen visible through it. The
+              // saturate keeps the gold from going grey behind the blur.
+              background: 'rgba(15, 23, 42, 0.82)',
+              backdropFilter: 'blur(24px) saturate(180%)',
+              WebkitBackdropFilter: 'blur(24px) saturate(180%)',
+              boxShadow: 'inset 0 -1px 0 rgba(255,255,255,0.08), 0 8px 24px rgba(0,0,0,0.35)',
+            }
+      }
     >
+      {/* Tapping anywhere else closes an open menu. Without this the only way
+          out of the borehole or user list was to hit its trigger again - a
+          dead end for anyone who opened it by accident with a glove on. */}
+      {menuOpen && (
+        <div
+          className="fixed inset-0 z-40"
+          aria-hidden="true"
+          onClick={closeMenus}
+        />
+      )}
+
       <div className="max-w-7xl mx-auto px-2.5 sm:px-4 py-2.5 sm:py-3 flex flex-wrap items-center justify-between gap-2 sm:gap-3">
         {/* Left: Branding & Borehole Selector */}
         {/* A real floor, not min-w-0. min-w-0 let this group shrink below its
@@ -110,7 +149,7 @@ export const Header: React.FC<HeaderProps> = ({
                   : 'bg-gradient-to-br from-blue-500 to-cyan-500 text-white shadow-sm'
               }`}
             >
-              <Compass className="w-6 h-6 animate-pulse" />
+              <Compass className="w-6 h-6" />
             </div>
             {/* Held back to lg: between 640-1024px this wordmark consumed the
                 space the borehole selector and sync controls both needed. */}
@@ -134,12 +173,14 @@ export const Header: React.FC<HeaderProps> = ({
 
           {/* Active Borehole Dropdown */}
           <div className="relative flex-1 min-w-0 max-w-full sm:max-w-[360px]">
-            <button
+            <Pressable
               onClick={() => {
                 setShowBoreholeMenu(!showBoreholeMenu);
                 setShowUserMenu(false);
               }}
-              className={`flex items-center gap-2 w-full px-3 py-2.5 sm:py-2.5 rounded-xl border font-bold text-xs sm:text-sm transition-all min-h-[44px] ${
+              aria-expanded={showBoreholeMenu}
+              haptic
+              className={`flex items-center gap-2 w-full px-3 py-2.5 sm:py-2.5 rounded-xl border font-bold text-xs sm:text-sm min-h-[44px] ${
                 sunlightMode
                   ? 'bg-zinc-900 border-amber-400 text-amber-300 hover:bg-zinc-800'
                   : 'bg-slate-800 border-slate-600 text-slate-100 hover:bg-slate-700'
@@ -150,12 +191,26 @@ export const Header: React.FC<HeaderProps> = ({
                 <div className="truncate font-black">{activeBorehole.name}</div>
                 <div className="text-[10px] opacity-75 truncate">{activeBorehole.rigName}</div>
               </div>
-              <ChevronDown className="w-4 h-4 shrink-0 opacity-70" />
-            </button>
+              <motion.span
+                animate={{ rotate: showBoreholeMenu ? 180 : 0 }}
+                transition={motionSafe(SPRING_DEFAULT, reducedMotion)}
+                className="shrink-0 opacity-70"
+              >
+                <ChevronDown className="w-4 h-4" />
+              </motion.span>
+            </Pressable>
 
             {/* Borehole Dropdown Menu */}
-            {showBoreholeMenu && (
-              <div
+            <AnimatePresence>
+              {showBoreholeMenu && (
+              <motion.div
+                // Grown from the control that opened it rather than from its
+                // own centre, so the menu and its button read as one object.
+                style={{ transformOrigin: 'top left' }}
+                initial={reducedMotion ? { opacity: 0 } : { opacity: 0, scale: 0.92, y: -6 }}
+                animate={reducedMotion ? { opacity: 1 } : { opacity: 1, scale: 1, y: 0 }}
+                exit={reducedMotion ? { opacity: 0 } : { opacity: 0, scale: 0.94, y: -4 }}
+                transition={motionSafe(SPRING_DEFAULT, reducedMotion)}
                 className={`absolute left-0 mt-2 w-72 sm:w-80 rounded-xl border shadow-2xl z-50 p-2 ${
                   sunlightMode
                     ? 'bg-zinc-950 border-amber-400 text-amber-300'
@@ -179,11 +234,12 @@ export const Header: React.FC<HeaderProps> = ({
                             : 'hover:bg-slate-700 text-slate-200'
                       }`}
                     >
-                      <button
+                      <Pressable
                         onClick={() => {
                           onSelectBorehole(bh.id);
                           setShowBoreholeMenu(false);
                         }}
+                        pressScale={0.985}
                         className="w-full text-left p-2.5 flex items-center justify-between gap-2"
                       >
                         <div className="min-w-0 pr-2">
@@ -201,13 +257,13 @@ export const Header: React.FC<HeaderProps> = ({
                         >
                           {bh.status}
                         </span>
-                      </button>
+                      </Pressable>
                     </div>
                   ))}
                 </div>
 
                 <div className="border-t border-slate-700/60 pt-2 mt-1 flex gap-2">
-                  <button
+                  <Pressable
                     onClick={() => {
                       setShowBoreholeMenu(false);
                       onOpenNewBorehole();
@@ -219,8 +275,8 @@ export const Header: React.FC<HeaderProps> = ({
                     }`}
                   >
                     <Plus className="w-4 h-4" /> New Borehole
-                  </button>
-                  <button
+                  </Pressable>
+                  <Pressable
                     onClick={() => {
                       setShowBoreholeMenu(false);
                       onOpenSettings();
@@ -228,38 +284,53 @@ export const Header: React.FC<HeaderProps> = ({
                     className="py-2 px-3 rounded-lg text-xs font-bold bg-slate-700/60 hover:bg-slate-600"
                   >
                     Rig Settings
-                  </button>
+                  </Pressable>
                 </div>
-              </div>
-            )}
+              </motion.div>
+              )}
+            </AnimatePresence>
           </div>
         </div>
 
         {/* Right: Sync Pill, User Role Switcher & High Sunlight Contrast Toggle */}
         <div className="flex items-center flex-wrap justify-end gap-1.5 sm:gap-2.5 ml-auto min-w-0">
           {/* Offline / Sync Status Badge */}
-          <button
+          <Pressable
             onClick={onSyncNow}
-            disabled={isSyncing || pendingSyncCount === 0}
+            disabled={isSyncing || pendingSyncCount + parkedSyncCount === 0}
             title={
-              pendingSyncCount > 0
-                ? `${pendingSyncCount} offline changes pending sync. Click to upload now.`
-                : 'All drilling records synchronized to cloud'
+              parkedSyncCount > 0
+                ? `${parkedSyncCount} record(s) could not be uploaded and were given up on. Click to try again.`
+                : pendingSyncCount > 0
+                  ? `${pendingSyncCount} offline changes pending sync. Click to upload now.`
+                  : 'All drilling records synchronized to cloud'
             }
-            className={`flex items-center gap-1.5 px-2.5 py-2 rounded-xl text-xs font-black transition-all min-h-[40px] ${
+            className={`type-data flex items-center gap-1.5 px-2.5 py-2 rounded-xl text-xs font-black min-h-[44px] ${
               isSyncing
                 ? 'bg-blue-500/20 text-blue-300 border border-blue-500 animate-pulse'
-                : pendingSyncCount > 0
+                : parkedSyncCount > 0
                   ? sunlightMode
-                    ? 'bg-amber-400 text-black font-extrabold shadow-md'
-                    : 'bg-amber-500/20 text-amber-300 border border-amber-500/50 hover:bg-amber-500/30'
-                  : 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30'
+                    ? 'bg-red-500 text-white font-extrabold shadow-md'
+                    : 'bg-red-500/20 text-red-300 border border-red-500/50 hover:bg-red-500/30'
+                  : pendingSyncCount > 0
+                    ? sunlightMode
+                      ? 'bg-amber-400 text-black font-extrabold shadow-md'
+                      : 'bg-amber-500/20 text-amber-300 border border-amber-500/50 hover:bg-amber-500/30'
+                    : 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30'
             }`}
           >
             {isSyncing ? (
               <>
                 <RefreshCw className="w-3.5 h-3.5 animate-spin" />
                 <span>Syncing…</span>
+              </>
+            ) : parkedSyncCount > 0 ? (
+              /* Retrying on its own has already been tried and has stopped.
+                 Saying "Synced" here loses the record silently, so this state
+                 stays loud until a person clears it. */
+              <>
+                <AlertTriangle className="w-3.5 h-3.5" />
+                <span>{parkedSyncCount} Not Sent</span>
               </>
             ) : pendingSyncCount > 0 ? (
               <>
@@ -275,28 +346,34 @@ export const Header: React.FC<HeaderProps> = ({
                 <span className="hidden sm:inline">Cloud Synced</span>
               </>
             )}
-          </button>
+          </Pressable>
 
           {/* Sound & Haptic Toggle */}
-          <button
+          <Pressable
             onClick={onToggleSound}
+            haptic
+            aria-label={soundEnabled ? 'Turn field beeps off' : 'Turn field beeps on'}
+            aria-pressed={soundEnabled}
             title={soundEnabled ? 'Audio field beeps ON' : 'Audio field beeps OFF'}
-            className={`p-2.5 rounded-xl border transition-colors min-h-[40px] min-w-[40px] flex items-center justify-center ${
+            className={`p-2.5 rounded-xl border min-h-[44px] min-w-[44px] flex items-center justify-center ${
               sunlightMode
                 ? 'bg-zinc-900 border-amber-400 text-amber-300 hover:bg-zinc-800'
                 : 'bg-slate-800 border-slate-600 text-slate-300 hover:bg-slate-700'
             }`}
           >
             {soundEnabled ? <Volume2 className="w-4 h-4 text-cyan-400" /> : <VolumeX className="w-4 h-4 opacity-50" />}
-          </button>
+          </Pressable>
 
           {/* Sunlight / High Contrast Glove Mode Toggle */}
-          <button
+          <Pressable
             onClick={onToggleSunlightMode}
+            haptic
+            aria-label="Sunlight mode"
+            aria-pressed={sunlightMode}
             title="Toggle Sunlight / High Contrast Mode (Optimized for gloves & bright sunlight)"
-            className={`flex items-center gap-1.5 px-2.5 py-2 rounded-xl border font-black text-xs transition-all min-h-[40px] ${
+            className={`flex items-center gap-1.5 px-2.5 py-2 rounded-xl border font-black text-xs min-h-[44px] ${
               sunlightMode
-                ? 'bg-amber-400 text-black border-white shadow-lg animate-pulse'
+                ? 'bg-amber-400 text-black border-white shadow-lg'
                 : 'bg-slate-800 border-slate-600 text-slate-300 hover:bg-slate-700'
             }`}
           >
@@ -311,40 +388,44 @@ export const Header: React.FC<HeaderProps> = ({
                 <span className="hidden md:inline">Sunlight Mode</span>
               </>
             )}
-          </button>
+          </Pressable>
 
-          <button
+          <Pressable
             onClick={onOpenProfile}
+            aria-label="Create or switch profile"
             title="Create or switch profile"
-            className={`p-2.5 rounded-xl border transition-colors min-h-[40px] min-w-[40px] flex items-center justify-center ${
+            className={`p-2.5 rounded-xl border min-h-[44px] min-w-[44px] flex items-center justify-center ${
               sunlightMode
                 ? 'bg-zinc-900 border-amber-400 text-amber-300 hover:bg-zinc-800'
                 : 'bg-slate-800 border-slate-600 text-slate-300 hover:bg-slate-700'
             }`}
           >
             <UserCircle2 className="w-4 h-4" />
-          </button>
+          </Pressable>
 
-          <button
+          <Pressable
             onClick={onOpenUserManagement}
+            aria-label="Manage staff profiles"
             title="Manage staff profiles"
-            className={`p-2.5 rounded-xl border transition-colors min-h-[40px] min-w-[40px] flex items-center justify-center ${
+            className={`p-2.5 rounded-xl border min-h-[44px] min-w-[44px] flex items-center justify-center ${
               sunlightMode
                 ? 'bg-zinc-900 border-amber-400 text-amber-300 hover:bg-zinc-800'
                 : 'bg-slate-800 border-slate-600 text-slate-300 hover:bg-slate-700'
             }`}
           >
             <Shield className="w-4 h-4" />
-          </button>
+          </Pressable>
 
           {/* User Role Selector */}
           <div className="relative">
-            <button
+            <Pressable
               onClick={() => {
                 setShowUserMenu(!showUserMenu);
                 setShowBoreholeMenu(false);
               }}
-              className={`flex items-center gap-1.5 px-2.5 py-2 rounded-xl border font-bold text-xs transition-all min-h-[40px] ${
+              aria-expanded={showUserMenu}
+              haptic
+              className={`flex items-center gap-1.5 px-2.5 py-2 rounded-xl border font-bold text-xs min-h-[44px] ${
                 sunlightMode
                   ? 'bg-zinc-900 border-amber-400 text-amber-300'
                   : 'bg-slate-800 border-slate-600 text-slate-200 hover:bg-slate-700'
@@ -364,12 +445,26 @@ export const Header: React.FC<HeaderProps> = ({
               <span className="font-bold truncate max-w-[72px] sm:max-w-[110px] min-w-0">
                 {currentUser.name}
               </span>
-              <ChevronDown className="w-3.5 h-3.5 opacity-70" />
-            </button>
+              <motion.span
+                animate={{ rotate: showUserMenu ? 180 : 0 }}
+                transition={motionSafe(SPRING_DEFAULT, reducedMotion)}
+                className="opacity-70"
+              >
+                <ChevronDown className="w-3.5 h-3.5" />
+              </motion.span>
+            </Pressable>
 
             {/* Role / User Dropdown */}
-            {showUserMenu && (
-              <div
+            <AnimatePresence>
+              {showUserMenu && (
+              <motion.div
+                // Anchored top-right: this menu hangs off the right edge, so
+                // that is the corner it has to grow from.
+                style={{ transformOrigin: 'top right' }}
+                initial={reducedMotion ? { opacity: 0 } : { opacity: 0, scale: 0.92, y: -6 }}
+                animate={reducedMotion ? { opacity: 1 } : { opacity: 1, scale: 1, y: 0 }}
+                exit={reducedMotion ? { opacity: 0 } : { opacity: 0, scale: 0.94, y: -4 }}
+                transition={motionSafe(SPRING_DEFAULT, reducedMotion)}
                 className={`absolute right-0 mt-2 w-64 rounded-xl border shadow-2xl z-50 p-2 ${
                   sunlightMode
                     ? 'bg-zinc-950 border-amber-400 text-amber-300'
@@ -381,13 +476,14 @@ export const Header: React.FC<HeaderProps> = ({
                 </div>
                 <div className="space-y-1 my-1">
                   {allUsers.map((user) => (
-                    <button
+                    <Pressable
                       key={user.id}
                       onClick={() => {
                         onChangeUser(user.id);
                         setShowUserMenu(false);
                       }}
-                      className={`w-full text-left p-2 rounded-lg flex items-center justify-between transition-colors ${
+                      pressScale={0.985}
+                      className={`w-full text-left p-2 rounded-lg flex items-center justify-between ${
                         user.id === currentUser.id
                           ? sunlightMode
                             ? 'bg-amber-400 text-black font-extrabold'
@@ -412,11 +508,12 @@ export const Header: React.FC<HeaderProps> = ({
                       >
                         {user.role}
                       </span>
-                    </button>
+                    </Pressable>
                   ))}
                 </div>
-              </div>
-            )}
+              </motion.div>
+              )}
+            </AnimatePresence>
           </div>
         </div>
       </div>

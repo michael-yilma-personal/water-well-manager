@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { User, UserRole } from '../../types';
 import { X, UserCircle2 } from 'lucide-react';
+import { ModalShell } from '../../ui/ModalShell';
 
 interface ProfileModalProps {
   isOpen: boolean;
@@ -18,8 +19,6 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
   const [name, setName] = useState('');
   const [role, setRole] = useState<UserRole>('Driller');
   const [badgeNumber, setBadgeNumber] = useState('');
-
-  if (!isOpen) return null;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -39,9 +38,16 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-[60] bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4">
+    <ModalShell
+      isOpen={isOpen}
+      onClose={onClose}
+      sunlightMode={sunlightMode}
+      maxWidth="max-w-md"
+      zIndex={60}
+      label="Create profile"
+    >
       <div
-        className={`w-full max-w-md rounded-xl border-2 shadow-2xl overflow-hidden ${
+        className={`w-full flex flex-col min-h-0 max-h-full rounded-xl border-2 shadow-2xl overflow-hidden ${
           sunlightMode
             ? 'bg-zinc-950 border-[#FFD700] text-[#FFD700]'
             : 'bg-[#1A1A1A] border-[#D1D1D1]/40 text-white'
@@ -68,7 +74,7 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="p-4 sm:p-6 space-y-4">
+        <form onSubmit={handleSubmit} className="flex-1 min-h-0 overflow-y-auto p-4 sm:p-6 space-y-4">
           <div>
             <label className="block text-xs font-black uppercase mb-1 opacity-80">Full name *</label>
             <input
@@ -132,6 +138,6 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
           </div>
         </form>
       </div>
-    </div>
+    </ModalShell>
   );
 };

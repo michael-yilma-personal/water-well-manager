@@ -24,6 +24,7 @@ import {
   Clock,
   MapPin,
 } from 'lucide-react';
+import { ModalShell } from '../../ui/ModalShell';
 
 interface EventModalProps {
   isOpen: boolean;
@@ -131,7 +132,7 @@ export const EventModal: React.FC<EventModalProps> = ({
     }
   }, [isOpen, eventType, borehole.id]);
 
-  if (!isOpen || !eventType) return null;
+  if (!eventType) return null;
 
   const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -210,7 +211,7 @@ export const EventModal: React.FC<EventModalProps> = ({
       case 'Maintenance':
         return <Wrench className="w-6 h-6 text-purple-400" />;
       case 'Water Strike':
-        return <Droplets className="w-6 h-6 text-cyan-400 animate-bounce" />;
+        return <Droplets className="w-6 h-6 text-cyan-400" />;
       case 'Change Formation':
         return <Layers className="w-6 h-6 text-blue-400" />;
       case 'Take Photo':
@@ -221,9 +222,16 @@ export const EventModal: React.FC<EventModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4">
+    <ModalShell
+      isOpen={isOpen}
+      onClose={onClose}
+      sunlightMode={sunlightMode}
+      maxWidth="max-w-xl"
+      zIndex={50}
+      label="Log drilling event"
+    >
       <div
-        className={`w-full max-w-xl rounded-2xl border shadow-2xl overflow-hidden transition-colors ${
+        className={`w-full flex flex-col min-h-0 max-h-full rounded-2xl border shadow-2xl overflow-hidden transition-colors ${
           sunlightMode
             ? 'bg-zinc-950 border-amber-400 text-amber-300'
             : 'bg-slate-900 border-slate-700 text-white'
@@ -257,7 +265,7 @@ export const EventModal: React.FC<EventModalProps> = ({
         </div>
 
         {/* Form Body */}
-        <form onSubmit={handleSave} className="p-4 sm:p-6 space-y-4 max-h-[80vh] overflow-y-auto">
+        <form onSubmit={handleSave} className="p-4 sm:p-6 space-y-4 flex-1 min-h-0 overflow-y-auto">
           {/* Common Event Title & Duration */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div className="sm:col-span-2">
@@ -396,7 +404,7 @@ export const EventModal: React.FC<EventModalProps> = ({
           {eventType === 'Water Strike' && (
             <div className="p-4 rounded-xl border border-cyan-500/40 bg-cyan-950/20 space-y-3">
               <div className="font-black text-sm uppercase text-cyan-400 flex items-center gap-1.5">
-                <Droplets className="w-4 h-4 animate-bounce" /> Aquifer Struck Details
+                <Droplets className="w-4 h-4" /> Aquifer Struck Details
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
@@ -506,7 +514,7 @@ export const EventModal: React.FC<EventModalProps> = ({
           <div className="pt-2 flex flex-col sm:flex-row gap-3">
             <button
               type="submit"
-              className={`flex-1 py-4 px-6 rounded-2xl font-black text-base uppercase tracking-wider flex items-center justify-center gap-2 shadow-lg transition-transform active:scale-95 ${
+              className={`flex-1 py-4 px-6 rounded-2xl font-black text-base uppercase tracking-wider flex items-center justify-center gap-2 shadow-lg active:scale-95 ${
                 sunlightMode
                   ? 'bg-amber-400 text-black hover:bg-amber-300'
                   : 'bg-cyan-500 text-black hover:bg-cyan-400 font-black'
@@ -525,6 +533,6 @@ export const EventModal: React.FC<EventModalProps> = ({
           </div>
         </form>
       </div>
-    </div>
+    </ModalShell>
   );
 };
