@@ -293,3 +293,53 @@ test('switching accounts keeps this phone settings', () => {
   // Screen brightness and beeps belong to the handset, not the account.
   assert.equal(DrillingStorage.getSettings().sunlightMode, true);
 });
+
+/**
+ * Parked work must not be able to trap a driller in an account.
+ *
+ * A record rejected for good - an administrator's upload, which RLS forbids -
+ * never leaves the queue. Blocking sign-out on it means the phone can neither
+ * upload nor be handed over, so the only way out is a reinstall, which takes
+ * every record with it. Retryable work still blocks; dead work does not.
+ */
+test('discarding parked work leaves retryable work alone', async () => {
+  harness();
+  DrillingStorage.getPipeRecords();
+  getOutbox().clear();
+
+  const doomed = DrillingStorage.savePipeRecord(pipe({ id: '', pipeNumber: 1 }));
+  const merelyOffline = DrillingStorage.savePipeRecord(pipe({ id: '', pipeNumber: 2 }));
+
+  await getOutbox().drain(async (op) => {
+    if (op.entityId === doomed.id) throw new PermanentSyncError('42501 insufficient_privilege');
+    throw new Error('offline');
+  });
+
+  assert.equal(DrillingStorage.getParkedSyncCount(), 1);
+  assert.equal(DrillingStorage.getPendingSyncCount(), 1);
+
+  getOutbox().discardParked();
+
+  assert.equal(DrillingStorage.getParkedSyncCount(), 0);
+  assert.equal(DrillingStorage.getPendingSyncCount(), 1, 'the offline record is still owed');
+  assert.equal(getOutbox().pending()[0].entityId, merelyOffline.id);
+});
+
+test('switching accounts discards work that could never be uploaded', async () => {
+  harness();
+  DrillingStorage.getPipeRecords();
+  getOutbox().clear();
+  DrillingStorage.savePipeRecord(pipe({ id: '' }));
+
+  await getOutbox().drain(async () => {
+    throw new PermanentSyncError('42501 insufficient_privilege');
+  });
+  assert.equal(DrillingStorage.getParkedSyncCount(), 1);
+
+  DrillingStorage.clearForAccountSwitch();
+
+  // Left behind, it would upload under the next driller's name - the
+  // misattribution the guard exists to prevent.
+  assert.equal(DrillingStorage.getParkedSyncCount(), 0);
+  assert.equal(DrillingStorage.getUnsyncedCount(), 0);
+});

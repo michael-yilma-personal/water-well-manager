@@ -509,7 +509,9 @@ export default function App() {
    * with work still queued destroys it outright.
    */
   const handleSignOut = async () => {
-    if (DrillingStorage.getUnsyncedCount() > 0) return;
+    // Only retryable work blocks. Parked work can never be uploaded by this
+    // account, so blocking on it would leave no way out of the account at all.
+    if (DrillingStorage.getPendingSyncCount() > 0) return;
     syncWorker.stop();
     await signOut();
     DrillingStorage.clearForAccountSwitch();
@@ -877,7 +879,8 @@ export default function App() {
         sunlightMode={sunlightMode}
         onOpenUserManagement={() => setIsUserManagementOpen(true)}
         onSignOut={handleSignOut}
-        unsyncedCount={pendingSync + parkedSync}
+        pendingCount={pendingSync}
+        parkedCount={parkedSync}
         onResetDemoData={handleResetDemoData}
         onDeleteCurrentProject={() => {
           if (activeBorehole) {

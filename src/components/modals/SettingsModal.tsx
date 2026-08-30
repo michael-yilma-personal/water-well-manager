@@ -21,8 +21,10 @@ interface SettingsModalProps {
   onOpenUserManagement: () => void;
   /** Hand the phone to another driller. */
   onSignOut: () => void;
-  /** Records still on this device. Signing out is refused while any remain. */
-  unsyncedCount: number;
+  /** Still retryable. Signing out is refused while any remain. */
+  pendingCount: number;
+  /** Given up on. This account can never upload it, so it does not block. */
+  parkedCount: number;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -37,7 +39,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onDeleteCurrentProject,
   onOpenUserManagement,
   onSignOut,
-  unsyncedCount,
+  pendingCount,
+  parkedCount,
 }) => {
   const [defaultPipeLength, setDefaultPipeLength] = useState(
     activeBorehole.defaultPipeLength || settings.defaultPipeLength || 4.55
@@ -319,31 +322,35 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 <div>
                   <div className="text-xs font-black uppercase text-rose-300">Sign Out / Switch Driller</div>
                   <div className="text-[11px] opacity-70">
-                    {unsyncedCount > 0
-                      ? `${unsyncedCount} record(s) still on this phone. Upload them before switching.`
-                      : 'Unlinks this phone and clears its records. They stay on the server.'}
+                    {pendingCount > 0
+                      ? `${pendingCount} record(s) still uploading. Wait, or tap the sync badge.`
+                      : parkedCount > 0
+                        ? `${parkedCount} record(s) could not be uploaded and will be discarded.`
+                        : 'Unlinks this phone and clears its records. They stay on the server.'}
                   </div>
                 </div>
                 <button
                   type="button"
-                  disabled={unsyncedCount > 0}
+                  disabled={pendingCount > 0}
                   onClick={() => {
                     // The transport stamps created_by when a record drains, so
-                    // anything still queued here would be credited to whoever
-                    // signs in next. The button is disabled in that case; this
-                    // second check keeps the guarantee if that ever changes.
-                    if (unsyncedCount > 0) return;
-                    if (
-                      window.confirm(
-                        'Sign out and clear this phone? Records already uploaded stay safe on the server and return when you sign in again.'
-                      )
-                    ) {
+                    // work still queued here would be credited to whoever signs
+                    // in next. Retryable work therefore blocks the switch.
+                    // Parked work must not: this account can never upload it, so
+                    // blocking would strand the driller with no way out of the
+                    // account short of a reinstall.
+                    if (pendingCount > 0) return;
+                    const warning =
+                      parkedCount > 0
+                        ? `${parkedCount} record(s) could not be uploaded by this account and will be permanently discarded. Continue?`
+                        : 'Sign out and clear this phone? Records already uploaded stay safe on the server and return when you sign in again.';
+                    if (window.confirm(warning)) {
                       onSignOut();
                       onClose();
                     }
                   }}
                   className={`px-3 py-1.5 rounded text-xs font-black border ${
-                    unsyncedCount > 0
+                    pendingCount > 0
                       ? 'bg-zinc-700/40 text-zinc-500 border-zinc-600/50 cursor-not-allowed'
                       : 'bg-red-600/20 text-red-400 border-red-500/50 hover:bg-red-600/40'
                   }`}

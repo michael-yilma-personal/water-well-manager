@@ -102,7 +102,7 @@ with sync_playwright() as p:
     open_settings(page)
     blocked = page.evaluate(SIGNOUT_BTN)
     check('sign-out is refused while work is unsent', blocked.get('disabled') is True, str(blocked))
-    check('and it says why', 'still on this phone' in page.inner_text('body'))
+    check('and it says why', 'still uploading' in page.inner_text('body'))
     page.keyboard.press('Escape')
     page.wait_for_timeout(700)
 
@@ -130,6 +130,54 @@ with sync_playwright() as p:
     check('the pull watermark is reset', page.evaluate(WATERMARK) is None,
           str(page.evaluate(WATERMARK)))
     check('no JS errors', not errs, str(errs[:2]))
+
+    # --- parked work must not trap the driller in the account ----------------
+    # A record RLS rejected for good - an administrator's upload - never leaves
+    # the queue. If that blocked sign-out too, the phone could neither upload nor
+    # be handed over, and the only way out would be a reinstall.
+    page.fill('input[type="email"]', EMAIL)
+    page.fill('input[type="password"]', PASSWORD)
+    page.get_by_role('button', name='Link this device').click()
+    page.wait_for_timeout(7000)
+
+    page.evaluate(
+        """(name) => {
+          const bh = { id: crypto.randomUUID(), name, project:'SignOut', client:'C',
+            rigName:'Rig #1', targetDepth:100, currentDepth:0, defaultPipeLength:4.55,
+            bitDiameter:8.5, bitType:'DTH', gpsCoordinates:{lat:0,lng:0}, status:'active',
+            createdAt:new Date().toISOString(), updatedAt:new Date().toISOString(),
+            engineHoursStart:0, compressorHoursStart:0, currentEngineHours:0,
+            currentCompressorHours:0 };
+          localStorage.setItem('wwdm_boreholes', JSON.stringify([bh]));
+          localStorage.setItem('wwdm_active_borehole_id', bh.id);
+          localStorage.setItem('wwdm_outbox', JSON.stringify([{
+            id:'op-dead-1', op:'upsert', entity:'pipeRecord',
+            entityId:'33333333-3333-4333-8333-333333333333',
+            payload:{ id:'33333333-3333-4333-8333-333333333333', boreholeId:bh.id, pipeNumber:9 },
+            attempts:8,
+            lastError:'upsert boreholes: new row violates row-level security policy',
+            enqueuedAt:new Date().toISOString(), nextAttemptAt:0, parked:true
+          }]));
+        }""",
+        MARKER,
+    )
+    page.reload(wait_until='networkidle')
+    page.wait_for_timeout(3000)
+
+    open_settings(page)
+    stuck = page.evaluate(SIGNOUT_BTN)
+    check('parked work does not block sign-out', stuck.get('disabled') is False, str(stuck))
+    check('and it warns the records will be discarded',
+          'will be discarded' in page.inner_text('body'))
+
+    if out_dir := os.environ.get('E2E_OUT'):
+        page.screenshot(path=f'{out_dir}/signout-parked.png')
+
+    page.get_by_role('button', name='Sign Out').click()
+    page.wait_for_timeout(3000)
+    check('the driller escapes the account', 'link this device' in page.inner_text('body').lower())
+    check('the dead records are discarded, not carried over',
+          page.evaluate(QUEUE) == 0, f'queue={page.evaluate(QUEUE)}')
 
     out = os.environ.get('E2E_OUT')
     if out:
