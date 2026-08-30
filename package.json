@@ -10,7 +10,7 @@
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
     "test": "node --import tsx --test \"src/services/*.test.ts\" \"src/utils/*.test.ts\"",
-    "test:e2e": "npm run test:rls && npm run test:newcrew && npm run test:identity && npm run test:sync && npm run test:badge && npm run test:parked && npm run test:xdevice && npm run test:signout && npm run test:adminro && npm run test:cancel && npm run test:photos && npm run test:layout && npm run test:crew && npm run test:dashboard",
+    "test:e2e": "npm run test:rls && npm run test:newcrew && npm run test:identity && npm run test:sync && npm run test:badge && npm run test:parked && npm run test:xdevice && npm run test:signout && npm run test:adminro && npm run test:profiles && npm run test:cancel && npm run test:photos && npm run test:layout && npm run test:crew && npm run test:dashboard",
     "test:rls": "python3 e2e/rls_e2e.py",
     "test:sync": "python3 e2e/offline_sync_e2e.py",
     "test:photos": "python3 e2e/photo_e2e.py",
@@ -26,7 +26,8 @@
     "test:parked": "python3 e2e/parked_badge_e2e.py",
     "test:xdevice": "python3 e2e/cross_device_e2e.py",
     "test:signout": "python3 e2e/signout_e2e.py",
-    "test:adminro": "python3 e2e/admin_readonly_e2e.py"
+    "test:adminro": "python3 e2e/admin_readonly_e2e.py",
+    "test:profiles": "python3 e2e/profile_routes_e2e.py"
   },
   "dependencies": {
     "@capacitor/android": "^8.5.0",

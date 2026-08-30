@@ -18,7 +18,6 @@ interface SettingsModalProps {
   sunlightMode: boolean;
   onResetDemoData: () => void;
   onDeleteCurrentProject: () => void;
-  onOpenUserManagement: () => void;
   /** Hand the phone to another driller. */
   onSignOut: () => void;
   /** Still retryable. Signing out is refused while any remain. */
@@ -37,7 +36,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   sunlightMode,
   onResetDemoData,
   onDeleteCurrentProject,
-  onOpenUserManagement,
   onSignOut,
   pendingCount,
   parkedCount,
@@ -265,26 +263,23 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </div>
           </div>
 
-          {/* Staff / User Administration */}
-          <div className="p-3 rounded border-2 border-zinc-700 bg-zinc-900/40 flex items-center justify-between gap-3">
+          {/*
+            Crew used to be editable here, but the list was local and invented:
+            those people could not sign in, own a record, or reach the server,
+            and adopting the signed-in profile wiped them seconds later. Only an
+            administrator can mint a real account, and only from the dashboard.
+          */}
+          <div className="p-3 rounded border-2 border-zinc-700 bg-zinc-900/40 flex items-start gap-2.5">
+            <Users className="w-4 h-4 text-gray-400 shrink-0 mt-0.5" />
             <div>
               <div className="text-xs font-black uppercase text-gray-400">
-                Staff Profiles
+                Crew Accounts
               </div>
               <div className="text-[11px] opacity-70">
-                Add, edit, or remove the crew that logs records.
+                Crew accounts are managed by an administrator in the dashboard.
+                This phone logs everything under the account signed in above.
               </div>
             </div>
-            <button
-              type="button"
-              onClick={onOpenUserManagement}
-              className="px-3 py-2 rounded text-xs font-black bg-cyan-600/20 text-cyan-300 border border-cyan-500/50 hover:bg-cyan-600/40 shrink-0"
-            >
-              <span className="flex items-center gap-1.5">
-                <Users className="w-3.5 h-3.5" />
-                Manage Users
-              </span>
-            </button>
           </div>
 
           {/* Advanced / Destructive Actions */}

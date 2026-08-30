@@ -35,8 +35,6 @@ interface HeaderProps {
   onOpenNewBorehole: () => void;
   onOpenSettings: () => void;
   currentUser: User;
-  allUsers: User[];
-  onChangeUser: (userId: string) => void;
   sunlightMode: boolean;
   onToggleSunlightMode: () => void;
   soundEnabled: boolean;
@@ -46,8 +44,6 @@ interface HeaderProps {
   parkedSyncCount: number;
   isSyncing: boolean;
   onSyncNow: () => void;
-  onOpenProfile: () => void;
-  onOpenUserManagement: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -57,8 +53,6 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenNewBorehole,
   onOpenSettings,
   currentUser,
-  allUsers,
-  onChangeUser,
   sunlightMode,
   onToggleSunlightMode,
   soundEnabled,
@@ -67,8 +61,6 @@ export const Header: React.FC<HeaderProps> = ({
   parkedSyncCount,
   isSyncing,
   onSyncNow,
-  onOpenProfile,
-  onOpenUserManagement,
 }) => {
   const [showBoreholeMenu, setShowBoreholeMenu] = React.useState(false);
   const [showUserMenu, setShowUserMenu] = React.useState(false);
@@ -390,32 +382,6 @@ export const Header: React.FC<HeaderProps> = ({
             )}
           </Pressable>
 
-          <Pressable
-            onClick={onOpenProfile}
-            aria-label="Create or switch profile"
-            title="Create or switch profile"
-            className={`p-2.5 rounded-xl border min-h-[44px] min-w-[44px] flex items-center justify-center ${
-              sunlightMode
-                ? 'bg-zinc-900 border-amber-400 text-amber-300 hover:bg-zinc-800'
-                : 'bg-slate-800 border-slate-600 text-slate-300 hover:bg-slate-700'
-            }`}
-          >
-            <UserCircle2 className="w-4 h-4" />
-          </Pressable>
-
-          <Pressable
-            onClick={onOpenUserManagement}
-            aria-label="Manage staff profiles"
-            title="Manage staff profiles"
-            className={`p-2.5 rounded-xl border min-h-[44px] min-w-[44px] flex items-center justify-center ${
-              sunlightMode
-                ? 'bg-zinc-900 border-amber-400 text-amber-300 hover:bg-zinc-800'
-                : 'bg-slate-800 border-slate-600 text-slate-300 hover:bg-slate-700'
-            }`}
-          >
-            <Shield className="w-4 h-4" />
-          </Pressable>
-
           {/* User Role Selector */}
           <div className="relative">
             <Pressable
@@ -471,45 +437,43 @@ export const Header: React.FC<HeaderProps> = ({
                     : 'bg-slate-800 border-slate-600 text-slate-100'
                 }`}
               >
+                {/*
+                  One identity, and it is the account that signed in. The list
+                  this replaced was local and invented - ids like `usr-1788`,
+                  unable to sign in or own a row - and adopting the real profile
+                  wiped it a second after it was created, so the driller watched
+                  their entry vanish with no explanation.
+                */}
                 <div className="text-[11px] uppercase tracking-wider font-bold px-2 py-1 opacity-70">
-                  Switch User / Role
+                  Signed in as
                 </div>
-                <div className="space-y-1 my-1">
-                  {allUsers.map((user) => (
-                    <Pressable
-                      key={user.id}
-                      onClick={() => {
-                        onChangeUser(user.id);
-                        setShowUserMenu(false);
-                      }}
-                      pressScale={0.985}
-                      className={`w-full text-left p-2 rounded-lg flex items-center justify-between ${
-                        user.id === currentUser.id
-                          ? sunlightMode
-                            ? 'bg-amber-400 text-black font-extrabold'
-                            : 'bg-blue-600 text-white font-bold'
-                          : sunlightMode
-                            ? 'hover:bg-zinc-800 text-amber-300'
-                            : 'hover:bg-slate-700 text-slate-200'
-                      }`}
-                    >
-                      <div>
-                        <div className="font-bold text-sm">{user.name}</div>
-                        <div className="text-xs opacity-80">{user.badgeNumber}</div>
-                      </div>
-                      <span
-                        className={`text-[10px] font-extrabold px-2 py-0.5 rounded uppercase ${
-                          user.role === 'Driller'
-                            ? 'bg-amber-500/20 text-amber-300'
-                            : user.role === 'Supervisor'
-                              ? 'bg-blue-500/20 text-blue-300'
-                              : 'bg-purple-500/20 text-purple-300'
-                        }`}
-                      >
-                        {user.role}
-                      </span>
-                    </Pressable>
-                  ))}
+                <div className="px-2 pb-2 flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="font-bold text-sm truncate">{currentUser.name}</div>
+                    <div className="text-xs opacity-80">
+                      {currentUser.badgeNumber || 'No badge number'}
+                    </div>
+                  </div>
+                  <span
+                    className={`text-[10px] font-extrabold px-2 py-0.5 rounded uppercase shrink-0 ${
+                      currentUser.role === 'Driller'
+                        ? 'bg-amber-500/20 text-amber-300'
+                        : currentUser.role === 'Supervisor'
+                          ? 'bg-blue-500/20 text-blue-300'
+                          : 'bg-purple-500/20 text-purple-300'
+                    }`}
+                  >
+                    {currentUser.role}
+                  </span>
+                </div>
+                <div
+                  className={`border-t px-2 pt-2 text-[11px] leading-relaxed opacity-75 ${
+                    sunlightMode ? 'border-amber-400/40' : 'border-slate-600'
+                  }`}
+                >
+                  Every record logged here is filed under this account. Crew
+                  accounts are managed by an administrator in the dashboard. To
+                  hand this phone to another driller, use Rig Settings → Sign Out.
                 </div>
               </motion.div>
               )}
