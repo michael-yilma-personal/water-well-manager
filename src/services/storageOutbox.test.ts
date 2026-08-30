@@ -249,3 +249,47 @@ test('work parked by a permanent rejection is still counted as unsent', async ()
   // ...so the count the header renders must not read zero.
   assert.equal(DrillingStorage.getUnsyncedCount(), 1);
 });
+
+/**
+ * Handing the phone to another driller.
+ *
+ * Leaving the previous account's records behind is not merely untidy: the
+ * transport stamps created_by at drain time, so a record logged by one driller
+ * and uploaded after someone else signs in is attributed to the wrong person.
+ * The records are already on the server by this point - the caller refuses to
+ * switch while anything is unsent - so clearing them locally loses nothing.
+ */
+test('switching accounts clears the previous driller records from the device', () => {
+  harness();
+  DrillingStorage.getPipeRecords();
+  DrillingStorage.savePipeRecord(pipe({ id: '' }));
+  assert.equal(DrillingStorage.getPipeRecords().length > 0, true);
+
+  DrillingStorage.clearForAccountSwitch();
+
+  assert.deepEqual(DrillingStorage.getPipeRecords(), []);
+  assert.deepEqual(DrillingStorage.getEvents(), []);
+  assert.deepEqual(DrillingStorage.getShiftLogs(), []);
+});
+
+test('switching accounts resets the pull watermark', () => {
+  harness();
+  DrillingStorage.setPullWatermark('2026-08-30T10:00:00.000Z');
+
+  DrillingStorage.clearForAccountSwitch();
+
+  // Left in place, the next account would start downloading from a moment it
+  // was never present for and never see any of its own earlier work.
+  assert.equal(DrillingStorage.getPullWatermark(), null);
+});
+
+test('switching accounts keeps this phone settings', () => {
+  harness();
+  const settings = DrillingStorage.getSettings();
+  DrillingStorage.saveSettings({ ...settings, sunlightMode: true });
+
+  DrillingStorage.clearForAccountSwitch();
+
+  // Screen brightness and beeps belong to the handset, not the account.
+  assert.equal(DrillingStorage.getSettings().sunlightMode, true);
+});

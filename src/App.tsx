@@ -39,7 +39,7 @@ import { createSupabaseTransport } from './services/syncTransport';
 import { createPullRunner, createSupabasePull } from './services/pullTransport';
 import { createCompositeTransport, createPhotoTransport } from './services/photoTransport';
 import { getSupabase, isSupabaseConfigured } from './services/supabaseClient';
-import { getCurrentUserId, isProvisioned, fetchMyProfile } from './services/auth';
+import { getCurrentUserId, isProvisioned, fetchMyProfile, signOut } from './services/auth';
 import { SignInScreen } from './components/SignInScreen';
 import { SPRING_DEFAULT, CROSSFADE } from './ui/springs';
 import { useReducedMotion } from './ui/prefs';
@@ -500,6 +500,23 @@ export default function App() {
     }
   };
 
+  /**
+   * Hand the phone to another driller.
+   *
+   * Refused while anything is unsent: the transport stamps created_by at drain
+   * time, so a record logged by this driller and uploaded after the next one
+   * signs in would be credited to the wrong person - and clearing the device
+   * with work still queued destroys it outright.
+   */
+  const handleSignOut = async () => {
+    if (DrillingStorage.getUnsyncedCount() > 0) return;
+    syncWorker.stop();
+    await signOut();
+    DrillingStorage.clearForAccountSwitch();
+    setSignedIn(false);
+    setDataVersion((v) => v + 1);
+  };
+
   // Android Back: unwind one layer of UI rather than closing the app.
   const closeTopModal = React.useCallback(() => {
     const open: [boolean, (v: boolean) => void][] = [
@@ -859,6 +876,8 @@ export default function App() {
         onUpdateBoreholePipeLength={handleUpdateBoreholePipeLength}
         sunlightMode={sunlightMode}
         onOpenUserManagement={() => setIsUserManagementOpen(true)}
+        onSignOut={handleSignOut}
+        unsyncedCount={pendingSync + parkedSync}
         onResetDemoData={handleResetDemoData}
         onDeleteCurrentProject={() => {
           if (activeBorehole) {

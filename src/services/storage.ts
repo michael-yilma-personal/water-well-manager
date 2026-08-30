@@ -847,6 +847,40 @@ export class DrillingStorage {
     localStorage.setItem(STORAGE_KEYS.PULL_WATERMARK, watermark);
   }
 
+  /**
+   * Wipe this account's work off the handset, ready for another driller.
+   *
+   * Only safe once the outbox is empty, which the caller enforces: the
+   * transport stamps created_by at drain time, so a record logged by one
+   * driller and uploaded after someone else has signed in is credited to the
+   * wrong person - and one still sitting here when the records are cleared is
+   * gone for good.
+   *
+   * Settings stay. Screen brightness and field beeps belong to the handset, not
+   * to whoever is holding it.
+   */
+  static clearForAccountSwitch(): void {
+    // Emptied rather than removed: the getters re-seed demo data when their key
+    // is missing, which would drop the next driller onto a sample borehole -
+    // and a pipe logged against one of those cannot sync, because its parent is
+    // never queued.
+    for (const key of [
+      STORAGE_KEYS.BOREHOLES,
+      STORAGE_KEYS.PIPE_RECORDS,
+      STORAGE_KEYS.EVENTS,
+      STORAGE_KEYS.SHIFT_LOGS,
+    ]) {
+      localStorage.setItem(key, JSON.stringify([]));
+    }
+    localStorage.removeItem(STORAGE_KEYS.ACTIVE_BOREHOLE_ID);
+    localStorage.removeItem(STORAGE_KEYS.ACTIVE_TIMER);
+    localStorage.removeItem(STORAGE_KEYS.USERS);
+    localStorage.removeItem(STORAGE_KEYS.CURRENT_USER_ID);
+    // Otherwise the next account starts downloading from a moment it was never
+    // present for, and never sees any of its own earlier work.
+    localStorage.removeItem(STORAGE_KEYS.PULL_WATERMARK);
+  }
+
   static mergeRemote(snapshot: RemoteSnapshot): void {
     const outbox = getOutbox();
     // Parked counts as unsent: it failed to upload, so the server's copy is
@@ -1091,6 +1125,9 @@ export class DrillingStorage {
   }
   setPullWatermark(watermark: string): void {
     DrillingStorage.setPullWatermark(watermark);
+  }
+  clearForAccountSwitch(): void {
+    DrillingStorage.clearForAccountSwitch();
   }
   mergeRemote(snapshot: RemoteSnapshot): void {
     DrillingStorage.mergeRemote(snapshot);
