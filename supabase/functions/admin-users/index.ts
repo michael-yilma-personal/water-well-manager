@@ -178,10 +178,30 @@ Deno.serve(async (req) => {
       return json({ action: 'deleted', records: 0 });
     }
 
-    // --- bring a deactivated account back ---------------------------------
     if (req.method === 'PATCH') {
-      const { id, action } = await req.json();
+      const { id, action, role } = await req.json();
       if (!id) return json({ error: 'id is required' }, 400);
+
+      // --- change someone's role -------------------------------------------
+      if (action === 'setRole') {
+        if (!ROLES.includes(String(role))) {
+          return json({ error: `Role must be one of ${ROLES.join(', ')}` }, 400);
+        }
+        // Demoting yourself could leave the project with no administrator,
+        // and nobody left who could undo it from the dashboard.
+        if (id === callerId) return json({ error: 'You cannot change your own role' }, 400);
+
+        const { data, error } = await admin
+          .from('profiles')
+          .update({ role })
+          .eq('id', id)
+          .select('id');
+        if (error) return json({ error: error.message }, 500);
+        if (!data?.length) return json({ error: 'No such account' }, 404);
+        return json({ action: 'roleChanged', role });
+      }
+
+      // --- bring a deactivated account back ---------------------------------
       if (action !== 'reactivate') return json({ error: 'Unknown action' }, 400);
 
       // Deactivation must be reversible: doing it by mistake should not cost

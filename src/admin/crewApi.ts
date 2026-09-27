@@ -84,3 +84,7 @@ export async function removeCrewMember(
 export async function reactivateCrewMember(id: string): Promise<void> {
   await call('PATCH', { id, action: 'reactivate' });
 }
+
+export async function changeCrewRole(id: string, role: CrewMember['role']): Promise<void> {
+  await call('PATCH', { id, action: 'setRole', role });
+}

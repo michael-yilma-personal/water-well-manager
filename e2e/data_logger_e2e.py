@@ -7,6 +7,7 @@ then do:
   - the account holds the role, and cannot promote itself
   - it can write its own borehole and pipe record
   - another crew cannot read them; an administrator can
+  - an administrator can change a role, but not their own
 
 The account is created on first run and reused after; it is an example.com test
 account, removed with the others by scripts/delete-test-data.sh.
@@ -120,6 +121,34 @@ check('admin CAN read the Data Logger\'s record', bool(rows) and rows[0]['id'] =
 # on the dashboard.
 call('PATCH', f'/rest/v1/pipe_records?id=eq.{PIPE}', dl_token, {'deleted_at': '2026-09-27T09:00:00Z'})
 call('PATCH', f'/rest/v1/boreholes?id=eq.{BH}', dl_token, {'deleted_at': '2026-09-27T09:00:00Z'})
+
+# --- changing a role from the dashboard ---------------------------------------
+def role_of(uid, token):
+    _, rows = call('GET', f'/rest/v1/profiles?id=eq.{uid}&select=role', token)
+    return rows[0]['role'] if rows else None
+
+status, body = call('PATCH', '/functions/v1/admin-users', admin_token,
+                    {'id': dl_id, 'action': 'setRole', 'role': 'Driller'})
+check('admin can change a role', status == 200 and role_of(dl_id, dl_token) == 'Driller',
+      f'HTTP {status} {str(body)[:60]}')
+
+status, _ = call('PATCH', '/functions/v1/admin-users', admin_token,
+                 {'id': dl_id, 'action': 'setRole', 'role': 'Data Logger'})
+check('and change it back', status == 200 and role_of(dl_id, dl_token) == 'Data Logger', f'HTTP {status}')
+
+status, _ = call('PATCH', '/functions/v1/admin-users', admin_token,
+                 {'id': dl_id, 'action': 'setRole', 'role': 'Owner'})
+check('an unknown role is refused', status == 400 and role_of(dl_id, dl_token) == 'Data Logger', f'HTTP {status}')
+
+status, _ = call('PATCH', '/functions/v1/admin-users', admin_token,
+                 {'id': admin_id, 'action': 'setRole', 'role': 'Driller'})
+check('admin CANNOT change their own role',
+      status == 400 and role_of(admin_id, admin_token) == 'Administrator', f'HTTP {status}')
+
+status, _ = call('PATCH', '/functions/v1/admin-users', d1_token,
+                 {'id': d1_id, 'action': 'setRole', 'role': 'Administrator'})
+check('a driller CANNOT use the function to promote themselves',
+      status == 403 and role_of(d1_id, d1_token) == 'Driller', f'HTTP {status}')
 
 passed = sum(1 for _, ok in results if ok)
 print(f'\n{passed}/{len(results)} passed')
