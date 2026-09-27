@@ -172,7 +172,15 @@ export default function App() {
     fetchMyProfile()
       .then((profile) => {
         if (!alive || !profile) return;
-        if (currentUser.id === profile.id && currentUser.name === profile.name) return;
+        // Role and badge are compared too: an administrator can change either
+        // from the dashboard, and a stale role here would leave a promoted
+        // account logging records the server then refuses.
+        if (
+          currentUser.id === profile.id &&
+          currentUser.name === profile.name &&
+          currentUser.role === profile.role &&
+          currentUser.badgeNumber === (profile.badgeNumber || '')
+        ) return;
         const me = DrillingStorage.adoptSignedInUser(profile);
         setUsers([me]);
         setCurrentUser(me);
