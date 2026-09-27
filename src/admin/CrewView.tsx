@@ -9,6 +9,7 @@ import {
   addCrewMember,
   fetchCrew,
   reactivateCrewMember,
+  changeCrewRole,
   removeCrewMember,
   type CrewMember,
 } from './crewApi';
@@ -21,6 +22,8 @@ import {
  * record of who drilled. The table shows the record count so the outcome is
  * predictable before the button is pressed.
  */
+
+const ROLES: CrewMember['role'][] = ['Driller', 'Data Logger', 'Supervisor', 'Administrator'];
 
 const ROLE_HELP: Record<string, string> = {
   Driller: 'Logs pipes on a rig. Sees only their own boreholes.',
@@ -98,10 +101,7 @@ function AddForm({ onAdded }: { onAdded: () => void }) {
         <label className="text-[11px] uppercase tracking-wider font-black text-slate-400">
           Role
           <select value={role} onChange={(e) => setRole(e.target.value)} className={`mt-1 ${field}`}>
-            <option>Driller</option>
-            <option>Data Logger</option>
-            <option>Supervisor</option>
-            <option>Administrator</option>
+            {ROLES.map((r) => <option key={r}>{r}</option>)}
           </select>
         </label>
         <div className="flex items-end">
@@ -167,6 +167,29 @@ export function CrewView({ onBack }: { onBack: () => void }) {
     }
   };
 
+  const changeRole = async (m: CrewMember, role: CrewMember['role']) => {
+    if (role === m.role) return;
+    // Administrator is the one role that changes access, in both directions,
+    // so say what is about to happen before it does.
+    const warning =
+      role === 'Administrator'
+        ? `\n\nAs an Administrator they will read every crew's records and will no longer be able to log field data.`
+        : m.role === 'Administrator'
+          ? `\n\nThey will lose access to other crews' records and to this dashboard.`
+          : `\n\nTheir access does not change, and their existing records are untouched.`;
+    if (!window.confirm(`Change ${m.name} from ${m.role} to ${role}?${warning}`)) return;
+    try {
+      await changeCrewRole(m.id, role);
+      // The crew list takes seconds to reload (it counts every account's
+      // records); until then the select would snap back to the old role.
+      setCrew((c) => c?.map((x) => (x.id === m.id ? { ...x, role } : x)) ?? c);
+      setNotice(`${m.name} is now ${role === 'Administrator' ? 'an' : 'a'} ${role}. It takes effect the next time they open the app.`);
+      load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
   const reactivate = async (m: CrewMember) => {
     try {
       await reactivateCrewMember(m.id);
@@ -224,7 +247,17 @@ export function CrewView({ onBack }: { onBack: () => void }) {
                     {m.name}{m.isSelf && <span className="ml-2 text-[10px] text-slate-500">(you)</span>}
                   </td>
                   <td className="p-3">{m.email}</td>
-                  <td className="p-3 whitespace-nowrap">{m.role}</td>
+                  <td className="p-3 whitespace-nowrap">
+                    {m.isSelf || m.deactivated ? (
+                      m.role
+                    ) : (
+                      <select value={m.role} aria-label={`Role for ${m.name}`}
+                              onChange={(e) => changeRole(m, e.target.value as CrewMember['role'])}
+                              className="bg-slate-900 border border-slate-700 rounded px-2 py-1 text-sm font-bold">
+                        {ROLES.map((r) => <option key={r}>{r}</option>)}
+                      </select>
+                    )}
+                  </td>
                   <td className="p-3 whitespace-nowrap">{m.badgeNumber || '—'}</td>
                   <td className="p-3">{m.records}</td>
                   <td className="p-3 whitespace-nowrap text-xs text-slate-400">
