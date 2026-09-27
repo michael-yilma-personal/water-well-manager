@@ -33,7 +33,7 @@ for arg in "$@"; do
 done
 
 if [ ${#EMAILS[@]} -eq 0 ]; then
-  EMAILS=(driller1@example.com driller2@example.com admin1@example.com)
+  EMAILS=(driller1@example.com driller2@example.com admin1@example.com datalogger1@example.com)
 fi
 
 TOKEN="$(security find-generic-password -s "Supabase CLI" -w 2>/dev/null || echo "${SUPABASE_ACCESS_TOKEN:-}")"

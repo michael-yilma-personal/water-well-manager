@@ -25,7 +25,7 @@ const CORS = {
   'Access-Control-Allow-Methods': 'GET, POST, PATCH, DELETE, OPTIONS',
 };
 
-const ROLES = ['Driller', 'Supervisor', 'Administrator'];
+const ROLES = ['Driller', 'Data Logger', 'Supervisor', 'Administrator'];
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {

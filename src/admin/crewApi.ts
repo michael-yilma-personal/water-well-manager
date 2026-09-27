@@ -17,7 +17,7 @@ export interface CrewMember {
   id: string;
   email: string;
   name: string;
-  role: 'Driller' | 'Supervisor' | 'Administrator';
+  role: 'Driller' | 'Data Logger' | 'Supervisor' | 'Administrator';
   badgeNumber: string;
   createdAt: string;
   lastSignInAt: string | null;
