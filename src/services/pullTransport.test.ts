@@ -12,19 +12,28 @@ const UID = '11111111-2222-3333-4444-555555555555';
  * postgrest-js behaves.
  */
 function fakeClient(rowsByTable: Record<string, unknown[]> = {}) {
-  const calls: { table: string; gte?: unknown }[] = [];
+  type Call = { table: string; gte?: unknown; gteCol?: string; eq: [string, unknown][]; orderCol?: string };
+  const calls: Call[] = [];
   const client = {
     calls,
     from(table: string) {
-      const call: { table: string; gte?: unknown } = { table };
+      const call: Call = { table, eq: [] };
       calls.push(call);
       const builder: Record<string, unknown> = {
         select: () => builder,
-        gte: (_col: string, value: unknown) => {
+        gte: (col: string, value: unknown) => {
           call.gte = value;
+          call.gteCol = col;
           return builder;
         },
-        order: () => builder,
+        eq: (col: string, value: unknown) => {
+          call.eq.push([col, value]);
+          return builder;
+        },
+        order: (col: string) => {
+          call.orderCol = col;
+          return builder;
+        },
         then: (resolve: (v: unknown) => void) =>
           resolve({ data: rowsByTable[table] ?? [], error: null }),
       };
@@ -45,6 +54,7 @@ function boreholeRow(over: Record<string, unknown> = {}) {
     created_by: UID,
     recorded_at: '2026-08-30T06:00:00.000Z',
     received_at: '2026-08-30T06:00:05.000Z',
+    modified_at: '2026-08-30T06:00:05.000Z',
     deleted_at: null,
     ...over,
   };
@@ -84,6 +94,51 @@ test('later pulls ask only for what arrived since the last one', async () => {
   assert.equal(client.calls[0].gte, expected);
 });
 
+test('the pull follows modified_at, so a correction made after upload comes down', async () => {
+  const client = fakeClient();
+  const pull = createSupabasePull(deps(client));
+
+  await pull('2026-08-30T06:00:00.000Z');
+
+  // received_at is set once at insert; an office correction never moves it.
+  assert.ok(client.calls.every((c) => c.gteCol === 'modified_at'));
+  assert.ok(client.calls.every((c) => c.orderCol === 'modified_at'));
+});
+
+test('the pull asks only for the signed-in account\'s own records', async () => {
+  const client = fakeClient();
+  const pull = createSupabasePull(deps(client));
+
+  await pull(null);
+
+  // Supervisors can read every crew, for review on the dashboard. Their phone
+  // must not download every crew's boreholes because of it.
+  assert.ok(
+    client.calls.every((c) => c.eq.some(([col, v]) => col === 'created_by' && v === UID)),
+    JSON.stringify(client.calls)
+  );
+});
+
+test('a record corrected after upload advances the watermark by its modified_at', async () => {
+  const client = fakeClient({
+    pipe_records: [{
+      id: 'bbbbbbbb-0000-0000-0000-000000000001',
+      borehole_id: 'aaaaaaaa-0000-0000-0000-000000000001',
+      pipe_number: 1, water_strike: false, created_by: UID,
+      recorded_at: '2026-08-30T06:00:00.000Z',
+      received_at: '2026-08-30T06:00:05.000Z',
+      modified_at: '2026-08-30T15:00:00.000Z',
+      formation: 'Corrected by the office',
+    }],
+  });
+  const pull = createSupabasePull(deps(client));
+
+  const result = await pull('2026-08-30T10:00:00.000Z');
+
+  assert.equal(result?.snapshot.pipeRecords[0].formation, 'Corrected by the office');
+  assert.equal(result?.watermark, '2026-08-30T15:00:00.000Z');
+});
+
 test('a row soft-deleted upstream comes back as a deletion, not a record', async () => {
   const client = fakeClient({
     boreholes: [
@@ -106,10 +161,10 @@ test('a row soft-deleted upstream comes back as a deletion, not a record', async
 test('the watermark advances to the newest row the server returned', async () => {
   const client = fakeClient({
     boreholes: [
-      boreholeRow({ received_at: '2026-08-30T06:00:05.000Z' }),
+      boreholeRow({ modified_at: '2026-08-30T06:00:05.000Z' }),
       boreholeRow({
         id: 'aaaaaaaa-0000-0000-0000-000000000003',
-        received_at: '2026-08-30T09:30:00.000Z',
+        modified_at: '2026-08-30T09:30:00.000Z',
       }),
     ],
   });

@@ -184,18 +184,22 @@ export async function generateBoreholePDF(
     `${Math.round(r.durationSeconds / 60)} min`,
     `${r.penetrationRate.toFixed(1)}`,
     r.formation,
+    r.bitType,
     r.waterStrike ? 'YES (Strike)' : 'No',
     r.operator,
+    r.remarks || '',
   ]);
 
   autoTable(doc, {
     startY: yAfterLith + 4,
-    head: [['Pipe #', 'Depth Range', 'Length', 'Duration', 'Rate (m/hr)', 'Formation', 'Water Strike', 'Operator']],
-    body: pipeRows.length > 0 ? pipeRows : [['-', 'No pipes logged yet', '-', '-', '-', '-', '-', '-']],
+    head: [['Pipe #', 'Depth Range', 'Length', 'Duration', 'Rate (m/hr)', 'Formation', 'Bit', 'Water Strike', 'Operator', 'Remarks']],
+    body: pipeRows.length > 0 ? pipeRows : [['-', 'No pipes logged yet', '-', '-', '-', '-', '-', '-', '-', '-']],
     theme: 'grid',
-    headStyles: { fillColor: primaryColor, textColor: 255, fontStyle: 'bold', fontSize: 8.5 },
-    bodyStyles: { fontSize: 8 },
-    styles: { cellPadding: 2 },
+    headStyles: { fillColor: primaryColor, textColor: 255, fontStyle: 'bold', fontSize: 7.5 },
+    bodyStyles: { fontSize: 7 },
+    styles: { cellPadding: 1.5 },
+    // Remarks are free text; give them the room and let them wrap.
+    columnStyles: { 9: { cellWidth: 38 } },
   });
 
   // Section 4: NPT & Field Operations Events
@@ -307,13 +311,16 @@ export async function generateShiftPDF(
     `${Math.round(r.durationSeconds / 60)} min`,
     `${r.penetrationRate.toFixed(1)} m/hr`,
     r.formation,
+    r.bitType,
     r.waterStrike ? 'YES' : 'No',
+    r.remarks || '',
   ]);
 
   autoTable(doc, {
     startY: yAfterMeta + 4,
-    head: [['Pipe #', 'Depth Range', 'Length', 'Duration', 'Rate (m/hr)', 'Formation', 'Water Strike']],
-    body: pipeRows.length > 0 ? pipeRows : [['-', 'No pipes logged in this shift', '-', '-', '-', '-', '-']],
+    head: [['Pipe #', 'Depth Range', 'Length', 'Duration', 'Rate (m/hr)', 'Formation', 'Bit', 'Water Strike', 'Remarks']],
+    body: pipeRows.length > 0 ? pipeRows : [['-', 'No pipes logged in this shift', '-', '-', '-', '-', '-', '-', '-']],
+    columnStyles: { 8: { cellWidth: 40 } },
     theme: 'striped',
     headStyles: { fillColor: primaryColor, textColor: 255, fontSize: 9 },
     bodyStyles: { fontSize: 8.5 },

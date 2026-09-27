@@ -20,19 +20,22 @@ import type { RemoteSnapshot } from './storage';
  * Download this account's work from the server.
  *
  * The app was upload-only for its whole life, which is why the same login on a
- * second phone showed nothing: records reached Supabase and stopped there. RLS
- * already permits the read - `created_by = auth.uid()` - so nothing here needs
- * a policy change. It only asks.
+ * second phone showed nothing: records reached Supabase and stopped there.
  *
- * Note this is scoped to the signed-in account, not to a crew: a second driller
- * signing in on a shared rig phone still will not see the first driller's
- * boreholes. Widening that is a schema decision, not a client one.
+ * Scoped to the signed-in account, not to a crew: a second driller signing in
+ * on a shared rig phone still will not see the first driller's boreholes. The
+ * scope is an explicit created_by filter, not left to RLS - Supervisors can
+ * read every crew for review, and their phone must not download it all.
+ *
+ * Rows are followed by `modified_at`, which the server moves on every write,
+ * so a record corrected in the office after upload comes back down. The older
+ * `received_at` is set once at insert and never saw a correction.
  */
 
 /**
  * How far back of already-seen time to re-request on each pull.
  *
- * `received_at` defaults to now() at insert, and two rows committed in the same
+ * `modified_at` is stamped with now() by the server, and two rows committed in the same
  * moment can be stamped out of order relative to when the queries see them. A
  * strict lower bound at the last watermark would step over the straggler and
  * never look at that instant again, losing the record permanently. Re-reading a
@@ -49,7 +52,7 @@ export interface PullDeps {
 
 export interface PullResult {
   snapshot: RemoteSnapshot;
-  /** Newest `received_at` seen, to be handed back to the next pull. */
+  /** Newest `modified_at` seen, to be handed back to the next pull. */
   watermark: string | null;
 }
 
@@ -57,7 +60,7 @@ export type Pull = (since: string | null) => Promise<PullResult | null>;
 
 interface ServerRow {
   id: string;
-  received_at?: string;
+  modified_at?: string;
   deleted_at?: string | null;
 }
 
@@ -87,10 +90,11 @@ export function createSupabasePull(deps: PullDeps): Pull {
         select: (cols: string) => Record<string, (...args: unknown[]) => unknown>;
       }).select('*') as Record<string, (...args: unknown[]) => unknown>;
 
+      query = query.eq('created_by', userId) as typeof query;
       if (lowerBound !== null) {
-        query = query.gte('received_at', lowerBound) as typeof query;
+        query = query.gte('modified_at', lowerBound) as typeof query;
       }
-      query = query.order('received_at', { ascending: true }) as typeof query;
+      query = query.order('modified_at', { ascending: true }) as typeof query;
 
       const { data, error } = (await (query as unknown as Promise<{
         data: ServerRow[] | null;
@@ -108,8 +112,8 @@ export function createSupabasePull(deps: PullDeps): Pull {
     const live = <T>(table: string, map: (row: never) => T): T[] => {
       const out: T[] = [];
       for (const row of fetched[table]) {
-        if (row.received_at && (watermark === null || row.received_at > watermark)) {
-          watermark = row.received_at;
+        if (row.modified_at && (watermark === null || row.modified_at > watermark)) {
+          watermark = row.modified_at;
         }
         if (row.deleted_at) {
           deletedIds.push(row.id);

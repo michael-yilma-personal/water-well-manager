@@ -88,6 +88,13 @@ export interface PipeRecord {
   gpsCoordinates: GPSCoordinates;
   remarks: string;
   photoUrl?: string;
+  /**
+   * Last correction to an End Pipe field after saving. Stamped by the server
+   * (edited_by is the account that made it); set locally too so the phone
+   * shows its own edit before the next download.
+   */
+  editedAt?: string;
+  editedBy?: string;
   synced: boolean;
 }
 

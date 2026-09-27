@@ -10,6 +10,7 @@ import {
   FileText,
   LogOut,
   Pause,
+  Pencil,
   RefreshCw,
   Search,
   Users,
@@ -22,13 +23,15 @@ import {
   fetchProfiles,
   isOngoingPause,
   measuredDepth,
+  savePipeCorrection,
   signedPhotoUrl,
   type AdminBorehole,
   type AdminEvent,
   type AdminPipeRecord,
   type Profile,
 } from './adminApi';
-import { signIn, signOut, getSession } from '../services/auth';
+import { signIn, signOut, getSession, fetchMyProfile } from '../services/auth';
+import { EditPipeModal } from '../components/modals/EditPipeModal';
 import { CrewView } from './CrewView';
 import { isSupabaseConfigured } from '../services/supabaseClient';
 import {
@@ -37,15 +40,24 @@ import {
 } from '../utils/reports';
 
 /**
- * Administrator's read-only view of every crew's drilling record.
+ * The office's view of every crew's drilling record.
  *
  * Deliberately a laptop layout rather than a phone one: a pipe log is a
  * twenty-column table, and the field app's 360px-wide UI cannot show it.
  *
- * Writes are impossible here by policy, not merely by omission - the database
- * rejects an administrator's insert - so nothing in this file needs to guard
- * against accidental edits.
+ * The one write here is correcting a saved pipe's End Pipe fields, open to
+ * Supervisors, Administrators and the record's author. The database enforces
+ * both who and which columns; the Edit button only mirrors it.
  */
+
+/** Who is signed in to the dashboard, for deciding what to offer. */
+interface Me {
+  id: string;
+  role: string;
+}
+
+const isReviewer = (me: Me | null) =>
+  me?.role === 'Supervisor' || me?.role === 'Administrator';
 
 function useSession() {
   const [state, setState] = useState<'checking' | 'in' | 'out'>('checking');
@@ -196,15 +208,19 @@ function EventPhoto({ event }: { event: AdminEvent }) {
 function BoreholeDetail({
   borehole,
   profiles,
+  me,
   onBack,
 }: {
   borehole: AdminBorehole;
   profiles: Map<string, Profile>;
+  me: Me | null;
   onBack: () => void;
 }) {
   const [pipes, setPipes] = useState<AdminPipeRecord[] | null>(null);
   const [events, setEvents] = useState<AdminEvent[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [editing, setEditing] = useState<AdminPipeRecord | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     let alive = true;
@@ -218,7 +234,10 @@ function BoreholeDetail({
     return () => {
       alive = false;
     };
-  }, [borehole.id]);
+  }, [borehole.id, reloadKey]);
+
+  const canEdit = (p: AdminPipeRecord) =>
+    !p.deletedAt && (isReviewer(me) || p.createdBy === me?.id);
 
   const live = (pipes ?? []).filter((p) => !p.deletedAt);
   const depth = measuredDepth(pipes ?? []);
@@ -317,7 +336,7 @@ function BoreholeDetail({
           <table className="w-full text-sm">
             <thead className="bg-slate-900 text-slate-400 text-[11px] uppercase tracking-wider">
               <tr>
-                {['#', 'Interval', 'Length', 'Drilling', 'Paused', 'Rate', 'Formation', 'Water', 'PSI', 'Operator', 'Remarks'].map(
+                {['#', 'Interval', 'Length', 'Drilling', 'Paused', 'Rate', 'Formation', 'Bit', 'Water', 'PSI', 'Operator', 'Remarks', ''].map(
                   (h) => (
                     <th key={h} className="text-left p-2.5 font-black whitespace-nowrap">
                       {h}
@@ -351,17 +370,39 @@ function BoreholeDetail({
                   </td>
                   <td className="p-2.5 whitespace-nowrap">{p.penetrationRate.toFixed(1)} m/hr</td>
                   <td className="p-2.5 whitespace-nowrap">{p.formation}</td>
+                  <td className="p-2.5 whitespace-nowrap text-xs">
+                    {p.bitType} {p.bitDiameter ? `${p.bitDiameter}"` : ''}
+                  </td>
                   <td className="p-2.5">{p.waterStrike ? 'YES' : '—'}</td>
                   <td className="p-2.5 whitespace-nowrap">
                     {p.airPressure}/{p.compressorPressure}
                   </td>
                   <td className="p-2.5 whitespace-nowrap">{p.operator}</td>
-                  <td className="p-2.5 max-w-xs">{p.remarks}</td>
+                  <td className="p-2.5 max-w-xs">
+                    {p.remarks || <span className="text-slate-600">—</span>}
+                    {p.editedAt && (
+                      <div className="text-[11px] text-blue-300 font-semibold mt-0.5">
+                        Edited by {profiles.get(p.editedBy ?? '')?.name ?? 'unknown'} ·{' '}
+                        {new Date(p.editedAt).toLocaleString()}
+                      </div>
+                    )}
+                  </td>
+                  <td className="p-2.5 text-right">
+                    {canEdit(p) && (
+                      <button
+                        onClick={() => setEditing(p)}
+                        aria-label={`Edit pipe ${p.pipeNumber}`}
+                        className="inline-flex items-center gap-1 px-2 py-1 rounded bg-slate-800 border border-slate-600 text-xs font-black uppercase hover:border-blue-400"
+                      >
+                        <Pencil className="w-3.5 h-3.5" /> Edit
+                      </button>
+                    )}
+                  </td>
                 </tr>
               ))}
               {pipes && pipes.length === 0 && (
                 <tr>
-                  <td colSpan={11} className="p-6 text-center text-slate-500">
+                  <td colSpan={13} className="p-6 text-center text-slate-500">
                     No pipe records have reached the server for this borehole yet.
                   </td>
                 </tr>
@@ -370,6 +411,18 @@ function BoreholeDetail({
           </table>
         </div>
       </section>
+
+      <EditPipeModal
+        isOpen={editing !== null}
+        onClose={() => setEditing(null)}
+        record={editing}
+        onSave={async (correction) => {
+          if (!editing) return;
+          await savePipeCorrection(editing, correction);
+          setReloadKey((k) => k + 1);
+        }}
+        sunlightMode={false}
+      />
 
       <section className="px-6 pb-12">
         <h2 className="text-sm font-black uppercase tracking-wider text-slate-400 mb-2">
@@ -437,7 +490,8 @@ function BoreholeList({
   onOpen: (b: AdminBorehole) => void;
   profiles: Map<string, Profile>;
   onSignOut: () => void;
-  onOpenCrew: () => void;
+  /** Absent for Supervisors: managing accounts stays with Administrators. */
+  onOpenCrew?: () => void;
 }) {
   const [rows, setRows] = useState<AdminBorehole[] | null>(null);
   const [pauses, setPauses] = useState<Map<string, AdminEvent>>(new Map());
@@ -491,12 +545,14 @@ function BoreholeList({
           >
             <RefreshCw className={`w-4 h-4 ${busy ? 'animate-spin' : ''}`} />
           </button>
-          <button
-            onClick={onOpenCrew}
-            className="flex items-center gap-1.5 px-3 py-2 rounded bg-slate-800 border border-slate-700 text-xs font-black uppercase"
-          >
-            <Users className="w-4 h-4" /> Crew
-          </button>
+          {onOpenCrew && (
+            <button
+              onClick={onOpenCrew}
+              className="flex items-center gap-1.5 px-3 py-2 rounded bg-slate-800 border border-slate-700 text-xs font-black uppercase"
+            >
+              <Users className="w-4 h-4" /> Crew
+            </button>
+          )}
           <button
             onClick={onSignOut}
             className="flex items-center gap-1.5 px-3 py-2 rounded bg-slate-800 border border-slate-700 text-xs font-black uppercase"
@@ -580,9 +636,14 @@ export default function AdminApp() {
   const [selected, setSelected] = useState<AdminBorehole | null>(null);
   const [showCrew, setShowCrew] = useState(false);
   const [profiles, setProfiles] = useState<Map<string, Profile>>(new Map());
+  const [me, setMe] = useState<Me | null>(null);
 
   useEffect(() => {
-    if (session === 'in') fetchProfiles().then(setProfiles).catch(() => {});
+    if (session !== 'in') return;
+    fetchProfiles().then(setProfiles).catch(() => {});
+    fetchMyProfile()
+      .then((p) => setMe(p ? { id: p.id, role: p.role } : null))
+      .catch(() => setMe(null));
   }, [session]);
 
   if (session === 'checking') {
@@ -597,6 +658,7 @@ export default function AdminApp() {
       <BoreholeDetail
         borehole={selected}
         profiles={profiles}
+        me={me}
         onBack={() => setSelected(null)}
       />
     );
@@ -605,7 +667,7 @@ export default function AdminApp() {
     <BoreholeList
       profiles={profiles}
       onOpen={setSelected}
-      onOpenCrew={() => setShowCrew(true)}
+      onOpenCrew={me?.role === 'Administrator' ? () => setShowCrew(true) : undefined}
       onSignOut={async () => {
         await signOut();
         setSession('out');

@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { Borehole, PipeRecord } from '../../types';
 import {
   FileText,
-  Trash2,
+  Pencil,
   Droplets,
   Layers,
   Search,
@@ -16,7 +16,11 @@ import {
 interface PipeLogViewProps {
   borehole: Borehole;
   pipeRecords: PipeRecord[];
-  onDeletePipe: (id: string) => void;
+  /**
+   * Opens a pipe for editing (delete lives in there too). Absent when this
+   * account may not edit - an Administrator on the rig app.
+   */
+  onEditPipe?: (record: PipeRecord) => void;
   onExportPDF: () => void;
   onExportExcel: () => void;
   sunlightMode: boolean;
@@ -25,7 +29,7 @@ interface PipeLogViewProps {
 export const PipeLogView: React.FC<PipeLogViewProps> = ({
   borehole,
   pipeRecords,
-  onDeletePipe,
+  onEditPipe,
   onExportPDF,
   onExportExcel,
   sunlightMode,
@@ -161,6 +165,12 @@ export const PipeLogView: React.FC<PipeLogViewProps> = ({
         </button>
       </div>
 
+      {onEditPipe && pipeRecords.length > 0 && (
+        <p className="text-xs font-bold opacity-70 flex items-center gap-1.5 -mb-1">
+          <Pencil className="w-3.5 h-3.5 text-blue-500" /> Tap a pipe to edit or delete it
+        </p>
+      )}
+
       {/* Technical Dashboard / Data Grid Table */}
       <div
         className={`rounded-xl border-2 overflow-hidden shadow-lg ${
@@ -187,8 +197,7 @@ export const PipeLogView: React.FC<PipeLogViewProps> = ({
                 <th className="p-3">Geological Strata</th>
                 <th className="p-3">Water Strike</th>
                 <th className="p-3">Air / Comp PSI</th>
-                <th className="p-3">Driller & Remarks</th>
-                <th className="p-3 text-right">Actions</th>
+                <th className="p-3">Operator & Remarks</th>
               </tr>
             </thead>
             <tbody
@@ -200,7 +209,7 @@ export const PipeLogView: React.FC<PipeLogViewProps> = ({
             >
               {filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={10} className="p-8 text-center opacity-60">
+                  <td colSpan={9} className="p-8 text-center opacity-60">
                     No pipe records match your search filter.
                   </td>
                 </tr>
@@ -208,9 +217,13 @@ export const PipeLogView: React.FC<PipeLogViewProps> = ({
                 filtered.map((rec) => {
                   const isStrike = rec.waterStrike;
                   return (
+                    // The whole row is the edit target. A pencil in a last
+                    // column sat two screen-widths off a phone's right edge,
+                    // where nobody would ever find it.
                     <tr
                       key={rec.id}
-                      className={`transition-colors ${
+                      onClick={onEditPipe ? () => onEditPipe(rec) : undefined}
+                      className={`transition-colors ${onEditPipe ? 'cursor-pointer active:opacity-70' : ''} ${
                         isStrike
                           ? sunlightMode
                             ? 'bg-cyan-950/40 hover:bg-cyan-950/70'
@@ -220,8 +233,23 @@ export const PipeLogView: React.FC<PipeLogViewProps> = ({
                             : 'hover:bg-gray-50'
                       }`}
                     >
-                      <td className="p-3 font-black text-sm">
-                        #{rec.pipeNumber}
+                      <td className="p-3 font-black text-sm whitespace-nowrap">
+                        {onEditPipe ? (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onEditPipe(rec);
+                            }}
+                            aria-label={`Edit pipe ${rec.pipeNumber}`}
+                            className="inline-flex items-center gap-1.5 -m-2 p-2 min-h-[44px] rounded-lg text-left"
+                          >
+                            #{rec.pipeNumber}
+                            <Pencil className="w-3.5 h-3.5 text-blue-500" />
+                          </button>
+                        ) : (
+                          `#${rec.pipeNumber}`
+                        )}
                       </td>
                       <td className="p-3 font-mono">
                         {rec.startDepth.toFixed(1)} – {rec.endDepth.toFixed(1)}m
@@ -267,26 +295,14 @@ export const PipeLogView: React.FC<PipeLogViewProps> = ({
                         <div className="font-black text-xs truncate">
                           {rec.operator}
                         </div>
-                        <div className="text-[11px] opacity-75 truncate">
-                          {rec.remarks}
+                        <div className="text-[11px] opacity-75 truncate" title={rec.remarks}>
+                          {rec.remarks || '—'}
                         </div>
-                      </td>
-                      <td className="p-3 text-right">
-                        <button
-                          onClick={() => {
-                            if (
-                              window.confirm(
-                                `Delete Pipe #${rec.pipeNumber} record?`
-                              )
-                            ) {
-                              onDeletePipe(rec.id);
-                            }
-                          }}
-                          className="p-1.5 rounded hover:bg-red-500/20 text-red-400 transition-colors"
-                          title="Delete pipe record"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
+                        {rec.editedAt && (
+                          <div className="text-[10px] font-bold text-blue-500">
+                            Edited {new Date(rec.editedAt).toLocaleDateString()}
+                          </div>
+                        )}
                       </td>
                     </tr>
                   );

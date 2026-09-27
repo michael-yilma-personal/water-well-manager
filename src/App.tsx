@@ -27,6 +27,8 @@ import { EventModal } from './components/modals/EventModal';
 import { NewBoreholeModal } from './components/modals/NewBoreholeModal';
 import { SettingsModal } from './components/modals/SettingsModal';
 import { PausePipeModal } from './components/modals/PausePipeModal';
+import { EditPipeModal } from './components/modals/EditPipeModal';
+import { applyCorrection, type PipeCorrection } from './services/pipeCorrection';
 import {
   drillingSeconds,
   isPaused,
@@ -115,6 +117,7 @@ export default function App() {
   // Modals state
   const [isEndPipeModalOpen, setIsEndPipeModalOpen] = useState(false);
   const [isPauseModalOpen, setIsPauseModalOpen] = useState(false);
+  const [editingPipe, setEditingPipe] = useState<PipeRecord | null>(null);
   const [isEventModalOpen, setIsEventModalOpen] = useState(false);
   const [selectedEventType, setSelectedEventType] =
     useState<EventType>('Breakdown');
@@ -403,6 +406,16 @@ export default function App() {
     setEvents(storage.getEvents(activeBorehole.id));
   };
 
+  // Correct a saved pipe. Re-saving under the same id queues an upsert, which
+  // the server applies as an update to the row it already has.
+  const handleEditPipeRecord = (correction: PipeCorrection) => {
+    if (!activeBorehole || !editingPipe) return;
+    storage.savePipeRecord(
+      applyCorrection(editingPipe, correction, new Date().toISOString())
+    );
+    setPipeRecords(storage.getPipeRecords(activeBorehole.id));
+  };
+
   // Handle deleting pipe record
   const handleDeletePipeRecord = (id: string) => {
     if (!activeBorehole) return;
@@ -565,6 +578,7 @@ export default function App() {
     const open: [boolean, (v: boolean) => void][] = [
       [isEndPipeModalOpen, setIsEndPipeModalOpen],
       [isPauseModalOpen, setIsPauseModalOpen],
+      [editingPipe !== null, (open: boolean) => { if (!open) setEditingPipe(null); }],
       [isEventModalOpen, setIsEventModalOpen],
       [isNewBoreholeModalOpen, setIsNewBoreholeModalOpen],
       [isSettingsModalOpen, setIsSettingsModalOpen],
@@ -576,6 +590,7 @@ export default function App() {
   }, [
     isEndPipeModalOpen,
     isPauseModalOpen,
+    editingPipe,
     isEventModalOpen,
     isNewBoreholeModalOpen,
     isSettingsModalOpen,
@@ -835,7 +850,9 @@ export default function App() {
           <PipeLogView
             borehole={activeBorehole}
             pipeRecords={pipeRecords}
-            onDeletePipe={handleDeletePipeRecord}
+            // The server refuses an Administrator's writes from the rig app;
+            // corrections from the office go through the dashboard.
+            onEditPipe={currentUser.role === 'Administrator' ? undefined : setEditingPipe}
             onExportPDF={() =>
               runExport(() =>
                 generateShiftReportPDF(activeBorehole, pipeRecords, events)
@@ -891,6 +908,15 @@ export default function App() {
         activeTimer={activeTimer}
         borehole={activeBorehole}
         onSavePipe={handleSavePipeRecord}
+        sunlightMode={sunlightMode}
+      />
+
+      <EditPipeModal
+        isOpen={editingPipe !== null}
+        onClose={() => setEditingPipe(null)}
+        record={editingPipe}
+        onSave={handleEditPipeRecord}
+        onDelete={(rec) => handleDeletePipeRecord(rec.id)}
         sunlightMode={sunlightMode}
       />
 

@@ -13,9 +13,10 @@ import {
   type PipeRecordRow,
 } from '../services/mappers';
 import type { Borehole, DrillingEvent, PipeRecord } from '../types';
+import { correctionRowFor, type PipeCorrection } from '../services/pipeCorrection';
 
 /**
- * Read-only queries for the administrator's dashboard.
+ * Queries for the office dashboard: reads, plus corrections to a saved pipe.
  *
  * Everything here relies on RLS to scope results: an administrator's token sees
  * every crew's rows, a driller's token sees only their own. The dashboard sends
@@ -69,6 +70,30 @@ export async function fetchPipeRecords(boreholeId: string): Promise<AdminPipeRec
     deletedAt: (row as PipeRecordRow).deleted_at ?? null,
     createdBy: (row as PipeRecordRow).created_by,
   }));
+}
+
+/**
+ * Correct the End Pipe fields of a saved record.
+ *
+ * Sends only the correctable columns. RLS decides whether this account may
+ * touch the row at all (its author, or a Supervisor/Administrator); a trigger
+ * refuses any other column and stamps edited_by/edited_at. A row RLS hides
+ * updates silently as zero rows, so that case is turned into an error here
+ * rather than a "saved" that never happened.
+ */
+export async function savePipeCorrection(
+  record: PipeRecord,
+  correction: PipeCorrection
+): Promise<void> {
+  const { data, error } = await client()
+    .from('pipe_records')
+    .update(correctionRowFor(record, correction))
+    .eq('id', record.id)
+    .select('id');
+  if (error) throw new Error(error.message);
+  if (!data || data.length === 0) {
+    throw new Error('This account is not allowed to edit that pipe record.');
+  }
 }
 
 export interface AdminEvent extends DrillingEvent {

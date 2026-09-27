@@ -76,6 +76,9 @@ export type PipeRecordRow = {
   created_by: string;
   recorded_at: string;
   deleted_at?: string | null;
+  /** Server-owned: stamped by a trigger, never sent from the device. */
+  edited_by?: string | null;
+  edited_at?: string | null;
 };
 
 export type DrillingEventRow = {
@@ -241,6 +244,8 @@ export function rowToPipe(row: PipeRecordRow): PipeRecord {
     gpsCoordinates: row.gps ?? { lat: 0, lng: 0 },
     remarks: row.remarks ?? '',
     photoUrl: orUndefined(row.photo_path),
+    editedAt: orUndefined(row.edited_at),
+    editedBy: orUndefined(row.edited_by),
     synced: true,
   }) as PipeRecord;
 }

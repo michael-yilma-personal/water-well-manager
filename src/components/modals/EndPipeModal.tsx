@@ -138,9 +138,9 @@ export const EndPipeModal: React.FC<EndPipeModalProps> = ({
       bitDiameter: Number(bitDiameter),
       operator: activeTimer.operator,
       gpsCoordinates: borehole.gpsCoordinates,
-      remarks:
-        remarks ||
-        `Completed Pipe #${activeTimer.pipeNumber} through ${formation} (${penetrationRate} m/hr)`,
+      // Only what the crew wrote. An auto-written sentence here used to name
+      // the formation, and went on naming it after the formation was corrected.
+      remarks: remarks.trim(),
       synced: false, // offline first!
     });
     onClose();
@@ -402,7 +402,7 @@ export const EndPipeModal: React.FC<EndPipeModalProps> = ({
             </div>
             <div>
               <label className="flex items-center gap-1 text-xs font-bold uppercase mb-1">
-                Remarks / Driller Notes
+                Remarks
               </label>
               <input
                 type="text"

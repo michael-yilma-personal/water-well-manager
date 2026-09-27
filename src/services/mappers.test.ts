@@ -151,6 +151,15 @@ test('rows carry a device timestamp for ordering reports', () => {
   assert.equal(boreholeToRow(borehole, UID).recorded_at, borehole.updatedAt);
 });
 
+test('who corrected a pipe is stamped by the server, never sent by a phone', () => {
+  // A phone claiming "edited by the office" would be forging the audit trail.
+  const row = pipeToRow({ ...pipeRecord, editedAt: '2026-09-28T12:00:00.000Z', editedBy: UID }, UID) as Record<string, unknown>;
+  assert.ok(!('edited_by' in row) && !('edited_at' in row));
+  const back = rowToPipe({ ...pipeToRow(pipeRecord, UID), edited_by: UID, edited_at: '2026-09-28T12:00:00.000Z' });
+  assert.equal(back.editedBy, UID);
+  assert.equal(back.editedAt, '2026-09-28T12:00:00.000Z');
+});
+
 test('demo and sync bookkeeping never reach the server', () => {
   const row = pipeToRow({ ...pipeRecord, isDemo: true }, UID) as Record<string, unknown>;
   assert.ok(!('isDemo' in row), 'isDemo is a local concept');
