@@ -282,7 +282,7 @@ function BoreholeDetail({
           <table className="w-full text-sm">
             <thead className="bg-slate-900 text-slate-400 text-[11px] uppercase tracking-wider">
               <tr>
-                {['#', 'Interval', 'Length', 'Duration', 'Rate', 'Formation', 'Water', 'PSI', 'Driller', 'Remarks'].map(
+                {['#', 'Interval', 'Length', 'Duration', 'Rate', 'Formation', 'Water', 'PSI', 'Operator', 'Remarks'].map(
                   (h) => (
                     <th key={h} className="text-left p-2.5 font-black whitespace-nowrap">
                       {h}
@@ -463,7 +463,7 @@ function BoreholeList({
           <table className="w-full text-sm">
             <thead className="bg-slate-900 text-slate-400 text-[11px] uppercase tracking-wider">
               <tr>
-                {['Borehole', 'Project', 'Client', 'Rig', 'Depth / Target', 'Status', 'Driller', 'Last received'].map(
+                {['Borehole', 'Project', 'Client', 'Rig', 'Depth / Target', 'Status', 'Created by', 'Last received'].map(
                   (h) => (
                     <th key={h} className="text-left p-3 font-black whitespace-nowrap">
                       {h}

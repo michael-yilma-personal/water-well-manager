@@ -190,7 +190,7 @@ export async function generateBoreholePDF(
 
   autoTable(doc, {
     startY: yAfterLith + 4,
-    head: [['Pipe #', 'Depth Range', 'Length', 'Duration', 'Rate (m/hr)', 'Formation', 'Water Strike', 'Driller']],
+    head: [['Pipe #', 'Depth Range', 'Length', 'Duration', 'Rate (m/hr)', 'Formation', 'Water Strike', 'Operator']],
     body: pipeRows.length > 0 ? pipeRows : [['-', 'No pipes logged yet', '-', '-', '-', '-', '-', '-']],
     theme: 'grid',
     headStyles: { fillColor: primaryColor, textColor: 255, fontStyle: 'bold', fontSize: 8.5 },

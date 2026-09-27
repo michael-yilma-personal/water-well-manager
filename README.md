@@ -54,7 +54,8 @@ RLS is enabled on every table and is load-bearing, not defensive: the
 publishable key ships inside the APK, so the policies are the only thing between
 that key and the data.
 
-- Crews read and write **only their own rows**.
+- Crews read and write **only their own rows**. Driller, Data Logger and
+  Supervisor are all crew roles; they differ only in the label on the account.
 - Administrators read **everything** and can write **nothing** — this log backs
   client billing, so entries must come from the rig.
 - Roles are assigned out of band. Signup cannot set one, and `profiles.role` is

@@ -13,8 +13,9 @@
 # Usage:
 #   scripts/create-user.sh boss@company.com 'a-strong-password' Administrator "David Mutua" ADM-001
 #   scripts/create-user.sh joe@company.com  'a-strong-password' Driller       "Joe Kamau"  DRL-110
+#   scripts/create-user.sh ann@company.com  'a-strong-password' "Data Logger" "Ann Njeri"  LOG-201
 #
-# Roles: Driller | Supervisor | Administrator
+# Roles: Driller | Data Logger | Supervisor | Administrator
 #
 # Requires the Supabase CLI logged in (`supabase login`).
 
@@ -29,13 +30,13 @@ NAME="${4:-${EMAIL%%@*}}"
 BADGE="${5:-}"
 
 if [ -z "$EMAIL" ] || [ -z "$PASSWORD" ]; then
-  echo "Usage: $0 <email> <password> [Driller|Supervisor|Administrator] [full name] [badge]" >&2
+  echo "Usage: $0 <email> <password> [Driller|"Data Logger"|Supervisor|Administrator] [full name] [badge]" >&2
   exit 1
 fi
 
 case "$ROLE" in
-  Driller|Supervisor|Administrator) ;;
-  *) echo "Role must be Driller, Supervisor or Administrator (got '$ROLE')." >&2; exit 1 ;;
+  Driller|"Data Logger"|Supervisor|Administrator) ;;
+  *) echo "Role must be Driller, Data Logger, Supervisor or Administrator (got '$ROLE')." >&2; exit 1 ;;
 esac
 
 TOKEN="$(security find-generic-password -s "Supabase CLI" -w 2>/dev/null || echo "${SUPABASE_ACCESS_TOKEN:-}")"
