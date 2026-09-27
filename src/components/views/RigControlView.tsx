@@ -29,13 +29,18 @@ import {
   Download,
   Settings,
   Flame,
+  Pause,
 } from 'lucide-react';
+import { drillingSeconds, openPause } from '../../services/pipePause';
 
 interface RigControlViewProps {
   activeBorehole: Borehole;
   activeTimer: ActivePipeTimer;
   onStartPipe: () => void;
   onOpenEndPipeModal: () => void;
+  /** Open the pause sheet; the timer stops once a reason is chosen. */
+  onPausePipe: () => void;
+  onResumePipe: () => void;
   /** Stop a pipe started by mistake; recorded as downtime, never as depth. */
   onCancelPipe: () => void;
   onOpenEventModal: (type: EventType) => void;
@@ -53,6 +58,8 @@ export const RigControlView: React.FC<RigControlViewProps> = ({
   activeTimer,
   onStartPipe,
   onOpenEndPipeModal,
+  onPausePipe,
+  onResumePipe,
   onCancelPipe,
   onOpenEventModal,
   onOpenSettings,
@@ -64,28 +71,35 @@ export const RigControlView: React.FC<RigControlViewProps> = ({
   onExportExcel,
 }) => {
   const [elapsedSeconds, setElapsedSeconds] = useState<number>(0);
+  const [pausedForSeconds, setPausedForSeconds] = useState<number>(0);
+  const currentPause = activeTimer.isActive ? openPause(activeTimer) : undefined;
 
   // Role comes from the profile row adopted at sign-in, not from the local user
   // list, so this matches what RLS will decide at upload time.
   const isAdministrator = currentUser.role === 'Administrator';
 
-  // Live timer update
+  // Live timer update. The main clock is drilling time, so it holds still
+  // while paused; the pause gets a clock of its own.
   useEffect(() => {
     let interval: number | undefined;
     if (activeTimer.isActive) {
-      const startEpoch = new Date(activeTimer.startTime).getTime();
       const updateTimer = () => {
         const now = Date.now();
-        const diffSec = Math.max(0, Math.floor((now - startEpoch) / 1000));
-        setElapsedSeconds(diffSec);
+        setElapsedSeconds(drillingSeconds(activeTimer, now));
+        setPausedForSeconds(
+          currentPause
+            ? Math.max(0, Math.floor((now - Date.parse(currentPause.start)) / 1000))
+            : 0
+        );
       };
       updateTimer();
       interval = window.setInterval(updateTimer, 1000);
     } else {
       setElapsedSeconds(0);
+      setPausedForSeconds(0);
     }
     return () => clearInterval(interval);
-  }, [activeTimer.isActive, activeTimer.startTime]);
+  }, [activeTimer.isActive, activeTimer.startTime, activeTimer.pauses]);
 
   // Calculate Today's Drilled Meters & Rates
   const todayStr = new Date().toISOString().split('T')[0];
@@ -295,11 +309,47 @@ export const RigControlView: React.FC<RigControlViewProps> = ({
               >
                 <Square className="w-4 h-4 fill-current text-red-500" />
                 {activeTimer.isActive
-                  ? `RECORD PIPE #${activeTimer.pipeNumber}`
+                  ? `SAVE PIPE #${activeTimer.pipeNumber}`
                   : 'START A PIPE FIRST'}
               </span>
             </button>
           </div>
+
+          {/* PAUSE / RESUME - only while a pipe is running. Full width and tall
+              so it is hard to miss with gloves, but visibly secondary to the
+              two big buttons. END PIPE stays live while paused. */}
+          {activeTimer.isActive && !isAdministrator && (
+            <button
+              onClick={() => {
+                triggerVibration([12]);
+                if (currentPause) onResumePipe();
+                else onPausePipe();
+              }}
+              className={`w-full touch-manipulation select-none min-h-[72px] rounded-2xl border-b-4 px-4 py-3 flex items-center justify-center gap-3 active:border-b-0 active:translate-y-1 transition-colors duration-150 ${
+                currentPause
+                  ? 'bg-emerald-500 hover:bg-emerald-400 border-emerald-800 text-black shadow-xl'
+                  : sunlightMode
+                    ? 'bg-zinc-900 border-amber-400 text-amber-300 border-2 hover:bg-zinc-800'
+                    : 'bg-amber-500/15 border-2 border-amber-500 text-amber-300 hover:bg-amber-500/25'
+              }`}
+            >
+              {currentPause ? (
+                <Play className="w-7 h-7 fill-current shrink-0" />
+              ) : (
+                <Pause className="w-7 h-7 fill-current shrink-0" />
+              )}
+              <span className="flex flex-col items-start leading-tight">
+                <span className="text-2xl sm:text-3xl font-black tracking-tight">
+                  {currentPause ? 'RESUME DRILLING' : 'PAUSE'}
+                </span>
+                <span className="text-[11px] sm:text-xs font-extrabold uppercase tracking-wider opacity-80">
+                  {currentPause
+                    ? `Paused ${formatTimerDisplay(pausedForSeconds)} - ${currentPause.reason}`
+                    : `Stop the timer on pipe #${activeTimer.pipeNumber}`}
+                </span>
+              </span>
+            </button>
+          )}
 
           {/* Active Live Timer / Current Drill Pipe Banner (if drilling is active) */}
           {activeTimer.isActive && (
@@ -307,10 +357,17 @@ export const RigControlView: React.FC<RigControlViewProps> = ({
               className={`p-3 sm:p-4 rounded-xl border-2 flex flex-col sm:flex-row items-center justify-between gap-3 ${
                 sunlightMode
                   ? 'bg-black border-[#FFD700] text-[#FFD700]'
-                  : 'bg-emerald-950/80 border-emerald-500 text-emerald-200'
+                  : currentPause
+                    ? 'bg-amber-950/80 border-amber-500 text-amber-200'
+                    : 'bg-emerald-950/80 border-emerald-500 text-emerald-200'
               }`}
             >
               <div className="flex items-center gap-3">
+                {currentPause ? (
+                  <div className="w-10 h-10 rounded-full bg-amber-500 text-black flex items-center justify-center shrink-0">
+                    <Pause className="w-5 h-5 fill-current" />
+                  </div>
+                ) : (
                 <div className="relative w-10 h-10 rounded-full bg-emerald-500 text-black font-black flex items-center justify-center text-lg shrink-0">
                   <Flame className="w-6 h-6" />
                   {/* A small live dot instead of the whole banner pulsing. The
@@ -321,13 +378,17 @@ export const RigControlView: React.FC<RigControlViewProps> = ({
                     <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-400 border border-black/40" />
                   </span>
                 </div>
+                )}
                 <div>
                   <div className="font-black text-sm sm:text-base uppercase">
-                    Drilling Pipe #{activeTimer.pipeNumber} in progress
+                    {currentPause
+                      ? `Pipe #${activeTimer.pipeNumber} paused`
+                      : `Drilling Pipe #${activeTimer.pipeNumber} in progress`}
                   </div>
                   <div className="text-xs opacity-90">
-                    Started at: {new Date(activeTimer.startTime).toLocaleTimeString()} •{' '}
-                    Strata: {activeTimer.formation}
+                    {currentPause
+                      ? `Since ${new Date(currentPause.start).toLocaleTimeString()} • ${currentPause.reason}`
+                      : `Started at: ${new Date(activeTimer.startTime).toLocaleTimeString()} • Strata: ${activeTimer.formation}`}
                   </div>
                 </div>
               </div>
@@ -335,18 +396,15 @@ export const RigControlView: React.FC<RigControlViewProps> = ({
               <div className="flex items-center gap-4">
                 <div className="text-center">
                   <div className="text-[10px] uppercase font-bold opacity-75">
-                    Elapsed Duration
+                    Drilling Time
                   </div>
                   <div className="text-2xl sm:text-3xl font-mono font-black text-[#FFD700]">
                     {formatTimerDisplay(elapsedSeconds)}
                   </div>
                 </div>
-                <button
-                  onClick={onOpenEndPipeModal}
-                  className="px-4 py-2.5 rounded-xl font-black text-xs uppercase bg-[#FFD700] text-black hover:bg-[#e6c200] shadow-lg"
-                >
-                  End & Save Now →
-                </button>
+                {/* No second "end" button here: END PIPE above is the one way
+                    to finish a pipe, so the crew never wonders if two labels
+                    mean two different things. */}
                 {/* Without this the only way out of a pipe started by mistake
                     was to save a bogus record, which corrupts the depth log. */}
                 <button

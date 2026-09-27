@@ -93,6 +93,41 @@ export async function fetchEvents(boreholeId: string): Promise<AdminEvent[]> {
   }));
 }
 
+/** A Drilling Paused event that has not been resumed yet. */
+export function isOngoingPause(e: DrillingEvent & { deletedAt?: string | null }): boolean {
+  return e.type === 'Drilling Paused' && !e.deletedAt && !e.details?.resumedAt;
+}
+
+/**
+ * Rigs paused right now, keyed by borehole.
+ *
+ * The pause row is uploaded the moment the crew pauses, and gains
+ * details.resumedAt when they resume, end or cancel the pipe - so an open one
+ * means the rig was still stopped when the phone last had signal.
+ */
+export async function fetchOngoingPauses(): Promise<Map<string, AdminEvent>> {
+  const { data, error } = await client()
+    .from('drilling_events')
+    .select('*')
+    .eq('type', 'Drilling Paused')
+    .is('deleted_at', null)
+    .is('details->>resumedAt', null)
+    .order('occurred_at', { ascending: true });
+  if (error) throw new Error(error.message);
+
+  const byBorehole = new Map<string, AdminEvent>();
+  for (const row of data ?? []) {
+    const r = row as DrillingEventRow;
+    byBorehole.set(r.borehole_id, {
+      ...rowToEvent(r),
+      deletedAt: null,
+      createdBy: r.created_by,
+      photoPath: r.photo_path ?? null,
+    });
+  }
+  return byBorehole;
+}
+
 export interface Profile {
   id: string;
   name: string;

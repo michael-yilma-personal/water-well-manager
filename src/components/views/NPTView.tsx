@@ -249,9 +249,11 @@ export const NPTView: React.FC<NPTViewProps> = ({
                       </span>
                     </td>
                     <td className="p-3 font-black">
-                      {evt.isNPT ? (
+                      {evt.type === 'Drilling Paused' && !evt.details?.resumedAt ? (
+                        <span className="text-amber-500 uppercase">Paused now</span>
+                      ) : evt.isNPT ? (
                         <span className="text-red-500">
-                          {evt.durationMinutes} mins (NPT)
+                          {evt.durationMinutes ?? 0} mins (NPT)
                         </span>
                       ) : (
                         <span className="opacity-40">0 mins</span>

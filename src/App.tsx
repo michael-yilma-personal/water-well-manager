@@ -11,6 +11,7 @@ import {
   Borehole,
   DrillingEvent,
   EventType,
+  PipePause,
   PipeRecord,
   User,
 } from './types';
@@ -25,6 +26,14 @@ import { EndPipeModal } from './components/modals/EndPipeModal';
 import { EventModal } from './components/modals/EventModal';
 import { NewBoreholeModal } from './components/modals/NewBoreholeModal';
 import { SettingsModal } from './components/modals/SettingsModal';
+import { PausePipeModal } from './components/modals/PausePipeModal';
+import {
+  drillingSeconds,
+  isPaused,
+  openPause,
+  pauseTimer,
+  resumeTimer,
+} from './services/pipePause';
 import {
   generateShiftReportPDF,
   generateBoreholeExcelReport,
@@ -105,6 +114,7 @@ export default function App() {
 
   // Modals state
   const [isEndPipeModalOpen, setIsEndPipeModalOpen] = useState(false);
+  const [isPauseModalOpen, setIsPauseModalOpen] = useState(false);
   const [isEventModalOpen, setIsEventModalOpen] = useState(false);
   const [selectedEventType, setSelectedEventType] =
     useState<EventType>('Breakdown');
@@ -282,12 +292,82 @@ export default function App() {
     setIsEndPipeModalOpen(true);
   };
 
+  /**
+   * Close the Drilling Paused event that reports `pause`, now that drilling
+   * has picked up again (or the pipe ended or was cancelled while paused).
+   * Re-saving under the same id updates the row the office already has.
+   */
+  const finishPauseEvent = (pause: PipePause, endIso: string) => {
+    if (!activeBorehole) return;
+    const event = storage
+      .getEvents(activeBorehole.id)
+      .find((e) => e.id === pause.eventId);
+    // Deleted from the downtime list in the meantime: nothing to close.
+    if (!event) return;
+    storage.saveEvent({
+      ...event,
+      durationMinutes: Math.max(
+        1,
+        Math.round((Date.parse(endIso) - Date.parse(pause.start)) / 60000)
+      ),
+      details: { ...event.details, resumedAt: endIso },
+    });
+  };
+
+  /**
+   * Pause the pipe in progress. The timer stops counting drilling time, and a
+   * Drilling Paused event is queued straight away - not at END PIPE - so the
+   * office can see a stopped rig as soon as the phone has signal.
+   */
+  const handlePausePipe = (reason: string, note: string) => {
+    if (!activeBorehole || !activeTimer.isActive || isPaused(activeTimer)) return;
+    const nowIso = new Date().toISOString();
+    const eventId = createRecordId('ev');
+    storage.saveEvent({
+      id: eventId,
+      boreholeId: activeBorehole.id,
+      type: 'Drilling Paused',
+      title: `Pipe #${activeTimer.pipeNumber} paused: ${reason}`,
+      timestamp: nowIso,
+      isNPT: true,
+      operator: currentUser.name,
+      depthAtEvent: activeBorehole.currentDepth,
+      details: {
+        pipeNumber: activeTimer.pipeNumber,
+        pauseReason: reason,
+        ...(note.trim() ? { notes: note.trim() } : {}),
+      },
+      synced: false,
+    });
+    const next = pauseTimer(activeTimer, reason, nowIso, eventId);
+    storage.saveActiveTimer(next);
+    setActiveTimer(next);
+    setEvents(storage.getEvents(activeBorehole.id));
+    triggerVibration([60, 30, 60]);
+  };
+
+  const handleResumePipe = () => {
+    const pause = openPause(activeTimer);
+    if (!activeBorehole || !pause) return;
+    const nowIso = new Date().toISOString();
+    finishPauseEvent(pause, nowIso);
+    const next = resumeTimer(activeTimer, nowIso);
+    storage.saveActiveTimer(next);
+    setActiveTimer(next);
+    setEvents(storage.getEvents(activeBorehole.id));
+    triggerVibration([60, 40, 80]);
+  };
+
   // Handle END PIPE submit. The modal emits a draft without an id — mint one here
   // so every save appends instead of matching a previous record on `undefined`.
   const handleSavePipeRecord = (draft: Omit<PipeRecord, 'id'>) => {
     if (!activeBorehole) return;
 
     const record: PipeRecord = { ...draft, id: createRecordId('pipe') };
+
+    // Ended while paused: the pause stops where the pipe does.
+    const pausedAtEnd = openPause(activeTimer);
+    if (pausedAtEnd) finishPauseEvent(pausedAtEnd, record.endTime);
 
     // Save record to local storage & queue cloud sync. Storage owns the depth
     // update (currentDepth only ever advances to the deepest recorded pipe).
@@ -313,6 +393,7 @@ export default function App() {
 
     // Refresh state
     setPipeRecords(storage.getPipeRecords(activeBorehole.id));
+    setEvents(storage.getEvents(activeBorehole.id));
   };
 
   // Handle saving NPT / Drilling Event
@@ -483,6 +564,7 @@ export default function App() {
   const closeTopModal = React.useCallback(() => {
     const open: [boolean, (v: boolean) => void][] = [
       [isEndPipeModalOpen, setIsEndPipeModalOpen],
+      [isPauseModalOpen, setIsPauseModalOpen],
       [isEventModalOpen, setIsEventModalOpen],
       [isNewBoreholeModalOpen, setIsNewBoreholeModalOpen],
       [isSettingsModalOpen, setIsSettingsModalOpen],
@@ -493,6 +575,7 @@ export default function App() {
     return true;
   }, [
     isEndPipeModalOpen,
+    isPauseModalOpen,
     isEventModalOpen,
     isNewBoreholeModalOpen,
     isSettingsModalOpen,
@@ -519,9 +602,11 @@ export default function App() {
   const handleCancelPipe = () => {
     if (!activeBorehole || !activeTimer.isActive) return;
     const startedAt = new Date(activeTimer.startTime);
+    // Pauses are already logged as downtime of their own; counting them here
+    // too would report the same minutes twice.
     const minutes = Math.max(
       1,
-      Math.round((Date.now() - startedAt.getTime()) / 60000)
+      Math.round(drillingSeconds(activeTimer, Date.now()) / 60)
     );
     if (
       !window.confirm(
@@ -532,6 +617,9 @@ export default function App() {
     ) {
       return;
     }
+
+    const pausedAtCancel = openPause(activeTimer);
+    if (pausedAtCancel) finishPauseEvent(pausedAtCancel, new Date().toISOString());
 
     storage.saveEvent({
       id: createRecordId('ev'),
@@ -718,6 +806,8 @@ export default function App() {
             activeTimer={activeTimer}
             onStartPipe={handleStartPipe}
             onOpenEndPipeModal={handleOpenEndPipeModal}
+            onPausePipe={() => setIsPauseModalOpen(true)}
+            onResumePipe={handleResumePipe}
             onCancelPipe={handleCancelPipe}
             onOpenEventModal={(type) => {
               setSelectedEventType(type);
@@ -801,6 +891,14 @@ export default function App() {
         activeTimer={activeTimer}
         borehole={activeBorehole}
         onSavePipe={handleSavePipeRecord}
+        sunlightMode={sunlightMode}
+      />
+
+      <PausePipeModal
+        isOpen={isPauseModalOpen}
+        onClose={() => setIsPauseModalOpen(false)}
+        pipeNumber={activeTimer.pipeNumber}
+        onPause={handlePausePipe}
         sunlightMode={sunlightMode}
       />
 

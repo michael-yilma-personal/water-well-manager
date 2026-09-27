@@ -9,6 +9,7 @@ import {
   Download,
   FileText,
   LogOut,
+  Pause,
   RefreshCw,
   Search,
   Users,
@@ -16,8 +17,10 @@ import {
 import {
   fetchBoreholes,
   fetchEvents,
+  fetchOngoingPauses,
   fetchPipeRecords,
   fetchProfiles,
+  isOngoingPause,
   measuredDepth,
   signedPhotoUrl,
   type AdminBorehole,
@@ -132,6 +135,24 @@ function Stat({ label, value, tone }: { label: string; value: string; tone?: str
   );
 }
 
+/** Minutes as "1 h 05 min" once they pass an hour, so long stoppages read at a glance. */
+function formatMinutes(min: number): string {
+  if (min < 60) return `${min} min`;
+  return `${Math.floor(min / 60)} h ${String(min % 60).padStart(2, '0')} min`;
+}
+
+function PausedBadge({ pause }: { pause: AdminEvent }) {
+  return (
+    <span
+      title={pause.title}
+      className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-amber-500/15 border border-amber-500/50 text-amber-300 text-[11px] font-black uppercase whitespace-nowrap"
+    >
+      <Pause className="w-3 h-3 fill-current" />
+      Paused since {new Date(pause.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+    </span>
+  );
+}
+
 function EventPhoto({ event }: { event: AdminEvent }) {
   const [url, setUrl] = useState<string | null>(null);
   const [full, setFull] = useState<string | null>(null);
@@ -207,6 +228,7 @@ function BoreholeDetail({
   const drillSeconds = live.reduce((s, p) => s + p.durationSeconds, 0);
   const avgRate = drillSeconds > 0 ? depth / (drillSeconds / 3600) : 0;
   const strikes = live.filter((p) => p.waterStrike);
+  const ongoingPause = (events ?? []).find(isOngoingPause);
 
   const exportable = useMemo(
     () => ({ ...borehole, currentDepth: depth }),
@@ -264,6 +286,19 @@ function BoreholeDetail({
         />
       </div>
 
+      {ongoingPause && (
+        <div className="mx-6 mb-4 p-3 rounded border border-amber-500/50 bg-amber-500/10 text-amber-200 text-sm font-bold flex items-center gap-2 flex-wrap">
+          <Pause className="w-4 h-4 fill-current" />
+          Drilling paused on pipe #{ongoingPause.details.pipeNumber ?? '?'} since{' '}
+          {new Date(ongoingPause.timestamp).toLocaleString()} ·{' '}
+          {ongoingPause.details.pauseReason ?? ongoingPause.title}
+          {ongoingPause.details.notes ? ` · "${ongoingPause.details.notes}"` : ''}
+          <span className="text-amber-300/70 font-semibold">
+            — {ongoingPause.operator}. As of the rig&apos;s last upload.
+          </span>
+        </div>
+      )}
+
       {strikes.length > 0 && (
         <div className="mx-6 mb-4 p-3 rounded border border-cyan-500/40 bg-cyan-500/10 text-cyan-200 text-sm font-bold">
           Water struck at{' '}
@@ -282,7 +317,7 @@ function BoreholeDetail({
           <table className="w-full text-sm">
             <thead className="bg-slate-900 text-slate-400 text-[11px] uppercase tracking-wider">
               <tr>
-                {['#', 'Interval', 'Length', 'Duration', 'Rate', 'Formation', 'Water', 'PSI', 'Operator', 'Remarks'].map(
+                {['#', 'Interval', 'Length', 'Drilling', 'Paused', 'Rate', 'Formation', 'Water', 'PSI', 'Operator', 'Remarks'].map(
                   (h) => (
                     <th key={h} className="text-left p-2.5 font-black whitespace-nowrap">
                       {h}
@@ -304,6 +339,16 @@ function BoreholeDetail({
                   </td>
                   <td className="p-2.5">{p.pipeLength.toFixed(2)}m</td>
                   <td className="p-2.5 whitespace-nowrap">{Math.round(p.durationSeconds / 60)} min</td>
+                  <td
+                    className={`p-2.5 whitespace-nowrap ${p.pausedSeconds ? 'text-amber-300 font-bold' : 'text-slate-600'}`}
+                    title={p.pauses?.map((x) => x.reason).join(', ')}
+                  >
+                    {p.pausedSeconds
+                      ? `${formatMinutes(Math.max(1, Math.round(p.pausedSeconds / 60)))}${
+                          (p.pauses?.length ?? 0) > 1 ? ` (${p.pauses!.length}×)` : ''
+                        }`
+                      : '—'}
+                  </td>
                   <td className="p-2.5 whitespace-nowrap">{p.penetrationRate.toFixed(1)} m/hr</td>
                   <td className="p-2.5 whitespace-nowrap">{p.formation}</td>
                   <td className="p-2.5">{p.waterStrike ? 'YES' : '—'}</td>
@@ -316,7 +361,7 @@ function BoreholeDetail({
               ))}
               {pipes && pipes.length === 0 && (
                 <tr>
-                  <td colSpan={10} className="p-6 text-center text-slate-500">
+                  <td colSpan={11} className="p-6 text-center text-slate-500">
                     No pipe records have reached the server for this borehole yet.
                   </td>
                 </tr>
@@ -351,7 +396,13 @@ function BoreholeDetail({
                   <td className="p-2.5">{e.title}</td>
                   <td className="p-2.5 whitespace-nowrap">{e.depthAtEvent?.toFixed(1)}m</td>
                   <td className="p-2.5 whitespace-nowrap">
-                    {e.durationMinutes ? `${e.durationMinutes} min` : '—'}
+                    {isOngoingPause(e) ? (
+                      <span className="text-amber-300 font-black uppercase text-xs">Ongoing</span>
+                    ) : e.durationMinutes ? (
+                      formatMinutes(e.durationMinutes)
+                    ) : (
+                      '—'
+                    )}
                   </td>
                   <td className={`p-2.5 font-black ${e.isNPT ? 'text-rose-400' : 'text-slate-500'}`}>
                     {e.isNPT ? 'YES' : '—'}
@@ -389,12 +440,15 @@ function BoreholeList({
   onOpenCrew: () => void;
 }) {
   const [rows, setRows] = useState<AdminBorehole[] | null>(null);
+  const [pauses, setPauses] = useState<Map<string, AdminEvent>>(new Map());
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(() => {
     setBusy(true);
+    // A failed pause lookup must not hide the boreholes themselves.
+    fetchOngoingPauses().then(setPauses).catch(() => setPauses(new Map()));
     fetchBoreholes()
       .then(setRows)
       .catch((e) => setError(String(e)))
@@ -486,7 +540,9 @@ function BoreholeList({
                   <td className="p-3 whitespace-nowrap">
                     {b.currentDepth.toFixed(1)} / {b.targetDepth} m
                   </td>
-                  <td className="p-3 uppercase text-xs font-black">{b.status}</td>
+                  <td className="p-3 uppercase text-xs font-black">
+                    {pauses.get(b.id) ? <PausedBadge pause={pauses.get(b.id)!} /> : b.status}
+                  </td>
                   <td className="p-3 whitespace-nowrap">
                     {profiles.get(b.createdBy)?.name ?? '—'}
                   </td>

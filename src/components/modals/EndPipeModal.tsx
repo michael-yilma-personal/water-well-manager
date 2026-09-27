@@ -17,6 +17,11 @@ import {
   AlertTriangle,
 } from 'lucide-react';
 import { ModalShell } from '../../ui/ModalShell';
+import {
+  closeOpenPause,
+  drillingSeconds,
+  pausedSeconds,
+} from '../../services/pipePause';
 
 interface EndPipeModalProps {
   isOpen: boolean;
@@ -77,9 +82,15 @@ export const EndPipeModal: React.FC<EndPipeModalProps> = ({
 
   // Calculate automatic metrics
   const endTime = new Date().toISOString();
-  const startEpoch = new Date(activeTimer.startTime).getTime();
   const endEpoch = new Date(endTime).getTime();
-  const durationSeconds = Math.max(1, Math.round((endEpoch - startEpoch) / 1000));
+  // Ending while paused closes the pause here. Duration is drilling time only,
+  // so the rate reflects the rock rather than how long the crew stood down.
+  const pauses = closeOpenPause(activeTimer.pauses, endTime);
+  const pausedSecs = pausedSeconds(pauses, endEpoch);
+  const durationSeconds = Math.max(
+    1,
+    drillingSeconds({ startTime: activeTimer.startTime, pauses }, endEpoch)
+  );
   const durationHours = durationSeconds / 3600;
   const pipeLength = Number(
     activeTimer.pipeLength ?? borehole.defaultPipeLength ?? 4.55
@@ -115,6 +126,8 @@ export const EndPipeModal: React.FC<EndPipeModalProps> = ({
       startTime: activeTimer.startTime,
       endTime,
       durationSeconds,
+      pausedSeconds: pausedSecs,
+      pauses: pauses.length > 0 ? pauses : undefined,
       penetrationRate,
       formation,
       waterStrike,
@@ -206,7 +219,7 @@ export const EndPipeModal: React.FC<EndPipeModalProps> = ({
             </div>
             <div>
               <div className="text-xs opacity-75 font-bold uppercase tracking-wider">
-                Duration
+                Drilling Time
               </div>
               <div className="text-lg sm:text-xl font-black text-amber-400">
                 {formatDuration(durationSeconds)}
@@ -221,6 +234,14 @@ export const EndPipeModal: React.FC<EndPipeModalProps> = ({
               </div>
             </div>
           </div>
+
+          {pauses.length > 0 && (
+            <div className="p-3 rounded-xl border border-amber-500/50 bg-amber-500/10 text-amber-200 text-xs font-bold">
+              Paused {pauses.length === 1 ? 'once' : `${pauses.length} times`} for{' '}
+              {formatDuration(pausedSecs)} ({pauses.map((p) => p.reason).join(', ')}).
+              Not counted in drilling time or rate.
+            </div>
+          )}
 
           {/* Geological Formation (Lithology) */}
           <div className="space-y-2">

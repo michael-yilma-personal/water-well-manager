@@ -70,7 +70,12 @@ export interface PipeRecord {
   pipeLength: number; // meters
   startTime: string; // ISO string
   endTime: string; // ISO string
+  /** Time the bit was actually drilling: start to end, less any pauses. */
   durationSeconds: number; // seconds
+  /** Total time this pipe spent paused. Absent on pipes never paused. */
+  pausedSeconds?: number;
+  /** Each pause taken during this pipe, oldest first. */
+  pauses?: PipePause[];
   penetrationRate: number; // m/hr
   formation: string;
   waterStrike: boolean;
@@ -95,7 +100,8 @@ export type EventType =
   | 'Water Strike'
   | 'Change Formation'
   | 'Take Photo'
-  | 'General Note';
+  | 'General Note'
+  | 'Drilling Paused';
 
 export interface DrillingEvent {
   /**
@@ -127,6 +133,10 @@ export interface DrillingEvent {
     staticWaterLevel?: number;
     photoUrl?: string;
     notes?: string;
+    /** Drilling Paused: which pipe, why, and when drilling picked up again. */
+    pipeNumber?: number;
+    pauseReason?: string;
+    resumedAt?: string;
   };
   synced: boolean;
 }
@@ -154,6 +164,18 @@ export interface ShiftLog {
   notes: string;
 }
 
+/**
+ * One stretch of a pipe where drilling stopped and the timer was held.
+ * An open pause (no `end`) means the rig is paused right now.
+ */
+export interface PipePause {
+  start: string; // ISO
+  end?: string; // ISO
+  reason: string;
+  /** The Drilling Paused event that reports this pause to the office. */
+  eventId: string;
+}
+
 export interface ActivePipeTimer {
   boreholeId?: string;
   isActive: boolean;
@@ -168,6 +190,7 @@ export interface ActivePipeTimer {
   bitDiameter?: number;
   operator?: string;
   remarks?: string;
+  pauses?: PipePause[];
 }
 
 export interface AppSettings {

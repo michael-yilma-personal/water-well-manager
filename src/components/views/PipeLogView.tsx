@@ -231,6 +231,11 @@ export const PipeLogView: React.FC<PipeLogViewProps> = ({
                       </td>
                       <td className="p-3">
                         {Math.round(rec.durationSeconds / 60)} min
+                        {!!rec.pausedSeconds && (
+                          <div className="text-[10px] font-bold text-amber-500">
+                            +{Math.max(1, Math.round(rec.pausedSeconds / 60))} min paused
+                          </div>
+                        )}
                       </td>
                       <td className="p-3">
                         <span className="px-2 py-0.5 rounded bg-blue-500/10 text-blue-500 font-black">

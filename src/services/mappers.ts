@@ -18,6 +18,7 @@ import type {
   DrillingEvent,
   EventType,
   GPSCoordinates,
+  PipePause,
   PipeRecord,
   ShiftLog,
   WaterStrikeDetails,
@@ -58,6 +59,8 @@ export type PipeRecordRow = {
   start_time: string | null;
   end_time: string | null;
   duration_seconds: number | null;
+  paused_seconds: number | null;
+  pauses: PipePause[] | null;
   penetration_rate: number | null;
   formation: string | null;
   water_strike: boolean;
@@ -192,6 +195,9 @@ export function pipeToRow(record: PipeRecord, userId: string): PipeRecordRow {
     start_time: record.startTime,
     end_time: record.endTime,
     duration_seconds: record.durationSeconds,
+    // 0, not null: null is reserved for rows from builds that predate pausing.
+    paused_seconds: record.pausedSeconds ?? 0,
+    pauses: record.pauses ?? null,
     penetration_rate: record.penetrationRate,
     formation: record.formation,
     water_strike: record.waterStrike,
@@ -221,6 +227,8 @@ export function rowToPipe(row: PipeRecordRow): PipeRecord {
     startTime: row.start_time ?? row.recorded_at,
     endTime: row.end_time ?? row.recorded_at,
     durationSeconds: row.duration_seconds ?? 0,
+    pausedSeconds: orUndefined(row.paused_seconds),
+    pauses: orUndefined(row.pauses),
     penetrationRate: row.penetration_rate ?? 0,
     formation: row.formation ?? '',
     waterStrike: row.water_strike,

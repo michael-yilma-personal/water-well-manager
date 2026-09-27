@@ -46,6 +46,15 @@ const pipeRecord: PipeRecord = {
   startTime: '2026-08-05T08:00:00.000Z',
   endTime: '2026-08-05T08:32:00.000Z',
   durationSeconds: 1920,
+  pausedSeconds: 600,
+  pauses: [
+    {
+      start: '2026-08-05T08:10:00.000Z',
+      end: '2026-08-05T08:20:00.000Z',
+      reason: 'Waiting on fuel or water',
+      eventId: 'eeeeeeee-0000-0000-0000-000000000001',
+    },
+  ],
   penetrationRate: 8.53,
   formation: 'Fractured Basalt (Water Bearing)',
   waterStrike: true,
@@ -149,8 +158,21 @@ test('demo and sync bookkeeping never reach the server', () => {
 });
 
 test('optional fields stay absent rather than becoming null noise', () => {
-  const minimal: PipeRecord = { ...pipeRecord, waterStrikeDetails: undefined, photoUrl: undefined };
+  const minimal: PipeRecord = {
+    ...pipeRecord,
+    waterStrikeDetails: undefined,
+    photoUrl: undefined,
+    pausedSeconds: undefined,
+    pauses: undefined,
+  };
   const back = rowToPipe(pipeToRow(minimal, UID));
   assert.equal(back.waterStrikeDetails, undefined);
   assert.equal(back.photoUrl, undefined);
+  assert.equal(back.pauses, undefined);
+});
+
+test('a pipe never paused reports zero paused time, not unknown', () => {
+  // The office reads null as "this device predates pausing", 0 as "no pause".
+  const row = pipeToRow({ ...pipeRecord, pausedSeconds: undefined, pauses: undefined }, UID);
+  assert.equal(row.paused_seconds, 0);
 });
