@@ -23,6 +23,7 @@ import {
   Plus,
   Shield,
   UserCheck,
+  ClipboardList,
   HardHat,
   AlertCircle,
   UserCircle2
@@ -77,6 +78,8 @@ export const Header: React.FC<HeaderProps> = ({
     switch (role) {
       case 'Driller':
         return sunlightMode ? 'bg-amber-400 text-black font-extrabold' : 'bg-amber-500 text-white font-bold';
+      case 'Data Logger':
+        return sunlightMode ? 'bg-teal-400 text-black font-extrabold' : 'bg-teal-600 text-white font-bold';
       case 'Supervisor':
         return sunlightMode ? 'bg-blue-400 text-black font-extrabold' : 'bg-blue-600 text-white font-bold';
       case 'Administrator':
@@ -88,6 +91,8 @@ export const Header: React.FC<HeaderProps> = ({
     switch (role) {
       case 'Driller':
         return <HardHat className="w-4 h-4 mr-1" />;
+      case 'Data Logger':
+        return <ClipboardList className="w-4 h-4 mr-1" />;
       case 'Supervisor':
         return <UserCheck className="w-4 h-4 mr-1" />;
       case 'Administrator':
@@ -458,9 +463,11 @@ export const Header: React.FC<HeaderProps> = ({
                     className={`text-[10px] font-extrabold px-2 py-0.5 rounded uppercase shrink-0 ${
                       currentUser.role === 'Driller'
                         ? 'bg-amber-500/20 text-amber-300'
-                        : currentUser.role === 'Supervisor'
-                          ? 'bg-blue-500/20 text-blue-300'
-                          : 'bg-purple-500/20 text-purple-300'
+                        : currentUser.role === 'Data Logger'
+                          ? 'bg-teal-500/20 text-teal-300'
+                          : currentUser.role === 'Supervisor'
+                            ? 'bg-blue-500/20 text-blue-300'
+                            : 'bg-purple-500/20 text-purple-300'
                     }`}
                   >
                     {currentUser.role}

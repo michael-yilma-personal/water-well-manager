@@ -24,6 +24,8 @@ import {
 
 const ROLE_HELP: Record<string, string> = {
   Driller: 'Logs pipes on a rig. Sees only their own boreholes.',
+  'Data Logger':
+    'Records pipes, formations and events for the rig. Same access as Driller; logged under their own name.',
   Supervisor:
     'Currently identical to Driller — crew-wide visibility is not built yet.',
   Administrator:
@@ -97,6 +99,7 @@ function AddForm({ onAdded }: { onAdded: () => void }) {
           Role
           <select value={role} onChange={(e) => setRole(e.target.value)} className={`mt-1 ${field}`}>
             <option>Driller</option>
+            <option>Data Logger</option>
             <option>Supervisor</option>
             <option>Administrator</option>
           </select>
