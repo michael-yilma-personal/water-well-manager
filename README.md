@@ -117,6 +117,7 @@ are rejected as downgrades.
 npm run lint            # tsc --noEmit
 npm test                # 79 unit tests
 npm run test:e2e        # rls, new-crew, offline sync, photos, dashboard
+npm run test:unsupported # old-browser message on the built output
 npm run test:apk        # offline capture -> sync on a connected device
 npm run test:apk-photos # photo pipeline on a connected device
 ```
@@ -177,6 +178,20 @@ Removing someone depends on whether they have logged work:
   carry `created_by`, so erasing the account would destroy the record of who
   drilled. They can no longer sign in; their name still resolves in reports.
   Reversible with **Restore**.
+
+## Supported browsers
+
+The bundle is built for Safari 14+ syntax and Tailwind 4 styling, and the app
+itself needs `crypto.randomUUID` and `structuredClone`. In practice that means
+**iPadOS/iOS 15.4 or newer, Chrome 111 or newer** (including Android System
+WebView), and current Firefox. Tell people iOS 16; the 15.x devices that pass
+the check are the ones that cannot go any higher.
+
+Anything older gets a plain "software is too old" page instead of a blank one,
+from the small inline script at the top of `index.html` and `admin.html`. It is
+deliberately ES5 and self-contained, because on a browser like iOS 12 Safari
+the bundle fails to parse and that script is the only code that runs. Keep the
+two copies identical; `src/utils/supportGate.test.ts` checks that.
 
 ## Known gaps
 
