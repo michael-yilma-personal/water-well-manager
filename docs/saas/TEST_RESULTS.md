@@ -1,0 +1,23 @@
+# Drill SaaS — Test Results
+
+One entry per run that counted, newest first. Format and rules: `docs/saas/WORKFLOW.md`.
+
+## 2026-11-15 — Workflow setup
+
+| # | When | Tree | Command | Result | Notes |
+|---|---|---|---|---|---|
+| 1 | Hook pipe tests | working tree | `scripts/hooks/guard-bash.sh` with 15 sample commands | Pass | Denied: push to main, force-push, `gh pr merge`. Asked: `supabase db push`, production ref in a command, `npm run test:rls`, `python3 e2e/rls_e2e.py`. Allowed: feature-branch push, `gh pr create`, `--local` Supabase commands, staging-targeted e2e, `npm test`. |
+| 2 | Secret scan | working tree | `scripts/check-secrets.sh` | Pass | No secret-shaped strings in tracked files. |
+| 3 | DEMO-1 tests first | working tree | `node --test "scripts/*.test.mjs"` | Red, as intended | Test Engineer wrote `scripts/check-migrations.test.mjs` before the module existed. Fails with `ERR_MODULE_NOT_FOUND` for `check-migrations.mjs`: red for the right reason. Scope check: only the test file changed. |
+| 4 | Stop hook, live | working tree | `scripts/hooks/stop-gate.sh` (fired by Claude Code) | Blocked the turn | Gate was red (module missing) while the Lead tried to end a turn; the hook blocked once and returned the gate output. Confirms the hook is live. |
+| 5 | DEMO-1 after implementation | working tree | `scripts/gate.sh full` | Green | 6 of 6 gates. Script tests: 148 passed, 0 failed. Unit tests pass. Build passes. Scope check: Developer changed 1 file, no test files. |
+| 6 | DEMO-1 independent validation | working tree | `node --test "scripts/*.test.mjs"` | Red: 175 tests, 158 pass, 17 fail | Test Engineer added 27 tests after reading the implementation; 17 expose false passes and wrong exit codes (RF-001 to RF-006). Scope check: only the test file changed. |
+| 7 | Security review | working tree | Reviewer pipe-tested `guard-bash.sh` on about 110 commands; ran the migration check on 20 in-memory cases | BLOCK: 5 High, 6 Medium, 4 Low | RF-010 to RF-024. Reviewer changed no files. |
+| 8 | DEMO-1 after fix round | working tree | `node --test scripts/check-migrations.test.mjs`; `node scripts/check-migrations.mjs` | Green: 175 of 175; exit 0 on the real migrations | Run by the Lead, not taken from the Developer's report. RF-001 to RF-006 fixed. |
+| 9 | WF-4 tests first | working tree | `node --test "scripts/**/*.test.mjs"` | Red, as intended: 1,491 tests, 794 pass, 697 fail | Five new test files for the guard hook, scope check, secret scan, Stop hook and session-start hook, written from the WF-4 criteria before the scripts were changed. |
+| 10 | WF-4 after implementation | working tree | `scripts/gate.sh full`; `node --test "scripts/**/*.test.mjs"` | Green: 6 of 6 gates; 1,491 of 1,491 script tests | Run by the Lead. Changed files are exactly those the WF-4 brief authorised; no test file was touched. Quick gate takes about 36 s, full about 39 s. |
+| 11 | Second security review | working tree | Reviewer ran the guard on about 215 commands with fake refs, the scope check and secret scan in throwaway repositories, and the full script suite | CHANGES REQUESTED: 0 Critical, 0 High, 6 Medium, 8 Low | Re-verified RF-001 to RF-024. New findings RF-025 to RF-040. Reviewer changed no files. |
+| 12 | WF-4 independent validation | working tree | `node --test "scripts/**/*.test.mjs"` | Red: 2,279 tests, 2,192 pass, 86 fail, 1 skipped | Test Engineer added about 790 tests, including the first tests for `gate.sh`. All 1,491 earlier tests still pass. The 86 failures are in 26 `validation:` blocks and overlap the second review. Scope check: test files only. |
+| 13 | WF-5 after implementation | working tree | `scripts/gate.sh full`; `node --test "scripts/**/*.test.mjs"` | Green: 6 of 6 gates; 2,279 script tests, 2,278 pass, 0 fail, 1 skipped | Run by the Lead. The skip is a branch-name case the file system cannot represent. Changed files are exactly those the WF-5 brief authorised; no test file was touched. |
+| 14 | Third security review | working tree | About 400 guard invocations with fake refs; 40 scope-check scenarios; Stop gate in throwaway repositories; `scripts/gate.sh full` on a reconstruction of the commit | NO BLOCKING FINDINGS: 0 Critical, 0 High, 0 Medium, 8 Low | RF-025 to RF-037 verified. New Low findings RF-041 to RF-048, scheduled into Phase 0. Reviewer changed no files. |
+| 15 | First CI run | commit `8fc667b`, pull request 3 | GitHub Actions `CI`: gate job and database job | Green: both jobs | Gate: 6 of 6 on Ubuntu with Node 22. Database: 6 migration files, 6 recorded as applied; 5 tables in `public`, all with row level security; schema lint clean. Closes RF-030 and RF-047. |

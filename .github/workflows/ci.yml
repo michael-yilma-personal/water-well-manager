@@ -1,0 +1,116 @@
+# Quality gates for every pull request and every push to main.
+#
+# The `gates` job runs scripts/gate.sh, the same script developers and Claude
+# Code hooks run locally. The `database` job applies every migration to a
+# fresh local Postgres (Supabase's own image, so auth.users, storage and the
+# anon/authenticated roles exist), then checks the result in the catalog:
+# every migration file is recorded as applied, and every table in `public`
+# has row level security enabled. The catalog check is the authority on RLS;
+# the static check in the gate is only a fast hint.
+#
+# The runner has internet access, but nothing here holds credentials for any
+# Supabase project: no secrets are passed to these jobs, the token GitHub
+# issues is read-only (see `permissions`), and the checkout steps do not
+# leave it in the git configuration (`persist-credentials: false`). The only
+# database is the throwaway one the `database` job starts on 127.0.0.1.
+# Tests that need a running API (RLS isolation, Edge Function authorization,
+# offline sync) join this workflow in SaaS Phase 0/1; see
+# docs/saas/WORKFLOW.md.
+#
+# Actions are pinned to commit SHAs and the Supabase CLI to a version, so a
+# moved tag cannot change what runs here. Update them deliberately.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gates:
+    name: Type check, unit tests, build, static checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Quality gate (full)
+        run: scripts/gate.sh full
+      - name: Dependency audit (informational)
+        # Reported, not enforced: the current tree has known advisories that
+        # need their own decision. They are not recorded anywhere else; this
+        # step's log is the only place they are listed.
+        continue-on-error: true
+        run: npm audit --omit=dev --audit-level=high
+
+  database:
+    name: Migrations apply cleanly, RLS on every public table
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: supabase/setup-cli@1dedf2c611547ede7232d26866dd3c56ab903bbb # v1
+        with:
+          version: 2.111.0
+      - name: Create a local Supabase config if the repo has none
+        run: test -f supabase/config.toml || supabase init --force
+      - name: Start Postgres and apply all migrations
+        run: supabase db start
+      - name: Every migration file is recorded as applied
+        # The local stack's fixed defaults (Supabase CLI): not a secret, and
+        # reachable only from this runner.
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: "54322"
+          PGUSER: postgres
+          PGPASSWORD: postgres
+          PGDATABASE: postgres
+        run: |
+          set -euo pipefail
+          files="$(find supabase/migrations -maxdepth 1 -type f -name '*.sql' | wc -l | tr -d '[:space:]')"
+          applied="$(psql -X -v ON_ERROR_STOP=1 -At -c 'select count(*) from supabase_migrations.schema_migrations')"
+          echo "Migration files: ${files}. Recorded as applied: ${applied}."
+          if [ "${files}" -eq 0 ]; then
+            echo "::error::No migration files were found in supabase/migrations."
+            exit 1
+          fi
+          if [ "${files}" != "${applied}" ]; then
+            echo "::error::${files} migration file(s) but ${applied} recorded as applied."
+            psql -X -At -c 'select version from supabase_migrations.schema_migrations order by 1' || true
+            exit 1
+          fi
+      - name: Every table in public has row level security enabled
+        # The local stack's fixed defaults (Supabase CLI): not a secret, and
+        # reachable only from this runner.
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: "54322"
+          PGUSER: postgres
+          PGPASSWORD: postgres
+          PGDATABASE: postgres
+        run: |
+          set -euo pipefail
+          tables="$(psql -X -v ON_ERROR_STOP=1 -At -c "select count(*) from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'public' and c.relkind in ('r', 'p')")"
+          missing="$(psql -X -v ON_ERROR_STOP=1 -At -c "select c.relname from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'public' and c.relkind in ('r', 'p') and c.relrowsecurity = false order by c.relname")"
+          echo "Tables in public: ${tables}."
+          if [ -n "${missing}" ]; then
+            echo "::error::Row level security is disabled on these tables in public:"
+            echo "${missing}"
+            exit 1
+          fi
+          echo "Row level security is enabled on every table in public."
+      - name: Lint the schema
+        run: supabase db lint --local --fail-on error
