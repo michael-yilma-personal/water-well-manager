@@ -32,3 +32,6 @@ android/app/src/main/assets/capacitor.plugins.json
 .vscode/
 *.iml
 _to_delete/
+
+# --- SaaS workflow: finding detail that must not be published -------------
+docs/saas/private/
