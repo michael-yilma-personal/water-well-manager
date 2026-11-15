@@ -4,18 +4,18 @@ Requirements: `docs/SAAS_ARCHITECTURE_PROPOSAL.md`. How the work is run: `docs/s
 
 ## Current state
 
-- **Phase:** Workflow setup is complete locally and going out as a pull request. Phase 0 (approved) is next. Phase 1 is not approved.
-- **Branch:** `chore/agent-workflow` (from `main` at `2513737`).
-- **In progress:** Opening the workflow pull request from `chore/agent-workflow` and watching its first CI run (closes RF-030 and RF-047).
-- **Next step:** Phase 0 on `saas/phase-0-preparation`, branched from `chore/agent-workflow` so it has the tooling. Start with P0-1, then P0-6 (it must precede setting a staging ref), then P0-2 to P0-5.
+- **Phase:** Phase 0 — Preparation (approved). Phase 1 is not approved.
+- **Branch:** `saas/phase-0-preparation`, branched from `chore/agent-workflow` at the commit after `8fc667b`. The workflow tooling is pull request 3 (CI green), awaiting the owner's merge.
+- **In progress:** P0-1.
+- **Next step:** P0-1, then P0-6 (it must precede setting a staging ref), then P0-2 to P0-5, P0-7, P0-8. Stop after Phase 0 and summarise for the owner.
 - **Waiting on the owner:** nothing for Phase 0. Phase 1 needs the owner's review of Phase 0 first.
 
 ## Phases
 
 | Phase | Branch | Status | Pull request |
 |---|---|---|---|
-| Workflow setup | `chore/agent-workflow` | Done; pull request open, awaiting the owner | see below |
-| 0 Preparation | `saas/phase-0-preparation` | Approved, not started | — |
+| Workflow setup | `chore/agent-workflow` | Done; CI green; awaiting the owner's merge | https://github.com/michael-yilma-personal/water-well-manager/pull/3 |
+| 0 Preparation | `saas/phase-0-preparation` | In progress | — |
 | 1 Tenancy in the database | `saas/phase-1-tenancy` | Not approved | — |
 | 2 Organization-aware apps | — | Not approved | — |
 | 3 Subscriptions and entitlements | — | Not approved | — |

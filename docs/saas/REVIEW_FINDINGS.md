@@ -14,7 +14,6 @@ None of these blocks the workflow pull request: there is no open Critical, High 
 |---|---|---|---|---|---|
 | RF-007 | DEMO-1 | TE | Low | `alter table if exists x enable row level security` placed before `create table x` counts, though in Postgres it is a no-op. | Deferred: the catalog check in CI is the authority on RLS and catches it; stated as a limit in the script header. |
 | RF-028 | WF-4 | SR2 | Medium | An enforcement file can be edited, used and restored between two snapshots without the scope check seeing it. | Deferred: no cheap control exists inside the working copy (file tools can be restricted, a shell cannot). It needs a deliberate bypass, the same class as the CLI login gap. Stated in WORKFLOW.md and the script header. |
-| RF-030 | WF-4 | SR2 | Medium | Nothing in the CI workflow has been run. | Pins verified upstream by the Lead; `persist-credentials: false` set. Closes when the first CI run on the pull request is green and recorded. |
 | RF-038 | WF-4 | SR2 | Low | Owner approvals live in `docs/saas/IMPLEMENTATION_STATUS.md`, and a change there by any agent is only a note from the scope check. | Deferred to P0-6 (it was not implemented in WF-5; SR3 caught the row saying otherwise). Until then the Lead reads the `docs/saas/` diff before every commit. |
 | RF-040 | WF-2 | SR2 | Info | Whether a hook "ask" produces a prompt in unattended or bypass-permissions runs is unconfirmed. | Open: to be checked before any unattended run. |
 | RF-041 | WF-5 | SR3 | Low | The Stop-gate cache key omits the names of untracked files inside an untracked directory, so a rename there can reuse a green result. | Confirmed. P0-6. |
@@ -23,7 +22,6 @@ None of these blocks the workflow pull request: there is no open Critical, High 
 | RF-044 | WF-5 | SR3 | Low | The gate's `npm test` fallback (used only when `tsx` is missing) has no zero-test guard. | Confirmed; not reachable in this repository today. P0-6: a missing `tsx` is a red gate. |
 | RF-045 | WF-5 | SR3 | Low | `python3 -m unittest e2e.<module>` is allowed by the guard. | Confirmed. P0-6. The real control is the suites refusing production (P0-3). |
 | RF-046 | WF-5 | SR3 | Low | A `__tests__/` folder under `.claude/` or `.github/` counts as test files; `.git/info/exclude`, `.gitattributes` and the Stop-gate key file are unseen by the scope check. | Confirmed. P0-6. |
-| RF-047 | WF-5 | SR3 | Low | The suite and CI have only ever run on macOS with Node 24; CI is Ubuntu with Node 22. | Closes with RF-030 on the first green CI run. |
 | RF-048 | WF-5 | SR3 | Info | Once the e2e suites point at staging, the guard will still ask for every e2e run and management script, which would stall autonomous Phase 0 work. | P0-6: change rule 9 once the suites refuse the production project (P0-3). |
 
 Needs the owner (not a defect in the change): `main` has no branch protection on GitHub. Until it does, "agents never push to or merge into main" rests on the tripwire and the agents' instructions.
@@ -67,6 +65,8 @@ Needs the owner (not a defect in the change): `main` has no branch protection on
 | RF-036 | WF-4 | SR2 | Low | Secret-scan misses. | Fixed; verified by SR3. |
 | RF-037 | WF-4 | SR2 | Low | The Stop gate ran on every turn regardless of changes. | Fixed with a last-green cache; verified by SR3 (remainder: RF-041). |
 | RF-039 | WF-3 | SR2 | Low | Overclaims and stale text. | Fixed by the Lead; SR3 found two more stale lines in WORKFLOW.md, corrected. |
+| RF-030 | WF-4 | SR2 | Medium | Nothing in the CI workflow had been run. | Closed: pins verified upstream; first CI run green on pull request 3 (TEST_RESULTS 15). |
+| RF-047 | WF-5 | SR3 | Low | The suite had only run on macOS with Node 24. | Closed: green on Ubuntu with Node 22 (TEST_RESULTS 15). |
 
 ## Detail
 
