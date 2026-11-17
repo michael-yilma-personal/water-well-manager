@@ -5,9 +5,9 @@ Requirements: `docs/SAAS_ARCHITECTURE_PROPOSAL.md`. How the work is run: `docs/s
 ## Current state
 
 - **Phase:** Phase 0 — Preparation (approved). Phase 1 is approved to start after Phase 0, on staging only; its production migration is not approved.
-- **Branch:** `saas/phase-0-preparation`, branched from `chore/agent-workflow` at the commit after `8fc667b`. The workflow tooling is pull request 3 (CI green), awaiting the owner's merge.
-- **In progress:** nothing in Phase 0. Pull request 4 is open with green CI (TEST_RESULTS 39), awaiting the owner's review and merge. Phase 1 starts on `saas/phase-1-tenancy`, on staging only.
-- **Next step:** Phase 1, task P1-1, tests first. Then Phase 1 on `saas/phase-1-tenancy`. **Do not check out `main` or any branch that predates the tooling until the pull requests are merged (RF-059).**
+- **Branch:** `saas/phase-1-tenancy`, branched from `saas/phase-0-preparation` at `8d07755`. Pull requests 3 (workflow tooling) and 4 (Phase 0) are open with green CI, awaiting the owner's merge, in that order.
+- **In progress:** Phase 1, tasks P1-1, P1-2 and P1-4: implemented and green on a throwaway local Postgres (TEST_RESULTS 41); first run on the real image in CI and the security review are under way. Staging is not touched until both pass.
+- **Next step:** fix what CI and the review find; then apply to staging and run P1-3, P1-5, P1-6. **Do not check out `main` or any branch that predates the tooling until the pull requests are merged (RF-059).**
 - **Waiting on the owner:** the action recorded for RF-050 (deferred by the owner; does not block development); approval to delete the `probe` function from production (RF-049); confirmation of the staging rule (RF-054); branch protection on `main`; merging the workflow and Phase 0 pull requests so `main` stops carrying the production link files (RF-059).
 
 ## Phases
@@ -44,10 +44,10 @@ Defaults taken where the proposal left a decision open (each can be changed befo
 
 | Id | Task | Status | Evidence |
 |---|---|---|---|
-| P1-1 | Reusable foundation migration `saas_core`: organizations, memberships, platform administrators, audit log, helper functions | Not started | — |
-| P1-2 | Drill migration `drill_tenancy`: founding organization, memberships from profiles, `org_id` on the four record tables, compatibility triggers for installed builds, organization-scoped policies for tables and photos | Not started | — |
+| P1-1 | Reusable foundation migration `saas_core`: organizations, memberships, platform administrators, audit log, helper functions | Implemented; green locally; CI and review pending | TEST_RESULTS 40, 41 |
+| P1-2 | Drill migration `drill_tenancy`: founding organization, memberships from profiles, `org_id` on the four record tables, compatibility triggers for installed builds, organization-scoped policies for tables and photos | Implemented; green locally; CI and review pending; not yet on staging | TEST_RESULTS 40, 41 |
 | P1-3 | Tenant-isolation suite `e2e/saas/tenant_isolation_e2e.py` and a fixture that creates a second organization on staging | Not started | — |
-| P1-4 | Schema check: every table in `public` has RLS and is organization-scoped or allowlisted; run in CI's database job | Not started | — |
+| P1-4 | Schema check: every table in `public` has RLS and is organization-scoped or allowlisted; run in CI's database job | Implemented; first CI run pending | TEST_RESULTS 41 |
 | P1-5 | Compatibility proof: the 21 existing suites, unchanged, pass against the migrated staging database (the current app sends no `org_id`, so it stands in for the installed 1.1.7 build) | Not started | — |
 | P1-6 | Migration rehearsal on staging data: row counts before and after match; every row carries the founding `org_id`; a written rollback script | Not started | — |
 
@@ -91,6 +91,16 @@ Defaults taken where the proposal left a decision open (each can be changed befo
 15. `e2e/saas/tenant_isolation_e2e.py` proves criterion 12 with real sign-ins against staging: two organizations with a Driller, Supervisor and Administrator each, one user who belongs to both, one deactivated member. For every one of the four tables and every verb; plus profiles, memberships, organizations and photos. It also proves the positive cases (each role still does what it could). It takes its target from `e2e/_target.py`.
 16. A schema check fails if any table in `public` lacks RLS, or has neither an `org_id` column nor an entry on a short allowlist (`profiles`, `organizations`, `memberships`, `platform_admins`, `audit_log`). It runs in CI against the database built from migrations.
 17. The static migration check, the catalog RLS check and the migration count check in CI stay green.
+
+**D. Decisions taken by the Lead where the criteria were silent (2026-11-16; each can be changed before production)**
+
+18. A deactivated member reads nothing through the policies: no records, no photos (their own included), no organization or membership rows. `my_organizations()` still returns their row with its status, so an app can say why.
+19. A Supervisor or Administrator reads the profile of a deactivated member of their organization, so names on old records still resolve.
+20. Any active member, Administrators included, may upload under `<org_id>/<own user id>/`. An Administrator of an organization reads every path under `<org_id>/`.
+21. The backfill does not change `modified_at` on any row; otherwise every device would download everything again.
+22. `TRUNCATE` is revoked from `anon` and `authenticated` on every table in `public`.
+23. `memberships.user_id` is `on delete cascade`, so an account with no records can still be deleted as today.
+24. An expired ban counts as active. A forged `org_id` on a borehole is rejected (`42501`), not replaced. The child-row and immutability triggers apply to the service role too. Re-sending the same `org_id` in an update is not a change. Migration and rollback files contain no transaction statements. Mirroring from a profile is defined only for users with at most one membership.
 
 ### Phase 0 — Preparation (approved 2026-11-15)
 
