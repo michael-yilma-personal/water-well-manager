@@ -166,7 +166,10 @@ jobs:
     name: e2e suites against the staging project (RLS, data logger, offline sync)
     needs: e2e-secrets-probe
     if: needs.e2e-secrets-probe.outputs.available == 'true'
-    runs-on: ubuntu-latest
+    # The image is pinned: the Playwright pin below and the OS must move
+    # together (ubuntu-latest moved to a release Playwright 1.60 cannot
+    # install Chromium on). Bump both at once.
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4

@@ -261,6 +261,25 @@ describe('P0-8: a job runs the suites against staging (red until the job exists)
     assert.match(job.text, /playwright\s+install\b[^\n]*\bchromium\b/, 'Chromium is not installed with `playwright install`');
   });
 
+  // P0-14: `ubuntu-latest` moved to an image the pinned Playwright cannot
+  // install Chromium on. The job that runs the suites names a versioned image,
+  // so the Playwright pin and the OS move together. The other jobs are not
+  // asserted on: they may stay on ubuntu-latest.
+  it('P0-14: it runs on a fixed, versioned runner image (ubuntu-<NN>.<NN>), not ubuntu-latest', () => {
+    const job = stagingJob();
+    const raw = jobLevelValue(job, 'runs-on');
+    assert.ok(raw, `no job-level \`runs-on:\` written on one line in the staging job; its job-level lines: ${JSON.stringify(jobLevelLines(job))}`);
+    const image = raw.replace(/^(['"])(.*)\1$/, '$2');
+    assert.ok(!/latest/i.test(image), `runs-on: ${raw} is a moving label`);
+    assert.match(image, /^ubuntu-\d{2}\.\d{2}$/, `runs-on: ${raw} is not a single versioned image (an expression, a matrix value or a label list cannot be checked here)`);
+  });
+
+  it('P0-14: no other `runs-on:` inside the job overrides that image', () => {
+    const job = stagingJob();
+    const all = job.text.split('\n').filter((line) => /^\s*(?:-\s*)?runs-on:/.test(line));
+    assert.equal(all.length, 1, `runs-on lines in the staging job: ${JSON.stringify(all.map((line) => line.trim()))}`);
+  });
+
   it('its actions are pinned like the others', () => {
     const job = stagingJob();
     const uses = [...job.text.matchAll(/^\s*(?:-\s*)?uses:\s*(\S+)/gm)].map((match) => match[1]);
