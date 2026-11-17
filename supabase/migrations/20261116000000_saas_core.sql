@@ -86,10 +86,9 @@ grant usage, select on sequence public.audit_log_id_seq to service_role;
 --
 -- All are security definer so that a policy can ask about memberships without
 -- going back through the policies on memberships (which would recurse), and
--- all pin search_path. Each answers only about the caller, so being callable
--- by anyone gives nothing away: they keep PostgreSQL's default EXECUTE for
--- PUBLIC, which is what makes them callable from policies in either kind of
--- database.
+-- all pin search_path. Each answers only about the caller. EXECUTE is granted
+-- to signed-in users and the service role and taken from everyone else (see
+-- the end of this section).
 
 -- Only an ACTIVE membership counts: invited and deactivated members get
 -- nothing through these.
@@ -176,6 +175,20 @@ as $$
   join public.organizations o on o.id = m.org_id
   where m.user_id = auth.uid();
 $$;
+
+-- PostgreSQL lets PUBLIC execute every new function, and a hosted project
+-- grants it to the signed-out role by name as well. A signed-out client has no
+-- business calling functions that run with the owner's rights, so both go.
+-- Granted first, revoked second: at no point between the two statements is a
+-- signed-in user without the helpers the policies call.
+grant execute on function
+  public.is_org_member(uuid), public.has_org_role(uuid, text[]), public.saas_admin_roles(),
+  public.is_org_admin(uuid), public.is_platform_admin(), public.my_organizations()
+  to authenticated, service_role;
+revoke execute on function
+  public.is_org_member(uuid), public.has_org_role(uuid, text[]), public.saas_admin_roles(),
+  public.is_org_admin(uuid), public.is_platform_admin(), public.my_organizations()
+  from public, anon;
 
 -- ---------------------------------------------------------------------------
 -- Read policies

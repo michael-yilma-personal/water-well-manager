@@ -4,20 +4,56 @@
 -- (they trust profiles.role through is_admin() / is_reviewer() again), then
 -- drops what the migration added. Run the saas_core rollback after this one.
 --
--- What is lost: org_id on every record. With a single organization that loses
--- nothing; once a second organization holds data, rolling back would MERGE
--- the organizations' records under the old global roles. Do not run it then.
+-- What is lost: org_id on every record. With records in a single organization
+-- that loses nothing. Once a second organization holds records, dropping
+-- org_id would MERGE the companies' records under the old global roles, so
+-- the first statement below refuses to go on in that case.
 --
--- profiles.role and badge_number were kept in step by the mirroring triggers
--- for accounts with one membership, so the old policies see current roles. A
--- role changed directly on a membership is not copied back.
+-- profiles.role and badge_number were kept in step with the founding
+-- organization's memberships by the mirroring triggers, so the old policies
+-- see current roles. A role changed directly on a membership is not copied
+-- back.
 --
--- Grants: this restores the table privileges a HOSTED Supabase project had
--- before the migration (the hosted defaults, less what the earlier migrations
--- revoked), not the explicit ones the migration set. See the last section.
+-- Grants: this restores the table and function privileges a HOSTED Supabase
+-- project had before the migration (the hosted defaults, less what the
+-- earlier migrations revoked), not the explicit ones the migration set. See
+-- the last section.
 --
 -- Organizations and memberships are left in place; they belong to saas_core
 -- and go with its rollback. No transaction statements: the caller wraps it.
+
+-- ---------------------------------------------------------------------------
+-- Guard: never merge two companies' records
+-- ---------------------------------------------------------------------------
+
+-- First, and before anything is changed, so that it holds even when this
+-- file is not run as one transaction. Tables that have already lost org_id
+-- (a rollback run twice) are skipped.
+do $$
+declare
+  t text;
+  parts text[] := '{}';
+  holders bigint := 0;
+begin
+  foreach t in array array['boreholes', 'pipe_records', 'drilling_events', 'shift_logs']
+  loop
+    if exists (
+      select 1 from information_schema.columns
+      where table_schema = 'public' and table_name = t and column_name = 'org_id'
+    ) then
+      parts := parts || format('select org_id from public.%I', t);
+    end if;
+  end loop;
+
+  if array_length(parts, 1) > 0 then
+    execute 'select count(*) from (' || array_to_string(parts, ' union ') || ') x' into holders;
+  end if;
+
+  if holders > 1 then
+    raise exception 'Refusing to roll back: % organizations hold records. Dropping org_id would merge them into one pool that the pre-tenancy policies show to every reviewer.', holders;
+  end if;
+end
+$$;
 
 -- ---------------------------------------------------------------------------
 -- Policies, as they were
@@ -91,7 +127,9 @@ drop function if exists public.mirror_profile_to_membership();
 drop function if exists public.boreholes_org_guard();
 drop function if exists public.borehole_child_org_guard();
 drop function if exists public.shares_org_as(uuid, text[]);
+drop function if exists public.reads_legacy_photos_of(uuid);
 drop function if exists public.uuid_or_null(text);
+drop function if exists public.founding_org_id();
 
 -- ---------------------------------------------------------------------------
 -- org_id (its index and foreign key go with the column)
@@ -107,6 +145,9 @@ alter table public.shift_logs      drop column if exists org_id;
 -- ---------------------------------------------------------------------------
 
 alter table if exists public.memberships drop constraint if exists memberships_role_check;
+alter table if exists public.memberships drop column if exists deactivated_by_ban;
+-- The founding flag (its unique index goes with the column).
+alter table if exists public.organizations drop column if exists is_founding;
 
 -- Only while the foundation is still there; otherwise this would leave a
 -- stray function behind.
@@ -150,3 +191,9 @@ revoke delete on public.boreholes, public.pipe_records,
 -- editable columns come back: role is not self-editable.
 revoke update, delete on public.profiles from anon, authenticated;
 grant update (name, badge_number) on public.profiles to authenticated;
+
+-- The migration took is_admin() and is_reviewer() away from signed-out
+-- clients. The restored policies apply to every role and call them, so they
+-- go back to everyone, which is also what a hosted project had.
+grant execute on function public.is_admin(), public.is_reviewer()
+  to public, anon, authenticated, service_role;

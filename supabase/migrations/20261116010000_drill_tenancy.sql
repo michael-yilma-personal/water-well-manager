@@ -6,12 +6,19 @@
 -- Function know nothing about organizations and are not changed here:
 --   - they send no org_id: triggers fill it in (section 4);
 --   - they read and write profiles.role and badge_number, and ban accounts:
---     triggers mirror that into the membership (section 5);
+--     triggers mirror that into the membership in the FOUNDING organization,
+--     and only there (section 5);
 --   - they store photos under <user_id>/<file>: still accepted (section 8).
 --
 -- Existing data moves into one founding organization. Nothing about an
 -- existing row changes except that it gains org_id; in particular
 -- modified_at does not move, or every device would download everything again.
+--
+-- Written so that it is safe even if the tool applying it does NOT wrap the
+-- file in one transaction: after every single statement an installed build
+-- can still insert. Where two changes must not be seen apart (dropping and
+-- re-creating a policy, revoking and granting) they share one DO block,
+-- which is one statement.
 --
 -- Rollback: supabase/rollback/20261116010000_drill_tenancy.sql.
 
@@ -36,42 +43,94 @@ alter table public.memberships
 -- ---------------------------------------------------------------------------
 -- 2. The founding organization and its members
 -- ---------------------------------------------------------------------------
+--
+-- The founding organization is the one the pre-tenancy data, accounts and
+-- photos belong to. It is identified by a flag on its row, never by its name
+-- (the owner will rename it) or its age. The flag travels with the data, so a
+-- copy of the database restored elsewhere still knows which one it is. The
+-- partial unique index allows at most one.
 
--- Created on an empty database too, so that a fresh install behaves like the
--- migrated one: new accounts land in the only organization (section 5).
-insert into public.organizations (name)
-select 'Founding organization'
-where not exists (select 1 from public.organizations);
+alter table public.organizations
+  add column if not exists is_founding boolean not null default false;
+create unique index if not exists organizations_one_founding_idx
+  on public.organizations (is_founding) where is_founding;
 
--- Every existing account joins it with the role and badge its profile holds.
--- A banned account is deactivated; a ban that has run out is not a ban.
--- Only while there is exactly one organization: otherwise there is no telling
--- where an account belongs.
-insert into public.memberships (org_id, user_id, role, status, badge_number)
-select o.id, p.id, p.role,
-       case when u.banned_until > now() then 'deactivated' else 'active' end,
-       p.badge_number
-from public.profiles p
-join auth.users u on u.id = p.id
-cross join public.organizations o
-where (select count(*) from public.organizations) = 1
-  and not exists (select 1 from public.memberships m where m.user_id = p.id);
+-- True on a membership that a BAN deactivated, so that lifting the ban brings
+-- back that membership and not one an administrator deactivated on purpose.
+alter table public.memberships
+  add column if not exists deactivated_by_ban boolean not null default false;
+
+-- Null when there is none (never the case after this migration). Used only
+-- inside other security definer functions, so no client role may call it.
+create or replace function public.founding_org_id()
+returns uuid
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select o.id from public.organizations o where o.is_founding;
+$$;
+revoke execute on function public.founding_org_id() from public, anon, authenticated;
+grant execute on function public.founding_org_id() to service_role;
+
+-- First application only (no organization is flagged yet): flag the founding
+-- organization, creating it when the database has none, and enrol every
+-- existing account with the role and badge its profile holds. A banned
+-- account is deactivated; a ban that has run out is not a ban.
+--
+-- Applying this file again skips the whole block, so a member who was removed
+-- since is not enrolled a second time. An empty database gets the
+-- organization too, so that a fresh install behaves like the migrated one.
+do $$
+declare
+  orgs bigint;
+  founding uuid;
+begin
+  if public.founding_org_id() is not null then
+    return;
+  end if;
+
+  select count(*) into orgs from public.organizations;
+  if orgs = 0 then
+    insert into public.organizations (name, is_founding)
+    values ('Founding organization', true)
+    returning id into founding;
+  elsif orgs = 1 then
+    update public.organizations set is_founding = true returning id into founding;
+  else
+    raise exception 'Cannot tell which of % organizations is the founding one. Set organizations.is_founding on it, then apply this migration again.', orgs;
+  end if;
+
+  insert into public.memberships (org_id, user_id, role, status, deactivated_by_ban, badge_number)
+  select founding, p.id, p.role,
+         case when u.banned_until > now() then 'deactivated' else 'active' end,
+         coalesce(u.banned_until > now(), false),
+         p.badge_number
+  from public.profiles p
+  join auth.users u on u.id = p.id
+  on conflict (org_id, user_id) do nothing;
+end
+$$;
 
 -- ---------------------------------------------------------------------------
 -- 3. org_id on the four record tables
 -- ---------------------------------------------------------------------------
 --
--- The column is added WITH the founding organization as a constant default
--- and the default is dropped straight after. Postgres fills existing rows
--- from such a default without running an UPDATE, so no trigger fires and
--- modified_at stays where it was. SET NOT NULL then fails the migration
--- rather than leave a row without an organization.
+-- The column is added WITH the founding organization as a constant default.
+-- Postgres fills existing rows from such a default without running an UPDATE,
+-- so no trigger fires and modified_at stays where it was. SET NOT NULL then
+-- fails the migration rather than leave a row without an organization.
+--
+-- The default stays until the triggers of section 4 exist and is dropped
+-- only then (end of section 4). Dropped any earlier, an installed build's
+-- insert would fail on a null org_id (23502), which the app treats as
+-- permanent and drops from its outbox.
 
 do $$
 declare
   t text;
-  orgs bigint;
-  founding uuid;
+  founding uuid := public.founding_org_id();
 begin
   foreach t in array array['boreholes', 'pipe_records', 'drilling_events', 'shift_logs']
   loop
@@ -79,16 +138,12 @@ begin
       select 1 from information_schema.columns
       where table_schema = 'public' and table_name = t and column_name = 'org_id'
     ) then
-      select count(*) into orgs from public.organizations;
-      if orgs <> 1 then
-        raise exception 'Cannot assign existing rows of % to an organization: % organizations exist, expected exactly one.', t, orgs;
+      if founding is null then
+        raise exception 'Cannot assign existing rows of % to an organization: no founding organization is flagged.', t;
       end if;
-      select id into founding from public.organizations;
-
       execute format(
         'alter table public.%I add column org_id uuid default %L references public.organizations (id)',
         t, founding);
-      execute format('alter table public.%I alter column org_id drop default', t);
     end if;
 
     execute format('alter table public.%I alter column org_id set not null', t);
@@ -192,15 +247,17 @@ begin
 end;
 $$;
 
-drop trigger if exists boreholes_org_guard on public.boreholes;
-create trigger boreholes_org_guard
-  before insert or update on public.boreholes
-  for each row execute function public.boreholes_org_guard();
-
+-- Dropping and creating a trigger in one statement: there is no moment
+-- without it when this file is applied a second time.
 do $$
 declare
   t text;
 begin
+  drop trigger if exists boreholes_org_guard on public.boreholes;
+  create trigger boreholes_org_guard
+    before insert or update on public.boreholes
+    for each row execute function public.boreholes_org_guard();
+
   foreach t in array array['pipe_records', 'drilling_events', 'shift_logs']
   loop
     execute format('drop trigger if exists %I on public.%I', t || '_org_guard', t);
@@ -212,18 +269,28 @@ begin
 end
 $$;
 
+-- The triggers now fill org_id, so the temporary default of section 3 goes:
+-- from here a borehole sent without an organization is decided by the
+-- author's membership, not by a constant.
+alter table public.boreholes       alter column org_id drop default;
+alter table public.pipe_records    alter column org_id drop default;
+alter table public.drilling_events alter column org_id drop default;
+alter table public.shift_logs      alter column org_id drop default;
+
 -- ---------------------------------------------------------------------------
--- 5. Profiles and bans are mirrored into the membership
+-- 5. Profiles and bans are mirrored into the founding membership
 -- ---------------------------------------------------------------------------
 --
 -- Until the apps manage memberships themselves, profiles.role, badge_number
 -- and the account ban remain where roles and deactivation are edited. The
 -- policies no longer read them, so each change is copied to the membership.
 --
--- Mirroring is defined for accounts with at most one membership. With several
--- there is no telling which one a profile edit means, and copying a role into
--- all of them would let one organization's administrator promote someone in
--- another; those accounts are left alone.
+-- Only ever to the membership in the FOUNDING organization. The legacy
+-- tables are global and so is whoever edits them (admin-users acts for the
+-- founding organization's Administrator); copying into any other
+-- organization would let that person re-role, deactivate or reactivate
+-- another company's members. An account with no founding membership is left
+-- alone.
 
 create or replace function public.mirror_profile_to_membership()
 returns trigger
@@ -231,53 +298,71 @@ language plpgsql
 security definer
 set search_path = public
 as $$
+declare
+  founding uuid := public.founding_org_id();
 begin
+  if founding is null then
+    return null;
+  end if;
+
   if tg_op = 'INSERT' then
-    -- A new account joins the organization only while there is exactly one.
+    -- What account creation has always meant: a new member of the (founding)
+    -- organization, whether or not other organizations exist by now.
     insert into public.memberships (org_id, user_id, role, badge_number)
-    select o.id, new.id, new.role, new.badge_number
-    from public.organizations o
-    where (select count(*) from public.organizations) = 1
+    values (founding, new.id, new.role, new.badge_number)
     on conflict (org_id, user_id) do nothing;
-  elsif new.role is distinct from old.role
-     or new.badge_number is distinct from old.badge_number then
-    -- Status is not touched: a role change must not reactivate anyone.
+    return null;
+  end if;
+
+  -- Only the column that changed is copied. Anyone may edit their own badge;
+  -- if that also copied profiles.role, an account whose legacy role is
+  -- higher than its membership role would promote itself by doing so.
+  -- Status is never touched: a role change must not reactivate anyone.
+  if new.role is distinct from old.role then
     update public.memberships m
-    set role = new.role, badge_number = new.badge_number
-    where m.user_id = new.id
-      and (select count(*) from public.memberships x where x.user_id = new.id) = 1;
+    set role = new.role
+    where m.org_id = founding and m.user_id = new.id;
+  end if;
+  if new.badge_number is distinct from old.badge_number then
+    update public.memberships m
+    set badge_number = new.badge_number
+    where m.org_id = founding and m.user_id = new.id;
   end if;
   return null;
 end;
 $$;
 
-drop trigger if exists profiles_mirror_membership on public.profiles;
-create trigger profiles_mirror_membership
-  after insert or update on public.profiles
-  for each row execute function public.mirror_profile_to_membership();
+do $$
+begin
+  drop trigger if exists profiles_mirror_membership on public.profiles;
+  create trigger profiles_mirror_membership
+    after insert or update on public.profiles
+    for each row execute function public.mirror_profile_to_membership();
+end
+$$;
 
--- A ban deactivates; lifting it reactivates. Without this a token issued
--- before the ban would keep reading until it expires. A ban whose date has
--- passed counts as lifted. 'invited' is never touched in either direction.
---
--- A ban is deactivated in every organization (denying is the safe direction);
--- lifting one reactivates only the single-membership case described above.
+-- A ban deactivates the founding membership; lifting it reactivates that
+-- membership, and only if the ban is what deactivated it. Without this a
+-- token issued before the ban would keep reading until it expires. A ban
+-- whose date has passed counts as lifted. 'invited' is never touched.
 create or replace function public.mirror_ban_to_membership()
 returns trigger
 language plpgsql
 security definer
 set search_path = public
 as $$
+declare
+  founding uuid := public.founding_org_id();
 begin
   if new.banned_until is not null and new.banned_until > now() then
     update public.memberships m
-    set status = 'deactivated'
-    where m.user_id = new.id and m.status = 'active';
+    set status = 'deactivated', deactivated_by_ban = true
+    where m.org_id = founding and m.user_id = new.id and m.status = 'active';
   else
     update public.memberships m
-    set status = 'active'
-    where m.user_id = new.id and m.status = 'deactivated'
-      and (select count(*) from public.memberships x where x.user_id = new.id) = 1;
+    set status = 'active', deactivated_by_ban = false
+    where m.org_id = founding and m.user_id = new.id
+      and m.status = 'deactivated' and m.deactivated_by_ban;
   end if;
   return null;
 end;
@@ -286,12 +371,16 @@ $$;
 -- No column list: the WHEN clause is what matters, and it holds however the
 -- auth server phrases its UPDATE. Sign-ins update auth.users too; for those
 -- the clause is false and the function is never called.
-drop trigger if exists on_auth_user_ban_changed on auth.users;
-create trigger on_auth_user_ban_changed
-  after update on auth.users
-  for each row
-  when (old.banned_until is distinct from new.banned_until)
-  execute function public.mirror_ban_to_membership();
+do $$
+begin
+  drop trigger if exists on_auth_user_ban_changed on auth.users;
+  create trigger on_auth_user_ban_changed
+    after update on auth.users
+    for each row
+    when (old.banned_until is distinct from new.banned_until)
+    execute function public.mirror_ban_to_membership();
+end
+$$;
 
 -- ---------------------------------------------------------------------------
 -- 6. Helpers for the policies below
@@ -317,6 +406,32 @@ as $$
       and theirs.user_id = target
   );
 $$;
+
+-- Photos under the legacy path <user_id>/<file> name no organization. They
+-- belong to the founding organization: its Administrator reads them, and no
+-- other organization's does, whatever else the owner later joins. The owner
+-- must be (or have been) a founding member, so that a legacy-path upload by
+-- someone who only belongs to another company is not exposed to the founding
+-- Administrator.
+create or replace function public.reads_legacy_photos_of(owner uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select public.is_org_admin(f.id)
+     and exists (
+       select 1 from public.memberships m
+       where m.org_id = f.id and m.user_id = owner)
+  from (select public.founding_org_id() as id) f;
+$$;
+
+-- As in saas_core: signed-in users and the service role, nobody else.
+grant execute on function public.shares_org_as(uuid, text[]), public.reads_legacy_photos_of(uuid)
+  to authenticated, service_role;
+revoke execute on function public.shares_org_as(uuid, text[]), public.reads_legacy_photos_of(uuid)
+  from public, anon;
 
 -- A path segment as a uuid, or null when it is not one. A bare cast inside a
 -- storage policy would raise on any odd path and turn "denied" into an error
@@ -349,6 +464,9 @@ $$;
 --
 -- `to authenticated`: a signed-out client has no policy at all.
 -- (select auth.uid()) is evaluated once per statement, not once per row.
+--
+-- Each old policy is dropped and its replacement created inside one DO
+-- block: with no policy at all in between, every write would be refused.
 
 do $$
 declare
@@ -371,43 +489,48 @@ begin
       t, t);
 
     execute format('drop policy if exists %I_update on public.%I', t, t);
-    execute format(
-      'create policy %I_update on public.%I for update to authenticated '
-      'using (created_by = (select auth.uid()) '
-      'and public.has_org_role(org_id, ''Driller'', ''Data Logger'', ''Supervisor'')) '
-      'with check (created_by = (select auth.uid()) '
-      'and public.has_org_role(org_id, ''Driller'', ''Data Logger'', ''Supervisor''))',
-      t, t);
+    if t = 'pipe_records' then
+      -- A reviewer of the row's organization may correct a pipe record too;
+      -- pipe_records_guard_update still decides which columns.
+      create policy pipe_records_update on public.pipe_records
+        for update to authenticated
+        using (
+          (created_by = (select auth.uid())
+             and public.has_org_role(org_id, 'Driller', 'Data Logger', 'Supervisor'))
+          or public.has_org_role(org_id, 'Supervisor', 'Administrator')
+        )
+        with check (
+          (created_by = (select auth.uid())
+             and public.has_org_role(org_id, 'Driller', 'Data Logger', 'Supervisor'))
+          or public.has_org_role(org_id, 'Supervisor', 'Administrator')
+        );
+    else
+      execute format(
+        'create policy %I_update on public.%I for update to authenticated '
+        'using (created_by = (select auth.uid()) '
+        'and public.has_org_role(org_id, ''Driller'', ''Data Logger'', ''Supervisor'')) '
+        'with check (created_by = (select auth.uid()) '
+        'and public.has_org_role(org_id, ''Driller'', ''Data Logger'', ''Supervisor''))',
+        t, t);
+    end if;
   end loop;
 end
 $$;
 
--- Pipe records: a reviewer of the row's organization may correct it too;
--- pipe_records_guard_update still decides which columns.
-drop policy if exists pipe_records_update on public.pipe_records;
-create policy pipe_records_update on public.pipe_records
-  for update to authenticated
-  using (
-    (created_by = (select auth.uid())
-       and public.has_org_role(org_id, 'Driller', 'Data Logger', 'Supervisor'))
-    or public.has_org_role(org_id, 'Supervisor', 'Administrator')
-  )
-  with check (
-    (created_by = (select auth.uid())
-       and public.has_org_role(org_id, 'Driller', 'Data Logger', 'Supervisor'))
-    or public.has_org_role(org_id, 'Supervisor', 'Administrator')
-  );
-
 -- Profiles: one's own, or that of someone in an organization where the caller
 -- is Supervisor or Administrator. profiles_update_own and the column grants
 -- (role is not self-editable) are untouched.
-drop policy if exists profiles_select on public.profiles;
-create policy profiles_select on public.profiles
-  for select to authenticated
-  using (
-    id = (select auth.uid())
-    or public.shares_org_as(id, 'Supervisor', 'Administrator')
-  );
+do $$
+begin
+  drop policy if exists profiles_select on public.profiles;
+  create policy profiles_select on public.profiles
+    for select to authenticated
+    using (
+      id = (select auth.uid())
+      or public.shares_org_as(id, 'Supervisor', 'Administrator')
+    );
+end
+$$;
 
 -- ---------------------------------------------------------------------------
 -- 8. Policies: photos
@@ -420,51 +543,58 @@ create policy profiles_select on public.profiles
 --
 -- No UPDATE or DELETE policy exists, as before.
 
--- Upload: into one's own folder. Under an organization it also needs an
--- active membership there (any role).
-drop policy if exists drilling_photos_insert on storage.objects;
-create policy drilling_photos_insert on storage.objects
-  for insert to authenticated
-  with check (
-    bucket_id = 'drilling-photos'
-    and (
-      (array_length(storage.foldername(name), 1) = 1
-         and (storage.foldername(name))[1] = (select auth.uid())::text)
-      or
-      (array_length(storage.foldername(name), 1) = 2
-         and (storage.foldername(name))[2] = (select auth.uid())::text
-         and public.is_org_member(public.uuid_or_null((storage.foldername(name))[1])))
-    )
-  );
+do $$
+begin
+  -- Upload: into one's own folder, by an active member. Under an
+  -- organization, of that organization; on the legacy path, of any (the
+  -- path names none), so a deactivated account can no longer upload.
+  drop policy if exists drilling_photos_insert on storage.objects;
+  create policy drilling_photos_insert on storage.objects
+    for insert to authenticated
+    with check (
+      bucket_id = 'drilling-photos'
+      and (
+        (array_length(storage.foldername(name), 1) = 1
+           and (storage.foldername(name))[1] = (select auth.uid())::text
+           and (select coalesce(bool_or(o.status = 'active'), false)
+                from public.my_organizations() o))
+        or
+        (array_length(storage.foldername(name), 1) = 2
+           and (storage.foldername(name))[2] = (select auth.uid())::text
+           and public.is_org_member(public.uuid_or_null((storage.foldername(name))[1])))
+      )
+    );
 
--- Read: Administrators only besides the author, as today.
-drop policy if exists drilling_photos_select on storage.objects;
-create policy drilling_photos_select on storage.objects
-  for select to authenticated
-  using (
-    bucket_id = 'drilling-photos'
-    and (
-      -- An Administrator reads everything under their organization's folder.
-      public.is_org_admin(public.uuid_or_null((storage.foldername(name))[1]))
-      -- New path: the author, while an active member of that organization.
-      or (array_length(storage.foldername(name), 1) = 2
-            and (storage.foldername(name))[2] = (select auth.uid())::text
-            and public.is_org_member(public.uuid_or_null((storage.foldername(name))[1])))
-      or (array_length(storage.foldername(name), 1) = 1
-            and (
-              -- Legacy path: the owner. The path names no organization, so
-              -- "a deactivated member reads nothing" is applied as: not when
-              -- the caller has memberships and none of them is active. An
-              -- account with no membership at all still reads its own.
-              ((storage.foldername(name))[1] = (select auth.uid())::text
-                 and (select count(*) = 0 or bool_or(o.status = 'active')
-                      from public.my_organizations() o))
-              -- ... or an Administrator of an organization the owner is in.
-              or public.shares_org_as(
-                   public.uuid_or_null((storage.foldername(name))[1]), 'Administrator')
-            ))
-    )
-  );
+  -- Read: Administrators only besides the author, as today.
+  drop policy if exists drilling_photos_select on storage.objects;
+  create policy drilling_photos_select on storage.objects
+    for select to authenticated
+    using (
+      bucket_id = 'drilling-photos'
+      and (
+        -- An Administrator reads everything under their organization's folder.
+        public.is_org_admin(public.uuid_or_null((storage.foldername(name))[1]))
+        -- New path: the author, while an active member of that organization.
+        or (array_length(storage.foldername(name), 1) = 2
+              and (storage.foldername(name))[2] = (select auth.uid())::text
+              and public.is_org_member(public.uuid_or_null((storage.foldername(name))[1])))
+        or (array_length(storage.foldername(name), 1) = 1
+              and (
+                -- Legacy path: the owner. The path names no organization, so
+                -- "a deactivated member reads nothing" is applied as: not when
+                -- the caller has memberships and none of them is active. An
+                -- account with no membership at all still reads its own.
+                ((storage.foldername(name))[1] = (select auth.uid())::text
+                   and (select count(*) = 0 or bool_or(o.status = 'active')
+                        from public.my_organizations() o))
+                -- ... or the founding organization's Administrator.
+                or public.reads_legacy_photos_of(
+                     public.uuid_or_null((storage.foldername(name))[1]))
+              ))
+      )
+    );
+end
+$$;
 
 -- ---------------------------------------------------------------------------
 -- 9. Privileges, stated in full
@@ -485,21 +615,31 @@ create policy drilling_photos_select on storage.objects
 -- clears column-level grants, so the profiles column grant is made after it.
 -- The foundation's tables are granted in saas_core.
 --
--- Functions keep PostgreSQL's default EXECUTE for PUBLIC: the policies call
--- the helpers as the signed-in user. The trigger functions cannot be called
--- outside a trigger whatever their grants.
+-- One DO block, so the revoke and the grants are a single statement: there is
+-- no moment at which a signed-in user holds nothing.
 
-revoke all on public.profiles, public.boreholes, public.pipe_records,
-  public.drilling_events, public.shift_logs
-  from anon, authenticated;
+do $$
+begin
+  revoke all on public.profiles, public.boreholes, public.pipe_records,
+    public.drilling_events, public.shift_logs
+    from anon, authenticated;
 
-grant select, insert, update on public.boreholes, public.pipe_records,
-  public.drilling_events, public.shift_logs
-  to authenticated;
+  grant select, insert, update on public.boreholes, public.pipe_records,
+    public.drilling_events, public.shift_logs
+    to authenticated;
 
-grant select on public.profiles to authenticated;
-grant update (name, badge_number) on public.profiles to authenticated;
+  grant select on public.profiles to authenticated;
+  grant update (name, badge_number) on public.profiles to authenticated;
 
-grant all on public.profiles, public.boreholes, public.pipe_records,
-  public.drilling_events, public.shift_logs
-  to service_role;
+  grant all on public.profiles, public.boreholes, public.pipe_records,
+    public.drilling_events, public.shift_logs
+    to service_role;
+end
+$$;
+
+-- The pre-tenancy helpers. No policy calls them any more (the rollback's
+-- policies would), but they run with the owner's rights and report on
+-- profiles.role, so a signed-out client loses them like the others. Done
+-- last: until section 7 the old policies still called them for every role.
+grant execute on function public.is_admin(), public.is_reviewer() to authenticated, service_role;
+revoke execute on function public.is_admin(), public.is_reviewer() from public, anon;
