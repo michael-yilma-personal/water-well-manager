@@ -1,30 +1,31 @@
 """The journey a brand-new crew actually takes: link, create, log, sync."""
+import _target
 import json, urllib.request, sys
 from playwright.sync_api import sync_playwright
-OUT='/private/tmp/claude-501/-Users-kalena-dev-water-well-drilling-manager/4c525f0f-604d-4e86-8f8e-b68bbddc1172/scratchpad'
-URL='https://bfteveoeodbvjxjlpnwz.supabase.co'; KEY='sb_publishable_7lHYQcJ4rNaIIG4UhmV9YQ_jIRdGn2l'
+OUT=_target.OUT
+URL=_target.URL; KEY=_target.KEY
 results=[]
 def check(n, ok, d=''):
     results.append((n,ok)); print(f'{"PASS" if ok else "FAIL"}  {n}'+(f'   -- {d}' if d else ''))
 def sign_in(email):
     r=urllib.request.Request(f'{URL}/auth/v1/token?grant_type=password',method='POST')
     r.add_header('apikey',KEY); r.add_header('Content-Type','application/json')
-    with urllib.request.urlopen(r, json.dumps({'email':email,'password':'TestPass123!'}).encode()) as x:
+    with urllib.request.urlopen(r, json.dumps({'email':email,'password':_target.PASSWORD}).encode()) as x:
         return json.loads(x.read().decode())['access_token']
 def api(p, t):
     q=urllib.request.Request(URL+p); q.add_header('apikey',KEY); q.add_header('Authorization',f'Bearer {t}')
     return json.loads(urllib.request.urlopen(q).read().decode())
 
-tok=sign_in('driller2@example.com')
+tok=sign_in(_target.DRILLER2)
 before={b['id'] for b in api('/rest/v1/boreholes?select=id', tok)}
 
 with sync_playwright() as p:
     b=p.chromium.launch(); ctx=b.new_context(viewport={'width':411,'height':900}, is_mobile=True)
     page=ctx.new_page(); errs=[]
     page.on('pageerror', lambda e: errs.append(str(e)))
-    page.goto('http://localhost:3000', wait_until='networkidle'); page.wait_for_timeout(2000)
-    page.fill('input[type="email"]','driller2@example.com')
-    page.fill('input[type="password"]','TestPass123!')
+    page.goto(_target.start_app(), wait_until='networkidle'); page.wait_for_timeout(2000)
+    page.fill('input[type="email"]',_target.DRILLER2)
+    page.fill('input[type="password"]',_target.PASSWORD)
     page.get_by_role('button', name='Link this device').click(); page.wait_for_timeout(6000)
     check('new crew sees an empty-state prompt, not a crash',
           'No borehole on this device yet' in page.inner_text('body'))

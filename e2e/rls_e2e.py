@@ -1,4 +1,4 @@
-"""End-to-end RLS verification against the live Supabase project.
+"""End-to-end RLS verification against the project named by _target.
 
 Covers the guarantees the app depends on:
   - a driller can write their own records
@@ -8,12 +8,13 @@ Covers the guarantees the app depends on:
   - an administrator cannot write
   - a driller cannot promote themselves to administrator
 """
+import _target
 import json
 import urllib.request
 import uuid
 
-URL = 'https://bfteveoeodbvjxjlpnwz.supabase.co'
-KEY = 'sb_publishable_7lHYQcJ4rNaIIG4UhmV9YQ_jIRdGn2l'
+URL = _target.URL
+KEY = _target.KEY
 
 results = []
 
@@ -45,14 +46,14 @@ def call(method, path, token=None, body=None, prefer=None):
 
 def sign_in(email):
     status, body = call('POST', '/auth/v1/token?grant_type=password',
-                        body={'email': email, 'password': 'TestPass123!'})
+                        body={'email': email, 'password': _target.PASSWORD})
     assert status == 200, (status, body)
     return body['access_token'], body['user']['id']
 
 
-d1_token, d1_id = sign_in('driller1@example.com')
-d2_token, d2_id = sign_in('driller2@example.com')
-admin_token, admin_id = sign_in('admin1@example.com')
+d1_token, d1_id = sign_in(_target.DRILLER1)
+d2_token, d2_id = sign_in(_target.DRILLER2)
+admin_token, admin_id = sign_in(_target.ADMIN1)
 print(f'signed in: driller1={d1_id[:8]} driller2={d2_id[:8]} admin={admin_id[:8]}\n')
 
 BH = str(uuid.uuid4())

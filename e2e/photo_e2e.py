@@ -1,10 +1,11 @@
 """Photo pipeline E2E: capture -> compress -> filesystem -> Storage upload."""
+import _target
 import json, urllib.request, sys, struct, zlib
 from playwright.sync_api import sync_playwright
 
-OUT = '/private/tmp/claude-501/-Users-kalena-dev-water-well-drilling-manager/4c525f0f-604d-4e86-8f8e-b68bbddc1172/scratchpad'
-URL = 'https://bfteveoeodbvjxjlpnwz.supabase.co'
-KEY = 'sb_publishable_7lHYQcJ4rNaIIG4UhmV9YQ_jIRdGn2l'
+OUT = _target.OUT
+URL = _target.URL
+KEY = _target.KEY
 
 results = []
 def check(name, ok, detail=''):
@@ -34,7 +35,7 @@ def make_big_png(path, w=4032, h=3024):
 def sign_in_api(email):
     req = urllib.request.Request(f'{URL}/auth/v1/token?grant_type=password', method='POST')
     req.add_header('apikey', KEY); req.add_header('Content-Type', 'application/json')
-    with urllib.request.urlopen(req, json.dumps({'email': email, 'password': 'TestPass123!'}).encode()) as r:
+    with urllib.request.urlopen(req, json.dumps({'email': email, 'password': _target.PASSWORD}).encode()) as r:
         d = json.loads(r.read().decode())
         return d['access_token'], d['user']['id']
 
@@ -52,7 +53,7 @@ src = f'{OUT}/big-photo.png'
 size = make_big_png(src)
 print(f'source image: {size/1024/1024:.1f} MB, 4032x3024\n')
 
-d1_token, d1_uid = sign_in_api('driller1@example.com')
+d1_token, d1_uid = sign_in_api(_target.DRILLER1)
 before = {o['name'] for o in list_photos(d1_token, d1_uid)}
 print(f'{len(before)} object(s) in storage before\n')
 
@@ -62,10 +63,10 @@ with sync_playwright() as p:
     page = ctx.new_page()
     errs = []
     page.on('pageerror', lambda e: errs.append(str(e)))
-    page.goto('http://localhost:3000', wait_until='networkidle'); page.wait_for_timeout(2000)
+    page.goto(_target.start_app(), wait_until='networkidle'); page.wait_for_timeout(2000)
 
-    page.fill('input[type="email"]', 'driller1@example.com')
-    page.fill('input[type="password"]', 'TestPass123!')
+    page.fill('input[type="email"]', _target.DRILLER1)
+    page.fill('input[type="password"]', _target.PASSWORD)
     page.get_by_role('button', name='Link this device').click()
     page.wait_for_timeout(4000)
 

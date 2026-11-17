@@ -6,16 +6,16 @@ field action, so it needs a real control - and one that refuses to run while
 records are still on the phone, because the transport stamps created_by when a
 record drains and would credit this driller's work to whoever signs in next.
 """
+import _target
 import os
 import sys
 import uuid
 
 from playwright.sync_api import sync_playwright
 
-PORT = int(os.environ.get('E2E_PORT', '3000'))
-URL = f'http://localhost:{PORT}'
-EMAIL = os.environ.get('E2E_EMAIL', 'driller1@example.com')
-PASSWORD = os.environ.get('E2E_PASSWORD', 'TestPass123!')
+URL = _target.start_app()
+EMAIL = os.environ.get('E2E_EMAIL', _target.DRILLER1)
+PASSWORD = _target.PASSWORD
 
 QUEUE = "() => JSON.parse(localStorage.getItem('wwdm_outbox') || '[]').length"
 PIPES = "() => JSON.parse(localStorage.getItem('wwdm_pipe_records')||'[]').length"

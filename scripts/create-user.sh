@@ -10,18 +10,31 @@
 # any client-supplied role, because letting an account choose its own would let
 # anyone read every crew's data.
 #
-# Usage:
-#   scripts/create-user.sh boss@company.com 'a-strong-password' Administrator "David Mutua" ADM-001
-#   scripts/create-user.sh joe@company.com  'a-strong-password' Driller       "Joe Kamau"  DRL-110
-#   scripts/create-user.sh ann@company.com  'a-strong-password' "Data Logger" "Ann Njeri"  LOG-201
+# Usage (there is no default project: SUPABASE_PROJECT_REF is required):
+#   SUPABASE_PROJECT_REF=<ref> scripts/create-user.sh boss@company.com 'a-strong-password' Administrator "David Mutua" ADM-001
+#   SUPABASE_PROJECT_REF=<ref> scripts/create-user.sh joe@company.com  'a-strong-password' Driller       "Joe Kamau"  DRL-110
+#   SUPABASE_PROJECT_REF=<ref> scripts/create-user.sh ann@company.com  'a-strong-password' "Data Logger" "Ann Njeri"  LOG-201
+#
+#   SUPABASE_PROJECT_REF=<production ref> scripts/create-user.sh --production boss@company.com ...
+#     The production project (PROD_REF in scripts/hooks/guard.conf) is refused
+#     (exit 2) unless --production is the FIRST argument.
 #
 # Roles: Driller | Data Logger | Supervisor | Administrator
+#
+# The email, password, role, name and badge go into SQL text, so a value that
+# contains a single quote, a backslash or a control character is refused
+# (exit 2), not escaped. Pick a password and spell a name without them.
+#
+# DRILL_SCRIPT_DRY_RUN=1 prints "would run against <ref>" and exits 0 after
+# the target and argument checks, before any network call.
 #
 # Requires the Supabase CLI logged in (`supabase login`).
 
 set -euo pipefail
 
-PROJECT_REF="${SUPABASE_PROJECT_REF:-bfteveoeodbvjxjlpnwz}"
+. "$(dirname "${BASH_SOURCE[0]}")/lib/project-target.sh"
+project_target "$@"
+[ "$PROJECT_TARGET_SHIFT" -eq 1 ] && shift
 
 EMAIL="${1:-}"
 PASSWORD="${2:-}"
@@ -38,6 +51,22 @@ case "$ROLE" in
   Driller|"Data Logger"|Supervisor|Administrator) ;;
   *) echo "Role must be Driller, Data Logger, Supervisor or Administrator (got '$ROLE')." >&2; exit 1 ;;
 esac
+
+# These values are interpolated into SQL below. Refuse, never escape.
+check_sql_safe() {
+  case "$2" in
+    *"'"*|*\\*|*[[:cntrl:]]*)
+      echo "Stopped: the $1 contains a single quote, a backslash or a control character, which this script does not send." >&2
+      exit 2 ;;
+  esac
+}
+check_sql_safe "email" "$EMAIL"
+check_sql_safe "password" "$PASSWORD"
+check_sql_safe "role" "$ROLE"
+check_sql_safe "name" "$NAME"
+check_sql_safe "badge" "$BADGE"
+
+project_target_dry_run
 
 TOKEN="$(security find-generic-password -s "Supabase CLI" -w 2>/dev/null || echo "${SUPABASE_ACCESS_TOKEN:-}")"
 if [ -z "$TOKEN" ]; then

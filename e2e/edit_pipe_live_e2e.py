@@ -1,4 +1,4 @@
-"""Correcting a saved pipe record, end to end against the live Supabase project.
+"""Correcting a saved pipe record, end to end against the project named by _target.
 
   - another driller cannot change someone's pipe
   - a Supervisor and an Administrator can correct the End Pipe fields, and are
@@ -13,6 +13,7 @@ Uses the example.com test accounts driller1, driller2, supervisor1, admin1:
 create them with scripts/create-user.sh first and remove them with
 scripts/delete-test-data.sh.
 """
+import _target
 import json
 import os
 import sys
@@ -24,10 +25,10 @@ import uuid
 from playwright.sync_api import sync_playwright
 
 OUT = os.environ.get('E2E_OUT', tempfile.gettempdir())
-URL = 'https://bfteveoeodbvjxjlpnwz.supabase.co'
-KEY = 'sb_publishable_7lHYQcJ4rNaIIG4UhmV9YQ_jIRdGn2l'
-APP = 'http://localhost:3000'
-PW = 'TestPass123!'
+URL = _target.URL
+KEY = _target.KEY
+APP = _target.start_app()
+PW = _target.PASSWORD
 
 results = []
 def check(name, ok, detail=''):
@@ -52,10 +53,10 @@ def sign_in(email):
     s, b = call('POST', '/auth/v1/token?grant_type=password', KEY, {'email': email, 'password': PW})
     assert s == 200, (email, s, b); return b['access_token'], b['user']['id']
 
-d1, d1_id = sign_in('driller1@example.com')
-d2, _ = sign_in('driller2@example.com')
-sup, sup_id = sign_in('supervisor1@example.com')
-adm, adm_id = sign_in('admin1@example.com')
+d1, d1_id = sign_in(_target.DRILLER1)
+d2, _ = sign_in(_target.DRILLER2)
+sup, sup_id = sign_in(_target.SUPERVISOR1)
+adm, adm_id = sign_in(_target.ADMIN1)
 
 BH, PIPE = str(uuid.uuid4()), str(uuid.uuid4())
 BH_NAME = f'BH-EDIT-{int(time.time()) % 100000}'
@@ -122,7 +123,7 @@ with sync_playwright() as p:
     field = browser.new_context(viewport={'width': 411, 'height': 900}, is_mobile=True).new_page()
     field.on('pageerror', lambda e: errs.append(str(e)))
     field.goto(APP, wait_until='networkidle'); field.wait_for_timeout(2000)
-    field.fill('input[type="email"]', 'driller1@example.com'); field.fill('input[type="password"]', PW)
+    field.fill('input[type="email"]', _target.DRILLER1); field.fill('input[type="password"]', PW)
     field.get_by_role('button', name='Link this device').click(); field.wait_for_timeout(9000)
     local = field.evaluate("(id) => JSON.parse(localStorage.getItem('wwdm_pipe_records')||'[]').find(r => r.id === id) || null", PIPE)
     check('the phone downloads the corrected pipe', bool(local) and local['formation'] == 'Weathered Basalt'
@@ -132,7 +133,7 @@ with sync_playwright() as p:
     office = browser.new_context(viewport={'width': 1400, 'height': 900}).new_page()
     office.on('pageerror', lambda e: errs.append(str(e)))
     office.goto(f'{APP}/admin.html', wait_until='networkidle'); office.wait_for_timeout(1500)
-    office.fill('input[type="email"]', 'supervisor1@example.com'); office.fill('input[type="password"]', PW)
+    office.fill('input[type="email"]', _target.SUPERVISOR1); office.fill('input[type="password"]', PW)
     office.get_by_role('button', name='Sign in').click(); office.wait_for_timeout(4000)
     check('supervisor sees the crew\'s borehole on the dashboard', office.locator('tr', has_text=BH_NAME).count() == 1)
     check('supervisor is not offered Crew management', office.get_by_role('button', name='Crew').count() == 0)

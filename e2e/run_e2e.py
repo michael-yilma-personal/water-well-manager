@@ -1,58 +1,17 @@
 """End-to-end regression suite for the Water Well Drilling Manager.
 
-Boots the dev server, drives the real UI with Playwright and asserts against the
+Starts its own dev server through _target.start_app(), drives the real UI with Playwright and asserts against the
 persisted localStorage state. Run with:  npm run test:e2e
 
 Requires:  pip install playwright && playwright install chromium
 """
-import os
+import _target
 import re
-import signal
-import socket
-import subprocess
 import sys
-import time
 
 from playwright.sync_api import sync_playwright
 
-PORT = int(os.environ.get('E2E_PORT', '3000'))
-URL = f'http://localhost:{PORT}'
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-
-def port_open(port):
-    with socket.socket() as s:
-        s.settimeout(0.4)
-        return s.connect_ex(('127.0.0.1', port)) == 0
-
-
-def start_server():
-    """Start `npm run dev` unless something is already serving the port."""
-    if port_open(PORT):
-        print(f'Reusing server already listening on {PORT}')
-        return None
-    proc = subprocess.Popen(
-        ['npm', 'run', 'dev', '--', f'--port={PORT}'], cwd=ROOT,
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-    for _ in range(120):
-        if port_open(PORT):
-            print(f'Dev server ready on {PORT}')
-            return proc
-        if proc.poll() is not None:
-            sys.exit('Dev server exited before becoming ready')
-        time.sleep(0.5)
-    stop_server(proc)
-    sys.exit(f'Dev server did not come up on {PORT}')
-
-
-def stop_server(proc):
-    if proc is None:
-        return
-    try:
-        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-        proc.wait(timeout=10)
-    except Exception:
-        proc.kill()
+URL = _target.start_app()
 
 
 results = []
@@ -70,7 +29,6 @@ def section(name):
     return name
 
 
-server = start_server()
 try:
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
@@ -441,7 +399,7 @@ try:
 
 
 finally:
-    stop_server(server)
+    _target.stop_app()
 
 print('\n' + '=' * 60)
 failed = [(s, l, d) for s, l, ok, d in results if not ok]

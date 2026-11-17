@@ -6,9 +6,10 @@ no fixed set of phone sizes would have caught.
 
 Exits non-zero if any width has overlapping controls or controls past the edge.
 """
+import _target
 from playwright.sync_api import sync_playwright
 
-OUT = '/private/tmp/claude-501/-Users-kalena-dev-water-well-drilling-manager/4c525f0f-604d-4e86-8f8e-b68bbddc1172/scratchpad'
+OUT = _target.OUT
 
 DETECT = r"""
 () => {
@@ -97,9 +98,9 @@ def sweep(url, name, sign_in=None):
 
 
 import sys as _sys
-_field = sweep('http://localhost:3000/', 'field')
-_dash = sweep('http://localhost:3000/admin.html', 'dashboard',
-              ('admin1@example.com', 'TestPass123!', 'Sign in'))
+_field = sweep(_target.start_app() + '/', 'field')
+_dash = sweep(_target.start_app() + '/admin.html', 'dashboard',
+              (_target.ADMIN1, _target.PASSWORD, 'Sign in'))
 _bad = len(_field) + len(_dash)
 print(f"\n{'PASS' if _bad == 0 else 'FAIL'} - {_bad} width(s) with layout collisions")
 _sys.exit(0 if _bad == 0 else 1)

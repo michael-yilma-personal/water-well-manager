@@ -1,7 +1,8 @@
 """Cancelling a pipe must lose no time and add no fake depth."""
+import _target
 import sys
 from playwright.sync_api import sync_playwright
-OUT='/private/tmp/claude-501/-Users-kalena-dev-water-well-drilling-manager/4c525f0f-604d-4e86-8f8e-b68bbddc1172/scratchpad'
+OUT=_target.OUT
 results=[]
 def check(n, ok, d=''):
     results.append((n,ok)); print(f'{"PASS" if ok else "FAIL"}  {n}'+(f'   -- {d}' if d else ''))
@@ -17,7 +18,7 @@ with sync_playwright() as p:
     page=ctx.new_page(); errs=[]
     page.on('pageerror', lambda e: errs.append(str(e)))
     page.on('dialog', lambda d: d.accept())
-    page.goto('http://localhost:3000', wait_until='networkidle'); page.wait_for_timeout(2000)
+    page.goto(_target.start_app(), wait_until='networkidle'); page.wait_for_timeout(2000)
     if 'link this device' in page.inner_text('body').lower():
         page.get_by_role('button', name='Work offline for now').click(); page.wait_for_timeout(2500)
     before = page.evaluate(STATE)

@@ -1,4 +1,4 @@
-"""Pause and resume, end to end against the live Supabase project.
+"""Pause and resume, end to end against the project named by _target.
 
 A driller pauses a pipe in the field app; the office must see the rig paused
 on the admin dashboard before the pipe is finished, see it resume, and then see
@@ -7,6 +7,7 @@ the finished pipe with its paused time taken out of the drilling time.
 Uses the example.com test accounts (driller1, admin1): create them with
 scripts/create-user.sh first and remove them with scripts/delete-test-data.sh.
 """
+import _target
 import json
 import os
 import sys
@@ -18,11 +19,11 @@ import urllib.request
 from playwright.sync_api import sync_playwright
 
 OUT = os.environ.get('E2E_OUT', tempfile.gettempdir())
-URL = 'https://bfteveoeodbvjxjlpnwz.supabase.co'
-KEY = 'sb_publishable_7lHYQcJ4rNaIIG4UhmV9YQ_jIRdGn2l'
-APP = 'http://localhost:3000'
-DRILLER = ('driller1@example.com', 'TestPass123!')
-ADMIN = ('admin1@example.com', 'TestPass123!')
+URL = _target.URL
+KEY = _target.KEY
+APP = _target.start_app()
+DRILLER = (_target.DRILLER1, _target.PASSWORD)
+ADMIN = (_target.ADMIN1, _target.PASSWORD)
 BH_NAME = f'BH-PAUSE-{int(time.time()) % 100000}'
 
 results = []

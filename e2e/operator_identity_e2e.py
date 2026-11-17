@@ -5,17 +5,18 @@ people, so a real driller's work was credited to "James Wanjala" while
 created_by recorded the true account. The drilling log and the audit trail
 disagreed about who did the work - on a log that backs client billing.
 """
+import _target
 import json
 import sys
 import urllib.request
 
 from playwright.sync_api import sync_playwright
 
-OUT = '/private/tmp/claude-501/-Users-kalena-dev-water-well-drilling-manager/4c525f0f-604d-4e86-8f8e-b68bbddc1172/scratchpad'
-URL = 'https://bfteveoeodbvjxjlpnwz.supabase.co'
-KEY = 'sb_publishable_7lHYQcJ4rNaIIG4UhmV9YQ_jIRdGn2l'
+OUT = _target.OUT
+URL = _target.URL
+KEY = _target.KEY
 
-DRILLER = ('driller2@example.com', 'TestPass123!')
+DRILLER = (_target.DRILLER2, _target.PASSWORD)
 EXPECTED_NAME = 'Peter Otieno'
 
 results = []
@@ -43,7 +44,7 @@ with sync_playwright() as p:
     page = ctx.new_page()
     errs = []
     page.on('pageerror', lambda e: errs.append(str(e)))
-    page.goto('http://localhost:3000', wait_until='networkidle')
+    page.goto(_target.start_app(), wait_until='networkidle')
     page.wait_for_timeout(2000)
 
     page.fill('input[type="email"]', DRILLER[0])

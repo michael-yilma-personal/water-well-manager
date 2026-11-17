@@ -1,10 +1,11 @@
-"""Offline -> online end-to-end through the real app UI against live Supabase."""
+"""Offline -> online end-to-end through the real app UI against the project named by _target."""
+import _target
 import json, urllib.request, sys
 from playwright.sync_api import sync_playwright
 
-OUT = '/private/tmp/claude-501/-Users-kalena-dev-water-well-drilling-manager/4c525f0f-604d-4e86-8f8e-b68bbddc1172/scratchpad'
-URL = 'https://bfteveoeodbvjxjlpnwz.supabase.co'
-KEY = 'sb_publishable_7lHYQcJ4rNaIIG4UhmV9YQ_jIRdGn2l'
+OUT = _target.OUT
+URL = _target.URL
+KEY = _target.KEY
 
 results = []
 def check(name, ok, detail=''):
@@ -22,11 +23,11 @@ def server_pipes(token):
 def sign_in_api(email):
     req = urllib.request.Request(f'{URL}/auth/v1/token?grant_type=password', method='POST')
     req.add_header('apikey', KEY); req.add_header('Content-Type', 'application/json')
-    with urllib.request.urlopen(req, json.dumps({'email': email, 'password': 'TestPass123!'}).encode()) as r:
+    with urllib.request.urlopen(req, json.dumps({'email': email, 'password': _target.PASSWORD}).encode()) as r:
         return json.loads(r.read().decode())['access_token']
 
-d1_api = sign_in_api('driller1@example.com')
-admin_api = sign_in_api('admin1@example.com')
+d1_api = sign_in_api(_target.DRILLER1)
+admin_api = sign_in_api(_target.ADMIN1)
 before = {p['id'] for p in server_pipes(d1_api)}
 print(f'server has {len(before)} pipe record(s) for driller1 before the run\n')
 
@@ -36,14 +37,14 @@ with sync_playwright() as p:
     page = ctx.new_page()
     errs = []
     page.on('pageerror', lambda e: errs.append(str(e)))
-    page.goto('http://localhost:3000', wait_until='networkidle')
+    page.goto(_target.start_app(), wait_until='networkidle')
     page.wait_for_timeout(2000)
 
     # --- provision the device -----------------------------------------------
     check('sign-in screen shown on an unprovisioned device',
           'link this device' in page.inner_text('body').lower())
-    page.fill('input[type="email"]', 'driller1@example.com')
-    page.fill('input[type="password"]', 'TestPass123!')
+    page.fill('input[type="email"]', _target.DRILLER1)
+    page.fill('input[type="password"]', _target.PASSWORD)
     page.get_by_role('button', name='Link this device').click()
     page.wait_for_timeout(4000)
     # Linking clears the seeded sample job, so a newly linked device correctly

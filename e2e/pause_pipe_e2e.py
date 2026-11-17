@@ -1,4 +1,5 @@
 """Pausing a pipe must stop the drilling clock, report the stop, and resume cleanly."""
+import _target
 import os, sys, tempfile
 from playwright.sync_api import sync_playwright
 OUT = os.environ.get('E2E_OUT', tempfile.gettempdir())
@@ -15,7 +16,7 @@ with sync_playwright() as p:
     page = ctx.new_page(); errs = []
     page.on('pageerror', lambda e: errs.append(str(e)))
     page.on('dialog', lambda d: d.accept())
-    page.goto('http://localhost:3000', wait_until='networkidle'); page.wait_for_timeout(2000)
+    page.goto(_target.start_app(), wait_until='networkidle'); page.wait_for_timeout(2000)
     if 'link this device' in page.inner_text('body').lower():
         page.get_by_role('button', name='Work offline for now').click(); page.wait_for_timeout(2500)
     pipes_before = page.evaluate("() => JSON.parse(localStorage.getItem('wwdm_pipe_records')||'[]').length")

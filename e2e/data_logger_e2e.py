@@ -1,4 +1,4 @@
-"""The Data Logger role, end to end against the live Supabase project.
+"""The Data Logger role, end to end against the project named by _target.
 
 A Data Logger is a crew role with the same access as a Driller, so this checks
 the whole path an administrator takes to create one and what the account can
@@ -12,13 +12,14 @@ then do:
 The account is created on first run and reused after; it is an example.com test
 account, removed with the others by scripts/delete-test-data.sh.
 """
+import _target
 import json
 import sys
 import urllib.request
 import uuid
 
-URL = 'https://bfteveoeodbvjxjlpnwz.supabase.co'
-KEY = 'sb_publishable_7lHYQcJ4rNaIIG4UhmV9YQ_jIRdGn2l'
+URL = _target.URL
+KEY = _target.KEY
 
 results = []
 
@@ -50,15 +51,15 @@ def call(method, path, token=None, body=None, prefer=None):
 
 def sign_in(email):
     status, body = call('POST', '/auth/v1/token?grant_type=password',
-                        body={'email': email, 'password': 'TestPass123!'})
+                        body={'email': email, 'password': _target.PASSWORD})
     assert status == 200, (status, body)
     return body['access_token'], body['user']['id']
 
 
-EMAIL = 'datalogger1@example.com'
+EMAIL = _target.DATALOGGER1
 
-admin_token, admin_id = sign_in('admin1@example.com')
-d1_token, d1_id = sign_in('driller1@example.com')
+admin_token, admin_id = sign_in(_target.ADMIN1)
+d1_token, d1_id = sign_in(_target.DRILLER1)
 
 # --- the administrator creates the account through the real function --------
 status, body = call('GET', '/functions/v1/admin-users', admin_token)
@@ -67,7 +68,7 @@ existing = next((u for u in (body or {}).get('users', []) if u['email'] == EMAIL
 
 if existing is None:
     status, body = call('POST', '/functions/v1/admin-users', admin_token, {
-        'email': EMAIL, 'password': 'TestPass123!', 'name': 'Test Data Logger',
+        'email': EMAIL, 'password': _target.PASSWORD, 'name': 'Test Data Logger',
         'role': 'Data Logger', 'badgeNumber': 'LOG-E2E',
     })
     check('admin can create a Data Logger', status == 201, f'HTTP {status} {str(body)[:80]}')
@@ -75,7 +76,7 @@ else:
     check('Data Logger account exists', existing['role'] == 'Data Logger', existing['role'])
 
 status, body = call('POST', '/functions/v1/admin-users', admin_token, {
-    'email': f'bogus-{uuid.uuid4().hex[:6]}@example.com', 'password': 'TestPass123!',
+    'email': f'bogus-{uuid.uuid4().hex[:6]}@example.com', 'password': _target.PASSWORD,
     'role': 'Data Loger',
 })
 check('an unknown role is rejected', status == 400, f'HTTP {status} {str(body)[:60]}')

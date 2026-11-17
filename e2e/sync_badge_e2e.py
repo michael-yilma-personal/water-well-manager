@@ -5,11 +5,12 @@ when a record was saved, so the header sat on a green "Cloud Synced" while
 records were queued and unsent - the one reassurance a driller must not be
 given falsely.
 """
+import _target
 import sys
 
 from playwright.sync_api import sync_playwright
 
-OUT = '/private/tmp/claude-501/-Users-kalena-dev-water-well-drilling-manager/4c525f0f-604d-4e86-8f8e-b68bbddc1172/scratchpad'
+OUT = _target.OUT
 
 BADGE = """() => {
   const b = [...document.querySelectorAll('button')]
@@ -31,13 +32,13 @@ with sync_playwright() as p:
         page = ctx.new_page()
         errs = []
         page.on('pageerror', lambda e: errs.append(str(e)))
-        page.goto('http://localhost:3000', wait_until='networkidle')
+        page.goto(_target.start_app(), wait_until='networkidle')
         page.wait_for_timeout(2000)
         # Link properly: an unlinked device has no account to attribute records
         # to, so it cannot drain and the round trip could never complete.
         if 'link this device' in page.inner_text('body').lower():
-            page.fill('input[type="email"]', 'driller2@example.com')
-            page.fill('input[type="password"]', 'TestPass123!')
+            page.fill('input[type="email"]', _target.DRILLER2)
+            page.fill('input[type="password"]', _target.PASSWORD)
             page.get_by_role('button', name='Link this device').click()
             page.wait_for_timeout(7000)
 

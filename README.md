@@ -115,16 +115,32 @@ are rejected as downgrades.
 
 ```bash
 npm run lint            # tsc --noEmit
-npm test                # 79 unit tests
+npm test                # unit tests
 npm run test:e2e        # rls, new-crew, offline sync, photos, dashboard
 npm run test:unsupported # old-browser message on the built output
 npm run test:apk        # offline capture -> sync on a connected device
 npm run test:apk-photos # photo pipeline on a connected device
 ```
 
-The e2e suites run against the **live** Supabase project in `.env.local` and
-need the seeded test accounts. `test:apk*` need an emulator or device with the
-debug build installed and `adb` on PATH.
+The e2e suites never use `.env.local`. They read their target from
+`DRILL_E2E_SUPABASE_URL`, `DRILL_E2E_PUBLISHABLE_KEY` and `DRILL_E2E_PASSWORD`,
+taken from the environment or from a git-ignored `.env.e2e` at the repository
+root, and they refuse to run against the production project (`PROD_REF` in
+`scripts/hooks/guard.conf`). Point them at a staging project that has the test
+accounts. Suites that drive the web app start their own app server against that
+same project.
+
+The device suites (`test:apk*`) need an emulator or device, `adb` on PATH, and
+a build made for the tested project. An APK has its project compiled in, so the
+suite cannot choose it: build it with `VITE_SUPABASE_URL` and
+`VITE_SUPABASE_PUBLISHABLE_KEY` set to the tested project, install it, and set
+`DRILL_E2E_APK_TARGET_REF` to the project ref that build was made for. The
+device suites refuse to run when it is not set or does not match the project
+in `DRILL_E2E_SUPABASE_URL`:
+
+```bash
+DRILL_E2E_APK_TARGET_REF=<staging project ref> npm run test:apk
+```
 
 ## Before real use
 
@@ -137,16 +153,25 @@ debug build installed and `adb` on PATH.
       nobody to sign in as yet:
 
       ```bash
-      scripts/create-user.sh boss@company.com 'strong-password' Administrator "David Mutua" ADM-001
+      SUPABASE_PROJECT_REF=<live project ref> scripts/create-user.sh --production boss@company.com 'strong-password' Administrator "David Mutua" ADM-001
       ```
+
+      The management scripts (`create-user.sh`, `delete-test-data.sh`,
+      `check-attribution.sh`) have no default project: `SUPABASE_PROJECT_REF`
+      is required, and they refuse the live project unless `--production` is
+      the first argument.
 
 - [ ] **Delete the test accounts and their data**, once you no longer need the
       e2e suites:
 
       ```bash
-      scripts/delete-test-data.sh          # dry run, shows the counts
-      scripts/delete-test-data.sh --yes    # actually delete
+      SUPABASE_PROJECT_REF=<live project ref> scripts/delete-test-data.sh --production          # dry run, shows the counts
+      SUPABASE_PROJECT_REF=<live project ref> scripts/delete-test-data.sh --production --yes    # actually delete
       ```
+
+      These are written for the live project, so `--production` comes first;
+      on a staging project leave it out. It only ever deletes accounts whose
+      email ends in `@example.com`.
 
       Order matters and the script handles it: `created_by` references
       `auth.users` with NO ACTION, so deleting a driller who still has drilling
@@ -199,9 +224,9 @@ two copies identical; `src/utils/supportGate.test.ts` checks that.
   dashboard is where photos are reviewed.
 - `admin.html` (~15 KB) is bundled into the APK. Harmless and RLS-protected,
   but it does not need to be there.
-- **Supervisor grants nothing today.** The schema allows the role, but every
-  read policy keys off `is_admin()`, which only matches `Administrator`. A
-  Supervisor currently behaves exactly like a Driller. Crew-wide visibility
-  needs a crew/rig assignment before the role means anything.
+- **Supervisor is a review role, not a crew lead.** Since migration
+  `20260928000000` a Supervisor reads every crew's records and may correct the
+  End Pipe fields of any pipe record, as an Administrator can. There is still
+  no crew/rig assignment, so that access cannot be limited to one crew.
 - There is no way to change your own password in the app; use Supabase →
   Authentication.
