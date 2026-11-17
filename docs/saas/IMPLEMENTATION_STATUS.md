@@ -6,8 +6,8 @@ Requirements: `docs/SAAS_ARCHITECTURE_PROPOSAL.md`. How the work is run: `docs/s
 
 - **Phase:** Phase 0 — Preparation (approved). Phase 1 is approved to start after Phase 0, on staging only; its production migration is not approved.
 - **Branch:** `saas/phase-1-tenancy`, branched from `saas/phase-0-preparation` at `8d07755`. Pull requests 3 (workflow tooling) and 4 (Phase 0) are open with green CI, awaiting the owner's merge, in that order.
-- **In progress:** Phase 1, tasks P1-1, P1-2 and P1-4: implemented and green on a throwaway local Postgres (TEST_RESULTS 41); green in CI on the real image (TEST_RESULTS 44); the security review is under way. Staging is not touched until it passes.
-- **Next step:** fix what CI and the review find; then apply to staging and run P1-3, P1-5, P1-6. **Do not check out `main` or any branch that predates the tooling until the pull requests are merged (RF-059).**
+- **In progress:** Phase 1, tasks P1-1, P1-2 and P1-4: green locally and in CI (TEST_RESULTS 44), but the security review blocks (TEST_RESULTS 45; RF-071 to RF-077: two High in the profile and ban mirror). Fixes are under way, tests first. Staging is not touched until a re-review passes.
+- **Next step:** fix RF-071 to RF-077 and have them re-reviewed; then apply to staging and run P1-3, P1-5, P1-6. **Do not check out `main` or any branch that predates the tooling until the pull requests are merged (RF-059).**
 - **Waiting on the owner:** the action recorded for RF-050 (deferred by the owner; does not block development); approval to delete the `probe` function from production (RF-049); confirmation of the staging rule (RF-054); branch protection on `main`; merging the workflow and Phase 0 pull requests so `main` stops carrying the production link files (RF-059).
 
 ## Phases
@@ -44,8 +44,8 @@ Defaults taken where the proposal left a decision open (each can be changed befo
 
 | Id | Task | Status | Evidence |
 |---|---|---|---|
-| P1-1 | Reusable foundation migration `saas_core`: organizations, memberships, platform administrators, audit log, helper functions | Implemented; green locally and in CI; review pending | TEST_RESULTS 40 to 44 |
-| P1-2 | Drill migration `drill_tenancy`: founding organization, memberships from profiles, `org_id` on the four record tables, compatibility triggers for installed builds, organization-scoped policies for tables and photos | Implemented; green locally and in CI; review pending; not yet on staging | TEST_RESULTS 40 to 44 |
+| P1-1 | Reusable foundation migration `saas_core`: organizations, memberships, platform administrators, audit log, helper functions | Implemented; green locally and in CI; **review blocks (RF-071 to RF-077), fixes under way** | TEST_RESULTS 40 to 44 |
+| P1-2 | Drill migration `drill_tenancy`: founding organization, memberships from profiles, `org_id` on the four record tables, compatibility triggers for installed builds, organization-scoped policies for tables and photos | Implemented; green locally and in CI; **review blocks (RF-071 to RF-077), fixes under way**; not yet on staging | TEST_RESULTS 40 to 44 |
 | P1-3 | Tenant-isolation suite `e2e/saas/tenant_isolation_e2e.py` and a fixture that creates a second organization on staging | Not started | — |
 | P1-4 | Schema check: every table in `public` has RLS and is organization-scoped or allowlisted; run in CI's database job | Done; runs in CI | TEST_RESULTS 44 |
 | P1-5 | Compatibility proof: the 21 existing suites, unchanged, pass against the migrated staging database (the current app sends no `org_id`, so it stands in for the installed 1.1.7 build) | Not started | — |
@@ -103,6 +103,18 @@ Defaults taken where the proposal left a decision open (each can be changed befo
 24. An expired ban counts as active. A forged `org_id` on a borehole is rejected (`42501`), not replaced. The child-row and immutability triggers apply to the service role too. Re-sending the same `org_id` in an update is not a change. Migration and rollback files contain no transaction statements. Mirroring from a profile is defined only for users with at most one membership.
 
 25. Privileges are explicit after the tenancy migrations, and the same whether the database started with a hosted project's default grants or with none (TEST_RESULTS 42): `service_role` holds everything on every table in `public`; `authenticated` holds SELECT, INSERT and UPDATE on the four record tables, SELECT and UPDATE of `name` and `badge_number` on `profiles`, and SELECT on the four foundation tables; `anon` holds nothing. This removes privileges the API roles hold today only by default and never needed (for example REFERENCES and TRIGGER, and everything for `anon`); row level security already denied their use.
+
+26. The profile mirror copies only the column that changed: a badge edit never writes a membership role, and a role change never writes a badge (RF-071).
+
+27. Everything mirrored from the legacy tables targets the founding organization only: a new profile is enrolled there (also when other organizations exist), and profile role, badge, ban and unban reach the founding membership and no other (RF-072, RF-076). `admin-users` is to require an active Administrator membership and a target in the caller's organization.
+
+28. Unban reactivates only a membership that a ban deactivated. One deactivated directly stays deactivated (RF-072).
+
+29. The Drill migration leaves no point at which an installed build's insert without `org_id` fails, even if the file is not applied as one transaction (RF-073).
+
+30. Legacy photos (`<user_id>/<file>`) belong to the founding organization only, as the proposal (5.3) says; this replaces the wider reading in criterion 11. Uploading to the legacy path needs an active membership (RF-074, RF-077).
+
+31. Re-applying the Drill migration does not re-enrol a removed member. The rollback refuses to run when more than one organization holds records. `anon` may execute none of the helper functions. Accepted without change: a member can learn whether a user id is in their own organization; a ban that expires is not mirrored; `23503` versus `42501` reveals whether a borehole id exists (RF-077).
 
 ### Phase 0 — Preparation (approved 2026-11-15)
 
