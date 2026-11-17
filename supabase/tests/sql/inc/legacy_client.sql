@@ -3,7 +3,11 @@
 -- writes that never mention org_id. Requires lib/helpers.sql and a database
 -- with at most one organization.
 --
--- These checks pass on the six pre-tenancy migrations and must keep passing
+-- These checks pass on the six pre-tenancy migrations where the API roles
+-- hold Supabase's hosted default privileges (production, staging), and not
+-- on a bare database such as CI's, where those migrations grant nothing. They
+-- must pass after the tenancy migrations in both (criterion 25), so they
+-- must keep passing
 -- after the tenancy migrations (criteria 9, 10, 11 and the Phase 1 acceptance
 -- "works unchanged against the migrated database"), and again after a
 -- rollback (criterion 14). Included by 05_legacy_client.sql and by

@@ -3,11 +3,20 @@
 -- back and the installed build's behaviour with it, re-apply the migrations,
 -- check again, and roll the whole thing back. Nothing is left changed.
 --
+-- What is and is not asserted after the rollback: the catalog facts that are
+-- the same wherever the database started (tenancy objects gone, the fourteen
+-- pre-tenancy policies, the six triggers). The installed build's BEHAVIOUR
+-- after a rollback is not asserted here: it needs the privileges the database
+-- had before the migrations, and on CI's image those were none at all. That
+-- proof, with the full catalog comparison, is in supabase/tests/local.sh on a
+-- database that starts with the hosted default privileges, as production
+-- does. After rolling forward again the behaviour must be back in any world.
+--
 -- run.sh passes the four file paths as psql variables and refuses to run this
 -- file when one of them is missing or contains transaction control.
 -- supabase/tests/local.sh additionally compares a full catalog snapshot
 -- before the migration and after the rollback on a scratch database.
--- plan: 184
+-- plan: 104
 begin;
 \ir ../lib/helpers.sql
 
@@ -56,9 +65,14 @@ select t.ok('[c14] after rollback: the triggers calling public functions are exa
      from pg_trigger tg join pg_proc p on p.oid = tg.tgfoid
      where not tg.tgisinternal and p.pronamespace = 'public'::regnamespace $$);
 
-savepoint after_rollback;
-\ir inc/legacy_client.sql
-rollback to savepoint after_rollback;
+select t.ok('[c14] after rollback: the pre-tenancy functions are still there',
+  $$ select to_regprocedure('public.is_admin()') is not null and to_regprocedure('public.is_reviewer()') is not null
+        and to_regprocedure('public.handle_new_user()') is not null and to_regprocedure('public.pipe_records_guard_update()') is not null
+        and to_regprocedure('public.touch_modified_at()') is not null $$);
+select t.ok('[c14] after rollback: the five pre-tenancy tables are still there, with row level security',
+  $$ select count(*) = 5 and bool_and(relrowsecurity) from pg_class
+     where oid in ('public.profiles'::regclass, 'public.boreholes'::regclass, 'public.pipe_records'::regclass,
+                   'public.drilling_events'::regclass, 'public.shift_logs'::regclass) $$);
 
 \i :mig_core
 \i :mig_drill

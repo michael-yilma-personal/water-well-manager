@@ -16,13 +16,21 @@
 # the authority; this script exists so the same tests, and three things CI's
 # single empty database cannot show, run before a push:
 #
+# The fresh and upgrade phases run twice, once per "world" the stand-in can
+# model (stub/supabase_stub.sql): bare, where the API roles get nothing by
+# default on tables in public (Supabase's local image, so CI), and hosted,
+# where they get everything (production, staging). Criterion 25 requires the
+# same explicit privileges from either start. The core phase runs bare.
+#
 #   fresh     stub + every migration, then run.sh (the suite CI runs).
 #   upgrade   stub + the pre-tenancy migrations, legacy data (accounts, a
 #             banned one, records, a photo), THEN the tenancy migrations:
 #             founding organization, memberships and org_id backfill (criteria
 #             6, 7); the whole suite again on top of that data; then the
-#             rollback scripts, after which the catalog and the data must
-#             equal what was there before (criterion 14).
+#             rollback scripts (criterion 14). Hosted: the catalog and the
+#             data must equal what was there before, and the installed
+#             build's behaviour must be back. Bare: the scripts run, what the
+#             migrations added is gone and the data is intact.
 #   core      stub + saas_core alone, applied twice (criterion 4), with nothing
 #             of Drill's in the database (section A, criterion 2's default).
 #
@@ -183,107 +191,141 @@ same_section() {
 
 SECTIONS="tables columns constraints indexes policies functions triggers grants column_grants buckets"
 
+# Load the stand-in in one of its two worlds (see stub/supabase_stub.sql).
+load_stub() {
+  local db="$1" world="$2"
+  psql -X -q -v ON_ERROR_STOP=1 -v world="$world" -1 -d "$db" -f "$HERE/stub/supabase_stub.sql" >/dev/null 2>"$WORK/apply.err"
+}
+
 # --- fresh: stub + every migration, then the suite CI runs --------------------
 
-PHASE="fresh"
-new_db fresh
-apply_checked fresh "$HERE/stub/supabase_stub.sql" "[harness] the Supabase stand-in loads into an empty database"
-while IFS= read -r f; do
-  if [ "$(basename "$f")" \< "$FIRST_TENANCY" ]; then
-    apply_checked fresh "$f" "[harness] pre-tenancy migration $(basename "$f") applies on the stand-in"
+phase_fresh() {
+  local world="$1" db="fresh_$1" f
+  PHASE="$world, fresh"
+  new_db "$db"
+  if load_stub "$db" "$world"; then
+    pass "[harness] the Supabase stand-in loads into an empty database ($world world)"
   else
-    apply_checked fresh "$f" "[c4] $(basename "$f") applies to a database with no data"
+    fail "[harness] the Supabase stand-in loads into an empty database ($world world) :: $(first_error)"
   fi
-done < <(all_migrations)
-suite fresh
+  while IFS= read -r f; do
+    if [ "$(basename "$f")" \< "$FIRST_TENANCY" ]; then
+      apply_checked "$db" "$f" "[harness] pre-tenancy migration $(basename "$f") applies on the stand-in"
+    else
+      apply_checked "$db" "$f" "[c4] $(basename "$f") applies to a database with no data"
+    fi
+  done < <(all_migrations)
+  suite "$db"
+}
 
 # --- upgrade: legacy data first, then the tenancy migrations, then rollback ---
 
-PHASE="upgrade"
-new_db upgrade
-apply upgrade "$HERE/stub/supabase_stub.sql" || fail "[harness] the Supabase stand-in loads :: $(first_error)"
-while IFS= read -r f; do
-  apply upgrade "$f" || fail "[harness] $(basename "$f") applies :: $(first_error)"
-done < <(pre_tenancy_migrations)
-apply_checked upgrade "$HERE/upgrade/seed_legacy.sql" "[harness] legacy accounts, records and a photo are loaded before the tenancy migrations"
+phase_upgrade() {
+  local world="$1" db="upgrade_$1" f d s tbl what migrated rolled_back
+  PHASE="$world, upgrade"
+  new_db "$db"
+  load_stub "$db" "$world" || fail "[harness] the Supabase stand-in loads :: $(first_error)"
+  while IFS= read -r f; do
+    apply "$db" "$f" || fail "[harness] $(basename "$f") applies :: $(first_error)"
+  done < <(pre_tenancy_migrations)
+  apply_checked "$db" "$HERE/upgrade/seed_legacy.sql" "[harness] legacy accounts, records and a photo are loaded before the tenancy migrations"
 
-snapshot upgrade "$WORK/snap.before" || fail "[harness] catalog snapshot before the migrations :: $(head -n 1 "$WORK/snap.err")"
-digest upgrade "$WORK/digest.before" || fail "[harness] data digest before the migrations :: $(head -n 1 "$WORK/digest.err")"
+  rm -f "$WORK"/snap.before "$WORK"/snap.after "$WORK"/digest.* "$WORK"/touched.*
+  snapshot "$db" "$WORK/snap.before" || fail "[harness] catalog snapshot before the migrations :: $(head -n 1 "$WORK/snap.err")"
+  digest "$db" "$WORK/digest.before" || fail "[harness] data digest before the migrations :: $(head -n 1 "$WORK/digest.err")"
+  touched "$db" "$WORK/touched.before" || fail "[harness] modified_at digest before the migrations :: $(head -n 1 "$WORK/touched.err")"
 
-touched upgrade "$WORK/touched.before" || fail "[harness] modified_at digest before the migrations :: $(head -n 1 "$WORK/touched.err")"
+  migrated=1
+  apply_checked "$db" "$MIG_CORE"  "[c6] saas_core applies on top of existing data" || migrated=0
+  apply_checked "$db" "$MIG_DRILL" "[c6][c7] drill_tenancy applies on top of existing data" || migrated=0
 
-migrated=1
-apply_checked upgrade "$MIG_CORE"  "[c6] saas_core applies on top of existing data" || migrated=0
-apply_checked upgrade "$MIG_DRILL" "[c6][c7] drill_tenancy applies on top of existing data" || migrated=0
+  suite "$db" "$HERE/upgrade/after_migration.sql"
 
-suite upgrade "$HERE/upgrade/after_migration.sql"
-
-if [ "$migrated" -eq 1 ] && digest upgrade "$WORK/digest.after"; then
-  d="$(diff "$WORK/digest.before" "$WORK/digest.after")"
-  if [ -z "$d" ]; then
-    pass "[c7] the migration kept every existing row, account and photo unchanged (org_id aside)"
-  else
-    fail "[c7] the migration kept every existing row, account and photo unchanged (org_id aside) :: $(printf '%s' "$d" | grep '^[<>]' | tr '\n' ';')"
-  fi
-else
-  fail "[c7] the migration kept every existing row, account and photo unchanged (org_id aside) :: not checked, the migrations did not apply"
-fi
-
-# Criterion 21, per table. The seed and the migration run in separate
-# transactions, so a backfill that fires the touch trigger shows as a new hash.
-for tbl in boreholes pipe_records drilling_events shift_logs; do
-  what="[c21] the backfill left modified_at untouched on every existing row of $tbl"
-  if [ "$migrated" -eq 1 ] && [ -s "$WORK/touched.before" ] && touched upgrade "$WORK/touched.after"; then
-    if [ "$(grep "^$tbl|" "$WORK/touched.before")" = "$(grep "^$tbl|" "$WORK/touched.after")" ] && grep -q "^$tbl|[1-9]" "$WORK/touched.before"; then
-      pass "$what"
-    else
-      fail "$what :: before $(grep "^$tbl|" "$WORK/touched.before"), after $(grep "^$tbl|" "$WORK/touched.after")"
-    fi
+  what="[c7] the migration kept every existing row, account and photo unchanged (org_id aside)"
+  if [ "$migrated" -eq 1 ] && digest "$db" "$WORK/digest.after"; then
+    d="$(diff "$WORK/digest.before" "$WORK/digest.after")"
+    if [ -z "$d" ]; then pass "$what"; else fail "$what :: $(printf '%s' "$d" | grep '^[<>]' | tr '\n' ';')"; fi
   else
     fail "$what :: not checked, the migrations did not apply"
   fi
-done
 
-# The whole suite again, now with the legacy data underneath it.
-PHASE="upgrade, full suite"
-suite upgrade
-PHASE="upgrade"
-
-# Criterion 14. Comparing snapshots proves nothing unless the migrations were
-# really applied and the rollback scripts really ran.
-rolled_back=1
-if [ "$migrated" -eq 1 ]; then
-  apply_checked upgrade "$RB_DRILL" "[c14] the drill_tenancy rollback script runs on the migrated database with its data" || rolled_back=0
-  apply_checked upgrade "$RB_CORE"  "[c14] the saas_core rollback script runs after it" || rolled_back=0
-else
-  fail "[c14] the rollback scripts run on the migrated database :: not run, the migrations did not apply"
-  rolled_back=0
-fi
-
-if [ "$rolled_back" -eq 1 ] && snapshot upgrade "$WORK/snap.after" && digest upgrade "$WORK/digest.rolledback"; then
-  for s in $SECTIONS; do
-    same_section "$s" "$WORK/snap.before" "$WORK/snap.after" "[c14] after rollback, the $s are exactly what they were before the migrations"
+  # Criterion 21, per table. The seed and the migration run in separate
+  # transactions, so a backfill that fires the touch trigger shows as a new hash.
+  for tbl in boreholes pipe_records drilling_events shift_logs; do
+    what="[c21] the backfill left modified_at untouched on every existing row of $tbl"
+    if [ "$migrated" -eq 1 ] && [ -s "$WORK/touched.before" ] && touched "$db" "$WORK/touched.after"; then
+      if [ "$(grep "^$tbl|" "$WORK/touched.before")" = "$(grep "^$tbl|" "$WORK/touched.after")" ] && grep -q "^$tbl|[1-9]" "$WORK/touched.before"; then
+        pass "$what"
+      else
+        fail "$what :: before $(grep "^$tbl|" "$WORK/touched.before"), after $(grep "^$tbl|" "$WORK/touched.after")"
+      fi
+    else
+      fail "$what :: not checked, the migrations did not apply"
+    fi
   done
-  d="$(diff "$WORK/digest.before" "$WORK/digest.rolledback")"
-  if [ -z "$d" ]; then
-    pass "[c14] after rollback, every row, account and photo that existed before is still there, unchanged"
+
+  # The whole suite again, now with the legacy data underneath it.
+  PHASE="$world, upgrade, full suite"
+  suite "$db"
+  PHASE="$world, upgrade"
+
+  # Criterion 14. Checking the state after a rollback proves nothing unless
+  # the migrations were really applied and the rollback scripts really ran.
+  rolled_back=1
+  if [ "$migrated" -eq 1 ]; then
+    apply_checked "$db" "$RB_DRILL" "[c14] the drill_tenancy rollback script runs on the migrated database with its data" || rolled_back=0
+    apply_checked "$db" "$RB_CORE"  "[c14] the saas_core rollback script runs after it" || rolled_back=0
   else
-    fail "[c14] after rollback, every row, account and photo that existed before is still there, unchanged :: $(printf '%s' "$d" | grep '^[<>]' | tr '\n' ';')"
+    fail "[c14] the rollback scripts run on the migrated database :: not run, the migrations did not apply"
+    rolled_back=0
   fi
-  # And the database works the way it did: the installed build's behaviour.
-  suite upgrade "$HERE/sql/05_legacy_client.sql"
-else
-  for s in $SECTIONS; do
-    fail "[c14] after rollback, the $s are exactly what they were before the migrations :: not checked, there was no rollback to check"
-  done
-  fail "[c14] after rollback, every row, account and photo that existed before is still there, unchanged :: not checked, there was no rollback to check"
-fi
+
+  what="[c14] after rollback, every row, account and photo that existed before is still there, unchanged"
+  if [ "$rolled_back" -eq 1 ] && digest "$db" "$WORK/digest.rolledback"; then
+    d="$(diff "$WORK/digest.before" "$WORK/digest.rolledback")"
+    if [ -z "$d" ]; then pass "$what"; else fail "$what :: $(printf '%s' "$d" | grep '^[<>]' | tr '\n' ';')"; fi
+  else
+    fail "$what :: not checked, there was no rollback to check"
+  fi
+
+  if [ "$world" = "hosted" ]; then
+    # The starting point production has. A rollback must put back exactly
+    # that: every policy, column, function, trigger and grant, and with them
+    # the installed build's behaviour.
+    if [ "$rolled_back" -eq 1 ] && snapshot "$db" "$WORK/snap.after"; then
+      for s in $SECTIONS; do
+        same_section "$s" "$WORK/snap.before" "$WORK/snap.after" "[c14] after rollback, the $s are exactly what they were before the migrations"
+      done
+      suite "$db" "$HERE/sql/05_legacy_client.sql"
+    else
+      for s in $SECTIONS; do
+        fail "[c14] after rollback, the $s are exactly what they were before the migrations :: not checked, there was no rollback to check"
+      done
+      fail "[c14] after rollback, the installed build's behaviour is back :: not checked, there was no rollback to check"
+    fi
+  else
+    # A bare start had no privileges for the API roles, so there is no working
+    # earlier state to return to and none is required: only that the scripts
+    # run and what the migrations added is gone.
+    if [ "$rolled_back" -eq 1 ]; then
+      suite "$db" "$HERE/upgrade/after_rollback_gone.sql"
+    else
+      fail "[c14] after rollback, what the tenancy migrations added is gone :: not checked, there was no rollback to check"
+    fi
+  fi
+}
+
+# Bare first: it is what CI sees.
+for WORLD in bare hosted; do
+  phase_fresh "$WORLD"
+  phase_upgrade "$WORLD"
+done
 
 # --- core: the foundation alone, twice ----------------------------------------
 
 PHASE="core"
 new_db core
-apply core "$HERE/stub/supabase_stub.sql" || fail "[harness] the Supabase stand-in loads :: $(first_error)"
+load_stub core bare || fail "[harness] the Supabase stand-in loads :: $(first_error)"
 if apply_checked core "$MIG_CORE" "[A] saas_core applies to a database with nothing of Drill's in it"; then
   snapshot core "$WORK/core.1" || fail "[harness] catalog snapshot of the foundation :: $(head -n 1 "$WORK/snap.err")"
   psql -X -q -v ON_ERROR_STOP=1 -d core >/dev/null 2>&1 <<'SQL'

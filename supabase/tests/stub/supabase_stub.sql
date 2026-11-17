@@ -3,8 +3,8 @@
 -- supabase/tests/local.sh loads this into a throwaway PostgreSQL cluster so the
 -- migrations and the database tests can run on a machine with no Docker. It
 -- holds the minimum of what the Supabase image provides that the migrations
--- and tests touch: the API roles, the default privileges Supabase puts on
--- `public`, `auth.users` with `auth.uid()` / `auth.jwt()` / `auth.role()`, and
+-- and tests touch: the API roles, the privileges they get on `public` (in
+-- either of two worlds, see below), `auth.users` with `auth.uid()` / `auth.jwt()` / `auth.role()`, and
 -- `storage.buckets` / `storage.objects` with `storage.foldername()`.
 --
 -- It is written from Supabase's published schema, by hand. Where it differs
@@ -41,16 +41,41 @@ end
 $$;
 
 -- ---------------------------------------------------------------------------
--- public: Supabase grants everything to the API roles and leaves RLS to do
--- the work. A table created by a migration is therefore writable by `anon`
--- and `authenticated` unless the migration revokes it, exactly as on Supabase.
+-- public: two worlds
 -- ---------------------------------------------------------------------------
+-- What the API roles get on a table that a migration creates in `public`
+-- differs between the two places these migrations run:
+--
+--   bare    (the default) nothing. This is what Supabase's local image gives,
+--           and so what CI's `database` job sees: a migration that does not
+--           grant explicitly leaves `authenticated` and `service_role` with
+--           "permission denied".
+--   hosted  everything: default privileges grant ALL on tables, functions and
+--           sequences to anon, authenticated and service_role. This is what
+--           production and staging have, and what the pre-tenancy migrations
+--           silently relied on.
+--
+-- Choose with `psql -v world=hosted`. The tenancy migrations must end in the
+-- same explicit privileges from either start (Phase 1 criterion 25).
+
+\if :{?world}
+\else
+  \set world bare
+\endif
+select :'world' in ('bare', 'hosted') as world_ok, :'world' = 'hosted' as world_hosted \gset
+\if :world_ok
+\else
+  \echo 'supabase_stub.sql: world must be bare or hosted'
+  select 1 / 0 as "unknown world";
+\endif
 
 grant usage on schema public to anon, authenticated, service_role;
 
-alter default privileges in schema public grant all on tables    to anon, authenticated, service_role;
-alter default privileges in schema public grant all on functions to anon, authenticated, service_role;
-alter default privileges in schema public grant all on sequences to anon, authenticated, service_role;
+\if :world_hosted
+  alter default privileges in schema public grant all on tables    to anon, authenticated, service_role;
+  alter default privileges in schema public grant all on functions to anon, authenticated, service_role;
+  alter default privileges in schema public grant all on sequences to anon, authenticated, service_role;
+\endif
 
 -- ---------------------------------------------------------------------------
 -- auth
