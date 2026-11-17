@@ -8,10 +8,33 @@ Source: **TE** = Test Engineer validation, **SR1** / **SR2** = first and second 
 
 ## Open and deferred
 
-None of these blocks the workflow pull request: there is no open Critical, High or Medium finding. The Low items are scheduled into Phase 0 task P0-6 (guard and scope follow-ups) unless marked otherwise.
+**One Critical finding is mitigated but not resolved: RF-050.** Its detail is kept out of this public file (see WORKFLOW.md, "Publishing findings") and lives in git-ignored files on the owner's machine.
+
+The Low items are scheduled into Phase 0 task P0-6 (guard and scope follow-ups) unless marked otherwise.
 
 | Id | Task | Source | Severity | Finding | Status |
 |---|---|---|---|---|---|
+| RF-050 | P0-3 | TE | **Critical** | Detail withheld from the public repository (see WORKFLOW.md, "Publishing findings"). | **Mitigated locally; one action by the owner is pending.** Not resolved. Recorded in the git-ignored `docs/saas/SECURITY_TODO.md` and `docs/saas/private/`. It does not block other work. |
+| RF-051 | P0-3 | Lead | Low | The secret scan flags `e2e/target_selftest.py` (a made-up URL with inline credentials used as a refusal case). | Confirmed: the test file must build that string at run time. |
+| RF-069 | P0-12 | SR8 | Medium | `gh pr close --delete-branch` is on the known-safe list but can switch to the default branch. Low: `git rm`, `git mv`, `git clean`, `git lfs checkout` are not on the tree-changing list (they cannot restore a production link). The gate's whitespace trimming has only run on macOS awk. | Fixed in P0-13 (TEST_RESULTS 37): `gh pr close` left the safe list; the git commands are documented limits. The first Ubuntu CI run confirms the awk. |
+| RF-070 | P0-12 | SR8 | Medium | Publication: the unpushed commits still hold wording that the working tree no longer has. | Push precondition (IMPLEMENTATION_STATUS): the pushed commits are built from the final tree, and a search of everything to be pushed returns no hit. |
+| RF-066 | P0-11 | SR7 | High | RF-063 is not closed: an alias (`gh co`) and `gh issue develop --checkout` are still not treated as tree-changing; aliases and extensions cannot be listed. Management scripts after a tree-changing command are allowed. | Confirmed. P0-12: every `gh` subcommand outside a known-safe list counts as tree-changing; management scripts ask after one. Verified by SR8 (360 of 360 cases); remainder RF-069. |
+| RF-067 | P0-11 | SR7 | Medium | Publication: wording in the record (RF-060 remainder). | Fixed in the record; working tree verified by SR8. History: RF-070. |
+| RF-068 | P0-11 | SR7 | Low | The reworked production-link gate no longer trims form feed and vertical tab (regression), nor a byte-order mark; brace and glob spellings of the link path, and `git read-tree`, `checkout-index`, `sparse-checkout`, are not seen by the guard. | Confirmed. P0-12. A directory option (`tar -C`) and a path built in inline code become documented limits. Verified by SR8. |
+| RF-063 | P0-10 | SR6 | High | The GitHub CLI's pull-request checkout (and `gh repo clone`, `gh repo sync`, `hub`) is not treated as a tree-changing command, so a Supabase call, e2e run or `test:*` script after it on the same line is allowed. | Fixed for the listed commands (verified by SR7, about 70 forms); remainder is RF-066. |
+| RF-064 | P0-10 | SR6 | Medium | The Stop hook's "unchanged since the last green run" key does not include the git-ignored link file, so a change of the link alone does not re-run the gate. | Fixed; verified by SR7. |
+| RF-065 | P0-10 | SR6 | Low | The production-link gate strips all whitespace before comparing, so a link file with a second line compares unequal; a skipped CI staging job shows as a green check; git plumbing and plain file writes to the link file are not seen by the guard. | Fixed and verified by SR7 (CI probe job, about 45 link-path spellings), except the regression and spellings in RF-068. |
+| RF-062 | P0-10 | Lead | Low | One guard test (a 400,000-character command line) failed once in the Stop hook's gate run while a second full suite was running. Alone it passes every time, and the hook answers that input at once. The test's 15-second process timeout is exceeded only when two full suites compete. | Confirmed as a load flake, not a behaviour defect. No test changed. Working rule: do not run two full suites at once. To do in Phase 1 housekeeping: make the suite robust to load (longer per-process timeout for the heavy cases, or lower test concurrency). |
+| RF-059 | P0-9 | SR5 | High | Checking out `main` or another older branch silently replaces the git-ignored staging link with the tracked production link, and a Supabase call, e2e run or `test:*` script later on the same command line is still allowed. On those branches the guard files do not exist at all. | Guard fix verified by SR6 for all listed git commands and wrappers; gate verified. Remainder (the GitHub CLI's pull-request checkout) is RF-063. The lasting fix is still the owner merging the pull requests. |
+| RF-060 | P0-3 | SR5 | High | Publication: wording in the record went beyond "detail withheld" for RF-050. | Fixed before any push; re-checked by SR6 and SR7, which each found further places. All fixed before the first push. |
+| RF-061 | P0-9 | SR5 | Low | Directory changes the guard does not follow (`builtin cd`, `command cd`, `chdir`, `npx --prefix`, `find -execdir`, a `cd` that fails); a missing or relative hook `cwd` counts as the root; e2e runs it does not see (a bare file name after `cd` into an unknown folder, dotted module names with `e2e` not first); `supabase link` allowed from the root. | Fixed; verified by SR6 (29 cases). |
+| RF-052 | P0-6 | SR4 | High | The guard allows Supabase CLI calls as "linked to staging" from any directory inside the project, but the CLI uses the link of the nearest checkout. In a git worktree or nested checkout made from a commit that still tracks the production link, a push or deploy would be allowed. | Fixed for every static directory form (verified by SR5, about 90 cases); the same-line checkout case is RF-059. |
+| RF-053 | P0-6 | SR4 | High | Once a staging ref is set, the guard allows any e2e file or `test:*` script anywhere, on the grounds that the suites refuse production; that is only true of the converted suites in this working tree. | Fixed for other checkouts by path, symlink, directory flags, stdin and dynamic arguments (verified by SR5); remainder is RF-059 and RF-061. |
+| RF-054 | P0-6 | SR4 | Medium | Destructive operations on staging run without a prompt, while WORKFLOW.md says to ask on any project. | Fixed; verified by SR5. |
+| RF-055 | P0-6 | SR4 | Medium | `GATE_UNIT_TEST_CMD` yields a line reading GATE GREEN with no unit tests run. | Fixed; verified by SR5. |
+| RF-056 | P0-6 | SR4 | Low | Guard details: `--version` excuses a destructive call; dot segments and `curl -K` hide a project delete; `bash -n +n` executes; a dynamic word after `env` can override the project ref. | Fixed; verified by SR5. |
+| RF-057 | P0-3 | SR4 | Low | `e2e/__pycache__/` was not ignored; README examples for the live project omit `--production`, and the device-suite variable is not named. | Fixed; verified by SR5. |
+| RF-058 | P0-3 | SR4 | Info | `e2e/unsupported_browser_e2e.py` builds with `.env.local` (production values). It never signs in or writes, and a build bakes in only the public URL and key. | Accepted as is; noted. |
 | RF-007 | DEMO-1 | TE | Low | `alter table if exists x enable row level security` placed before `create table x` counts, though in Postgres it is a no-op. | Deferred: the catalog check in CI is the authority on RLS and catches it; stated as a limit in the script header. |
 | RF-028 | WF-4 | SR2 | Medium | An enforcement file can be edited, used and restored between two snapshots without the scope check seeing it. | Deferred: no cheap control exists inside the working copy (file tools can be restricted, a shell cannot). It needs a deliberate bypass, the same class as the CLI login gap. Stated in WORKFLOW.md and the script header. |
 | RF-038 | WF-4 | SR2 | Low | Owner approvals live in `docs/saas/IMPLEMENTATION_STATUS.md`, and a change there by any agent is only a note from the scope check. | Deferred to P0-6 (it was not implemented in WF-5; SR3 caught the row saying otherwise). Until then the Lead reads the `docs/saas/` diff before every commit. |
@@ -23,6 +46,7 @@ None of these blocks the workflow pull request: there is no open Critical, High 
 | RF-045 | WF-5 | SR3 | Low | `python3 -m unittest e2e.<module>` is allowed by the guard. | Confirmed. P0-6. The real control is the suites refusing production (P0-3). |
 | RF-046 | WF-5 | SR3 | Low | A `__tests__/` folder under `.claude/` or `.github/` counts as test files; `.git/info/exclude`, `.gitattributes` and the Stop-gate key file are unseen by the scope check. | Confirmed. P0-6. |
 | RF-048 | WF-5 | SR3 | Info | Once the e2e suites point at staging, the guard will still ask for every e2e run and management script, which would stall autonomous Phase 0 work. | P0-6: change rule 9 once the suites refuse the production project (P0-3). |
+| RF-049 | P0-5 | Lead | Low | Production has an Edge Function named `probe` that is not in the repository. | Investigated (read-only): its whole body returns `{"ok": true}`; a deployment smoke test from 2026-08-06. Recommendation: delete it from production. Waiting for the owner's approval. |
 
 Needs the owner (not a defect in the change): `main` has no branch protection on GitHub. Until it does, "agents never push to or merge into main" rests on the tripwire and the agents' instructions.
 
@@ -69,6 +93,50 @@ Needs the owner (not a defect in the change): `main` has no branch protection on
 | RF-047 | WF-5 | SR3 | Low | The suite had only run on macOS with Node 24. | Closed: green on Ubuntu with Node 22 (TEST_RESULTS 15). |
 
 ## Detail
+
+### Eighth security review: the P0-12 fix (2026-11-16)
+
+Verdict: **CHANGES REQUESTED** — 0 Critical, 0 High, 2 Medium, 2 Low, 3 Info. 360 guard cases (53 tree-changing spellings, each before six targets, plus wrappers and baselines), 17 gate inputs, `scripts/gate.sh quick` once (green). It changed no files. RF-066 and RF-068 hold as specified; no regression; the working tree's wording is clean. Open: RF-069 and RF-070.
+
+### Seventh security review: the P0-11 fix (2026-11-16)
+
+Verdict: **BLOCK** — 1 High, 1 Medium, 3 Low, 3 Info. About 165 guard cases with invented refs against a scratch fixture, the gate's comparison on scratch inputs, `scripts/gate.sh quick` once (green). It changed no files.
+
+Verified: RF-063 for about 70 spellings of the listed commands; RF-064; RF-065 (multi-line, CRLF, case; the probe job receives one secret, outputs only true or false, and fork pull requests get none; about 45 link-path spellings). No rule, hook, CI step or test was loosened, other than the gate regression in RF-068. Info: GitHub counts a skipped job as passing for a required check, so the staging job must not be the only required check if branch protection is added; three untracked folders and files belonging to the owner are not ignored and must not be swept into a commit.
+
+### Existing tests changed in P0-11 (2026-11-16)
+
+Changed by the Test Engineer because RF-065 changed the requirement: the secrets check moved out of the staging job into a separate probe job, so that a run without secrets shows the staging job as skipped rather than passed. In `scripts/ci-workflow.test.mjs`: (1) the "other jobs" helper now also excludes the probe job; (2) "neither is given a secret" now applies to every job other than the staging and probe jobs, and a new test asserts only those two read a secret; (3) the "URL secret is empty or not" check is asserted on the probe job; (4) the "suites were skipped" message must be printed by a job other than the staging job, since a skipped job prints nothing; (5) the describe block was retitled. The test forbidding `continue-on-error` and `|| true` on the staging job is unchanged. No guard, gate or Stop-hook test was changed; tests were only added.
+
+Known limits recorded by the Test Engineer: the self-test's digest scan sees a forbidden value only as a whole quoted literal or whitespace-delimited token; the CI assertions are on the workflow text, so "shown as skipped" is only confirmed by a real run without secrets.
+
+### Sixth security review (2026-11-15)
+
+Verdict: **BLOCK** — 2 High, 2 Medium, 3 Low, 2 Info. About 170 guard cases and 13 gate cases with fake refs; the script suite once (5,731 pass, 0 fail, 1 skipped). It changed no files.
+
+Verified: RF-059 for all sixteen listed git commands through every wrapper and shell form tried; the new gate; RF-061; the CI job's handling of secrets (fork pull requests get none; the three values are staging-only); the package change (two type packages and one dependency, nothing else). All 39 everyday commands from the project root are allowed. Not closed: RF-063 to RF-065, and further publication wording (RF-060).
+
+### Existing tests changed in P0-10 (2026-11-15)
+
+Changed by the Test Engineer because the requirement changed. RF-061: the guard test helper now sends the project directory as the hook's `cwd` (a missing `cwd` is no longer treated as the project root), and six rows that allowed `supabase link` when it named or was linked to staging now expect a prompt (`link` and `unlink` always ask). RF-059: the gate test fixture now includes a `guard.conf`, because the new gate reads it. No assertion was loosened.
+
+### Fifth security review: the P0-9 fix (2026-11-15)
+
+Verdict: **BLOCK** — 2 High, 0 Medium, 4 Low, 2 Info. About 480 guard cases with fake refs against real directory trees (worktree, nested clone, own `supabase/` folder), the script suite once (4,800 pass), the management scripts in dry mode, and a scratch repository to confirm that a checkout overwrites an ignored file. It changed no files.
+
+Verified fixed: RF-054 to RF-057, and every static-directory form of RF-052 and RF-053. Not closed: a tree-changing git command earlier on the same line (RF-059), which the guard cannot see because it reads the link before the line runs; and a publication problem (RF-060), fixed before pushing. Of 113 everyday commands from the project root, 107 are allowed; the six that ask all `cd` to the root through a variable or command substitution first.
+
+### Fourth security review: the Phase 0 changes (2026-11-15)
+
+Verdict: **BLOCK** — 0 Critical, 2 High, 2 Medium, 5 Low, 2 Info. The reviewer read the whole change set, ran about 90 guard cases with fake refs, 38 dry-run cases of the management scripts, 20 URL forms against the e2e target check, and the self-test (91 of 91). It changed no files.
+
+What held: `e2e/_target.py` and the three management scripts refused production in every form tried, before any network or keychain call. No assertion was weakened in any of the 24 converted suites. Nothing in the change set should be withheld from publication; `.env.e2e` and `supabase/.temp/` are ignored.
+
+What did not: the guard's new staging allowances trust facts about this project's root for commands that may run in a different checkout (RF-052, RF-053).
+
+### Existing tests changed in P0-6 (2026-11-15)
+
+Changing an existing test is allowed only when the requirement it pinned has changed. These were changed by the Test Engineer, each because a P0-6 criterion replaced the old rule: the `docs/saas/` "note, not a violation" tests (RF-038); three guard rows allowing a remote `db reset` on linked staging (RF-043); the guard rule 9 tables for e2e files and `test:*` scripts, which now allow once a staging ref is set (RF-048); and two gate tests that relied on the removed `npm test` fallback (RF-044). No assertion was loosened; each now pins the stricter or the replaced rule.
 
 ### Third security review (2026-11-15)
 

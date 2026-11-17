@@ -1,10 +1,10 @@
 """Photo capture on the real Android APK: compress -> Filesystem -> Storage."""
+import _target
 import json, urllib.request, sys, base64, struct, zlib
-sys.path.insert(0, '/private/tmp/claude-501/-Users-kalena-dev-water-well-drilling-manager/4c525f0f-604d-4e86-8f8e-b68bbddc1172/scratchpad')
 from apk import apk_page, OUT
 
-URL = 'https://bfteveoeodbvjxjlpnwz.supabase.co'
-KEY = 'sb_publishable_7lHYQcJ4rNaIIG4UhmV9YQ_jIRdGn2l'
+URL = _target.URL
+KEY = _target.KEY
 
 results = []
 def check(name, ok, detail=''):
@@ -29,7 +29,7 @@ def make_png(w=2400, h=1800):
 def sign_in_api(email):
     req = urllib.request.Request(f'{URL}/auth/v1/token?grant_type=password', method='POST')
     req.add_header('apikey', KEY); req.add_header('Content-Type', 'application/json')
-    with urllib.request.urlopen(req, json.dumps({'email': email, 'password': 'TestPass123!'}).encode()) as r:
+    with urllib.request.urlopen(req, json.dumps({'email': email, 'password': _target.PASSWORD}).encode()) as r:
         d = json.loads(r.read().decode()); return d['access_token'], d['user']['id']
 
 def list_photos(token, uid):
@@ -42,15 +42,15 @@ def list_photos(token, uid):
 png_b64 = base64.b64encode(make_png()).decode()
 print(f'source image: {len(png_b64)*3//4/1024/1024:.1f} MB, 2400x1800\n')
 
-d1_token, d1_uid = sign_in_api('driller1@example.com')
+d1_token, d1_uid = sign_in_api(_target.DRILLER1)
 before = {o['name'] for o in list_photos(d1_token, d1_uid)}
 print(f'{len(before)} object(s) in storage before\n')
 
 with apk_page() as (page, logs):
     body = page.inner_text('body')
     if 'link this device' in body.lower():
-        page.fill('input[type="email"]', 'driller1@example.com')
-        page.fill('input[type="password"]', 'TestPass123!')
+        page.fill('input[type="email"]', _target.DRILLER1)
+        page.fill('input[type="password"]', _target.PASSWORD)
         page.get_by_role('button', name='Link this device').click()
         page.wait_for_timeout(6000)
     check('device is linked', 'CURRENT DEPTH' in page.inner_text('body'))

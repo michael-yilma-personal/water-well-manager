@@ -1,10 +1,10 @@
-"""Sync + photo pipeline on the real Android APK, against live Supabase."""
+"""Sync + photo pipeline on the real Android APK, against the project named by _target."""
+import _target
 import json, urllib.request, sys, subprocess, time
-sys.path.insert(0, '/private/tmp/claude-501/-Users-kalena-dev-water-well-drilling-manager/4c525f0f-604d-4e86-8f8e-b68bbddc1172/scratchpad')
 from apk import apk_page, OUT
 
-URL = 'https://bfteveoeodbvjxjlpnwz.supabase.co'
-KEY = 'sb_publishable_7lHYQcJ4rNaIIG4UhmV9YQ_jIRdGn2l'
+URL = _target.URL
+KEY = _target.KEY
 ADB = '/Users/kalena/Library/Android/sdk/platform-tools/adb'
 
 results = []
@@ -21,11 +21,11 @@ def api(path, token):
 def sign_in_api(email):
     req = urllib.request.Request(f'{URL}/auth/v1/token?grant_type=password', method='POST')
     req.add_header('apikey', KEY); req.add_header('Content-Type', 'application/json')
-    with urllib.request.urlopen(req, json.dumps({'email': email, 'password': 'TestPass123!'}).encode()) as r:
+    with urllib.request.urlopen(req, json.dumps({'email': email, 'password': _target.PASSWORD}).encode()) as r:
         d = json.loads(r.read().decode()); return d['access_token'], d['user']['id']
 
-d1_token, d1_uid = sign_in_api('driller1@example.com')
-admin_token, _ = sign_in_api('admin1@example.com')
+d1_token, d1_uid = sign_in_api(_target.DRILLER1)
+admin_token, _ = sign_in_api(_target.ADMIN1)
 before_pipes = {p['id'] for p in api('/rest/v1/pipe_records?select=id', d1_token)}
 print(f'{len(before_pipes)} pipe record(s) on server before\n')
 
@@ -35,8 +35,8 @@ with apk_page() as (page, logs):
     # whole point of provisioning once, so the suite must tolerate both states.
     needs_link = 'link this device' in body.lower()
     if needs_link:
-        page.fill('input[type="email"]', 'driller1@example.com')
-        page.fill('input[type="password"]', 'TestPass123!')
+        page.fill('input[type="email"]', _target.DRILLER1)
+        page.fill('input[type="password"]', _target.PASSWORD)
         page.get_by_role('button', name='Link this device').click()
         page.wait_for_timeout(6000)
     else:

@@ -19,36 +19,42 @@
 #   - the same for git-ignored files that sit on a protected path (for example
 #     .claude/settings.local.json and node_modules/.package-lock.json);
 #   - git's own configuration: every file in the hooks directory, the
-#     repository config file, and the full list of refs (git for-each-ref).
+#     repository config file, the exclude file (.git/info/exclude), the full
+#     list of refs (git for-each-ref), and the Stop hook's last-green key
+#     file (drill-stop-gate-green in the git directory).
 # Comparing two snapshots shows exactly what one agent run added, changed or
 # deleted, regardless of what was already uncommitted before it started.
 #
 # For every role:
 #   - a changed HEAD (a commit, an amend, a reset, a branch switch), a changed
-#     ref (a new branch or tag, a fetch, a stash), a changed git hook or a
-#     changed repository config is a violation. Nothing lifts it: agents do
-#     not change git history or git's configuration.
+#     ref (a new branch or tag, a fetch, a stash), a changed git hook, a
+#     changed repository config, a changed .git/info/exclude or a changed
+#     Stop-gate key file is a violation. Nothing lifts it: agents do not
+#     change git history, git's configuration or the gate's memory.
 #   - a change under a protected path - the enforcement itself - is a
 #     violation unless the Lead passes --allow with a glob that matches it.
 #     In a glob, * and ? stay inside one path segment and ** crosses segments.
 #     --allow lifts protected-path violations only.
 #   - a test file is never "protected": wherever it lives it belongs to the
 #     test engineer, and --allow does not open it to anyone else. Under
-#     .claude/ and .github/ only *.test.<js or ts extension> files and
-#     __tests__/ directories count as tests; a name like x.spec.yml there is
-#     live configuration and stays protected. CLAUDE.md is never a test file.
-#   - changes under docs/saas/ (the Lead's record) are listed as a note for
-#     the Lead to confirm, not as a violation.
+#     .claude/ and .github/ only *.test.<js or ts extension> files count as
+#     tests; a name like x.spec.yml or a __tests__/ folder there is live
+#     configuration and stays protected. CLAUDE.md is never a test file.
+#   - docs/saas/ is the Lead's record (owner approvals live there): a change
+#     under it is a protected-path violation for every role unless the Lead
+#     passes --allow 'docs/saas/*'.
 #
-# Protected paths: .claude/**, .github/**, scripts/hooks/**, scripts/gate.sh,
+# Protected paths: .claude/**, .github/**, scripts/hooks/**, docs/saas/**,
+# supabase/.temp/** (the link file the guard hook reads), scripts/gate.sh,
 # scripts/check-*.sh, scripts/check-*.mjs, package.json, package-lock.json,
 # tsconfig*.json, .npmrc, .mcp.json, .gitignore, netlify.toml, vite.config.ts,
-# capacitor.config.ts, node_modules/.package-lock.json, and CLAUDE.md or
-# CLAUDE.local.md in any directory.
+# capacitor.config.ts, node_modules/.package-lock.json, and CLAUDE.md,
+# CLAUDE.local.md or .gitattributes in any directory.
 #
 # Limits: it sees files, not behaviour; of the paths git ignores it sees only
 # those on a protected path (and not those inside a directory that is ignored
-# as a whole, other than .claude/, .github/ and scripts/hooks/); a symbolic
+# as a whole, other than .claude/, .github/, scripts/hooks/ and
+# supabase/.temp/); a symbolic
 # link is recorded by its target text, not by what it points at; a path
 # containing a newline is recorded with the newline shown as \n; a file
 # changed and changed back between the two snapshots is not seen. Keep the
@@ -63,13 +69,15 @@ JS_EXT='(ts|tsx|mts|cts|js|jsx|mjs|cjs)'
 TEST_RE="(\\.test\\.$JS_EXT\$|\\.spec\\.[^/]+\$|(^|/)__tests__/|^e2e/|^supabase/tests/)"
 # Under these directories everything is live configuration except real test code.
 CONFIG_DIR_RE='^(\.claude|\.github)/'
-CONFIG_DIR_TEST_RE="(\\.test\\.$JS_EXT\$|(^|/)__tests__/)"
+CONFIG_DIR_TEST_RE="(\\.test\\.$JS_EXT\$)"
 INSTRUCTIONS_RE='(^|/)CLAUDE(\.local)?\.md$'
-PROTECTED_RE='^(\.claude/|\.github/|scripts/hooks/|scripts/gate\.sh$|scripts/check-[^/]*\.(sh|mjs)$|package\.json$|package-lock\.json$|tsconfig[^/]*\.json$|\.npmrc$|\.mcp\.json$|\.gitignore$|netlify\.toml$|vite\.config\.ts$|capacitor\.config\.ts$|node_modules/\.package-lock\.json$|(.*/)?CLAUDE(\.local)?\.md$)'
+PROTECTED_RE='^(\.claude/|\.github/|scripts/hooks/|docs/saas/|supabase/\.temp/|(.*/)?\.gitattributes$|scripts/gate\.sh$|scripts/check-[^/]*\.(sh|mjs)$|package\.json$|package-lock\.json$|tsconfig[^/]*\.json$|\.npmrc$|\.mcp\.json$|\.gitignore$|netlify\.toml$|vite\.config\.ts$|capacitor\.config\.ts$|node_modules/\.package-lock\.json$|(.*/)?CLAUDE(\.local)?\.md$)'
 HEAD_KEY='//HEAD'
 GIT_KEY_PREFIX='//git/'
 REFS_KEY='//git/refs'
 CONFIG_KEY='//git/config'
+EXCLUDE_KEY='//git/info/exclude'
+STOP_KEY='//git/drill-stop-gate-green'
 HOOK_KEY_PREFIX='//git/hooks/'
 IGNORED_LOCK='node_modules/.package-lock.json'
 
@@ -148,14 +156,14 @@ entry() {
 }
 
 snapshot() {
-  local commit branch f e shown hooks config common name
+  local commit branch f e shown hooks config common name exclude gitdir
   commit="$(git rev-parse --verify -q HEAD 2>/dev/null || echo none)"
   branch="$(git symbolic-ref -q HEAD 2>/dev/null || echo detached)"
   printf '%s %s\t%s\n' "$commit" "$branch" "$HEAD_KEY"
 
   # What git lists, plus ignored files on protected paths.
   git ls-files -co --exclude-standard -z > "$WORK/listed" || return 2
-  git ls-files -o -i --exclude-standard -z -- .claude .github scripts/hooks >> "$WORK/listed" || return 2
+  git ls-files -o -i --exclude-standard -z -- .claude .github scripts/hooks supabase/.temp >> "$WORK/listed" || return 2
   git ls-files -o -i --exclude-standard --directory -z > "$WORK/ignored" || return 2
   while IFS= read -r -d '' f; do
     [[ "$f" =~ $PROTECTED_RE ]] && printf '%s\0' "$f" >> "$WORK/listed"
@@ -188,6 +196,19 @@ snapshot() {
     printf '%s\t%s\n' "$(git hash-object --no-filters -- "$config")" "$CONFIG_KEY"
   else
     printf 'none\t%s\n' "$CONFIG_KEY"
+  fi
+  exclude="$(git rev-parse --git-path info/exclude 2>/dev/null)" || return 2
+  if [ -f "$exclude" ]; then
+    printf '%s\t%s\n' "$(git hash-object --no-filters -- "$exclude")" "$EXCLUDE_KEY"
+  else
+    printf 'none\t%s\n' "$EXCLUDE_KEY"
+  fi
+  # The Stop hook's memory of the last green tree (scripts/hooks/stop-gate.sh).
+  gitdir="$(git rev-parse --absolute-git-dir 2>/dev/null)" || return 2
+  if [ -f "$gitdir/drill-stop-gate-green" ]; then
+    printf '%s\t%s\n' "$(git hash-object --no-filters -- "$gitdir/drill-stop-gate-green")" "$STOP_KEY"
+  else
+    printf 'none\t%s\n' "$STOP_KEY"
   fi
   git for-each-ref > "$WORK/refs" || return 2
   printf '%s\t%s\n' "$(git hash-object --stdin < "$WORK/refs")" "$REFS_KEY"
@@ -253,7 +274,6 @@ is_test_path() {
 # --- classify ------------------------------------------------------------------
 HEAD_CHANGED=0
 GIT_CHANGED=()
-NOTES=()
 PROTECTED=()
 BAD=()
 COUNT=0
@@ -267,12 +287,12 @@ while IFS= read -r path; do
   case "$path" in
     "$REFS_KEY")           GIT_CHANGED+=("refs (a branch, tag, remote-tracking ref or stash was added, moved or deleted)"); continue ;;
     "$CONFIG_KEY")         GIT_CHANGED+=(".git/config"); continue ;;
+    "$EXCLUDE_KEY")        GIT_CHANGED+=(".git/info/exclude (it hides files from git, and so from this check)"); continue ;;
+    "$STOP_KEY")           GIT_CHANGED+=(".git/drill-stop-gate-green (the Stop hook's record of the last green gate)"); continue ;;
     "$HOOK_KEY_PREFIX"*)   GIT_CHANGED+=(".git/hooks/${path#"$HOOK_KEY_PREFIX"}"); continue ;;
     "$GIT_KEY_PREFIX"*)    GIT_CHANGED+=("${path#//}"); continue ;;
   esac
   COUNT=$((COUNT + 1))
-  case "$path" in docs/saas/*) NOTES+=("$path"); continue ;; esac
-
   is_test=0
   is_test_path "$path" && is_test=1
 
@@ -301,7 +321,7 @@ if [ "$HEAD_CHANGED" -eq 1 ]; then
   STATUS=1
 fi
 if [ ${#GIT_CHANGED[@]} -gt 0 ]; then
-  echo "SCOPE VIOLATION: git's own state changed during the run (--allow does not lift this). Agents do not change refs, git hooks or the repository config:"
+  echo "SCOPE VIOLATION: git's own state changed during the run (--allow does not lift this). Agents do not change refs, git hooks, the repository config, the exclude file or the Stop-gate key file:"
   printf '  %s\n' "${GIT_CHANGED[@]}"
   STATUS=1
 fi
@@ -314,10 +334,6 @@ if [ ${#BAD[@]} -gt 0 ]; then
   echo "SCOPE VIOLATION: $MSG:"
   printf '  %s\n' "${BAD[@]}"
   STATUS=1
-fi
-if [ ${#NOTES[@]} -gt 0 ]; then
-  echo "Note for the Lead to confirm (docs/saas/ is the Lead's record; not counted as a violation):"
-  printf '  %s\n' "${NOTES[@]}"
 fi
 if [ "$STATUS" -eq 0 ]; then
   echo "Scope OK for $ROLE ($COUNT file(s) changed, all permitted)."

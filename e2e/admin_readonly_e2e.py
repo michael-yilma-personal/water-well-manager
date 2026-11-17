@@ -9,16 +9,16 @@ badge, and only find out at upload time, by which point the records were stuck
 in a queue that account can never drain. This checks the app says so up front
 and refuses to start a pipe, while a driller is unaffected.
 """
+import _target
 import os
 import sys
 
 from playwright.sync_api import sync_playwright
 
-PORT = int(os.environ.get('E2E_PORT', '3000'))
-URL = f'http://localhost:{PORT}'
-PASSWORD = os.environ.get('E2E_PASSWORD', 'TestPass123!')
-ADMIN = 'admin1@example.com'
-DRILLER = 'driller1@example.com'
+URL = _target.start_app()
+PASSWORD = _target.PASSWORD
+ADMIN = _target.ADMIN1
+DRILLER = _target.DRILLER1
 
 BANNER_PHRASE = 'cannot log field data'
 START_BTN = """() => {

@@ -3,12 +3,12 @@
 Parking removes an item from depth(), which used to flip the header to a green
 "Cloud Synced" while the record was still sitting on the phone.
 """
+import _target
 import os
 import sys
 from playwright.sync_api import sync_playwright
 
-PORT = int(os.environ.get('E2E_PORT', '3000'))
-URL = f'http://localhost:{PORT}'
+URL = _target.start_app()
 OUT = os.environ.get('E2E_OUT', '/tmp')
 
 BADGE = """() => {

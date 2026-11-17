@@ -8,10 +8,29 @@
 # signed-in account, but this checks the invariant still holds - worth running
 # after any change to how identity reaches a record.
 #
-# Usage: scripts/check-attribution.sh [--fix]
+# Usage (there is no default project: SUPABASE_PROJECT_REF is required):
+#   SUPABASE_PROJECT_REF=<ref> scripts/check-attribution.sh [--fix]
+#
+#   SUPABASE_PROJECT_REF=<production ref> scripts/check-attribution.sh --production [--fix]
+#     The production project (PROD_REF in scripts/hooks/guard.conf) is refused
+#     (exit 2) unless --production is the FIRST argument.
+#
+# DRILL_SCRIPT_DRY_RUN=1 prints "would run against <ref>" and exits 0 after
+# the target and argument checks, before any network call.
 
 set -euo pipefail
-PROJECT_REF="${SUPABASE_PROJECT_REF:-bfteveoeodbvjxjlpnwz}"
+
+. "$(dirname "${BASH_SOURCE[0]}")/lib/project-target.sh"
+project_target "$@"
+[ "$PROJECT_TARGET_SHIFT" -eq 1 ] && shift
+
+if [ $# -gt 1 ] || { [ $# -eq 1 ] && [ "$1" != "--fix" ]; }; then
+  echo "Stopped: unexpected argument. Usage: $0 [--production] [--fix]" >&2
+  exit 2
+fi
+
+project_target_dry_run
+
 TOKEN="$(security find-generic-password -s "Supabase CLI" -w 2>/dev/null || echo "${SUPABASE_ACCESS_TOKEN:-}")"
 [ -z "$TOKEN" ] && { echo "Run 'supabase login' first." >&2; exit 1; }
 

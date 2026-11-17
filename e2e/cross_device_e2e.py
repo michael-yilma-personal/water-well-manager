@@ -9,16 +9,16 @@ Context A logs a pipe and waits for the outbox to drain. Context B is a separate
 browser context with its own storage, which is what makes it a different device
 rather than a second tab.
 """
+import _target
 import os
 import sys
 import uuid
 
 from playwright.sync_api import sync_playwright
 
-PORT = int(os.environ.get('E2E_PORT', '3000'))
-URL = f'http://localhost:{PORT}'
-EMAIL = os.environ.get('E2E_EMAIL', 'driller1@example.com')
-PASSWORD = os.environ.get('E2E_PASSWORD', 'TestPass123!')
+URL = _target.start_app()
+EMAIL = os.environ.get('E2E_EMAIL', _target.DRILLER1)
+PASSWORD = _target.PASSWORD
 
 QUEUE = "() => JSON.parse(localStorage.getItem('wwdm_outbox') || '[]').length"
 BOREHOLE_NAMES = "() => JSON.parse(localStorage.getItem('wwdm_boreholes')||'[]').map(b => b.name)"

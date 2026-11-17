@@ -12,29 +12,61 @@
 # That constraint is deliberate - you should not be able to delete a driller and
 # orphan the record of who drilled - so the data goes first, then the accounts.
 #
-# Usage:
-#   scripts/delete-test-data.sh                 # dry run, shows what would go
-#   scripts/delete-test-data.sh --yes           # actually delete
-#   scripts/delete-test-data.sh --yes a@b.com   # specific accounts
+# Usage (there is no default project: SUPABASE_PROJECT_REF is required):
+#   SUPABASE_PROJECT_REF=<ref> scripts/delete-test-data.sh                       # dry run, shows what would go
+#   SUPABASE_PROJECT_REF=<ref> scripts/delete-test-data.sh --yes                 # actually delete
+#   SUPABASE_PROJECT_REF=<ref> scripts/delete-test-data.sh --yes a@example.com   # specific accounts
 #
-# Requires: the Supabase CLI logged in (`supabase login`) and the project ref.
+#   SUPABASE_PROJECT_REF=<production ref> scripts/delete-test-data.sh --production [--yes] [emails]
+#     The production project (PROD_REF in scripts/hooks/guard.conf) is refused
+#     (exit 2) unless --production is the FIRST argument.
+#
+# On every project, production included, this deletes only accounts whose
+# email ends in @example.com. Any other address on the command line is
+# refused (exit 2) before anything is read or deleted.
+#
+# Without --yes it only counts (a read-only query). DRILL_SCRIPT_DRY_RUN=1
+# goes further: it prints "would run against <ref>" and exits 0 after the
+# target and argument checks, before any network call.
+#
+# Requires: the Supabase CLI logged in (`supabase login`).
 
 set -euo pipefail
 
-PROJECT_REF="${SUPABASE_PROJECT_REF:-bfteveoeodbvjxjlpnwz}"
+. "$(dirname "${BASH_SOURCE[0]}")/lib/project-target.sh"
+project_target "$@"
+[ "$PROJECT_TARGET_SHIFT" -eq 1 ] && shift
+
 CONFIRM=false
 EMAILS=()
 
 for arg in "$@"; do
   case "$arg" in
     --yes) CONFIRM=true ;;
+    --production)
+      echo "Stopped: --production must be the first argument." >&2
+      exit 2 ;;
+    -*)
+      echo "Stopped: unknown option '$arg'. Usage: $0 [--production] [--yes] [name@example.com ...]" >&2
+      exit 2 ;;
     *) EMAILS+=("$arg") ;;
   esac
+done
+
+# Only test accounts, on any project. The strict shape also keeps quotes and
+# other SQL out of the list built below.
+for e in ${EMAILS[@]+"${EMAILS[@]}"}; do
+  if ! [[ "$e" =~ ^[A-Za-z0-9._+-]+@example\.com$ ]]; then
+    echo "Stopped: this script deletes only @example.com test accounts; it will not touch the address given." >&2
+    exit 2
+  fi
 done
 
 if [ ${#EMAILS[@]} -eq 0 ]; then
   EMAILS=(driller1@example.com driller2@example.com admin1@example.com datalogger1@example.com supervisor1@example.com)
 fi
+
+project_target_dry_run
 
 TOKEN="$(security find-generic-password -s "Supabase CLI" -w 2>/dev/null || echo "${SUPABASE_ACCESS_TOKEN:-}")"
 if [ -z "$TOKEN" ]; then

@@ -1,4 +1,5 @@
 """A saved pipe can be corrected on the phone, and remarks are kept as typed."""
+import _target
 import os, sys, tempfile
 from playwright.sync_api import sync_playwright
 OUT = os.environ.get('E2E_OUT', tempfile.gettempdir())
@@ -11,7 +12,7 @@ LAST = "() => { const p = JSON.parse(localStorage.getItem('wwdm_pipe_records')||
 with sync_playwright() as p:
     b = p.chromium.launch(); page = b.new_context(viewport={'width': 411, 'height': 900}, is_mobile=True).new_page()
     errs = []; page.on('pageerror', lambda e: errs.append(str(e)))
-    page.goto('http://localhost:3000', wait_until='networkidle'); page.wait_for_timeout(2000)
+    page.goto(_target.start_app(), wait_until='networkidle'); page.wait_for_timeout(2000)
     if 'link this device' in page.inner_text('body').lower():
         page.get_by_role('button', name='Work offline for now').click(); page.wait_for_timeout(2500)
 

@@ -14,15 +14,15 @@ Accounts are created by an administrator in the dashboard, which is the only
 route that produces something able to log in. The field app states who you are
 and where accounts come from, and invents nobody.
 """
+import _target
 import os
 import sys
 
 from playwright.sync_api import sync_playwright
 
-PORT = int(os.environ.get('E2E_PORT', '3000'))
-URL = f'http://localhost:{PORT}'
-EMAIL = os.environ.get('E2E_EMAIL', 'driller1@example.com')
-PASSWORD = os.environ.get('E2E_PASSWORD', 'TestPass123!')
+URL = _target.start_app()
+EMAIL = os.environ.get('E2E_EMAIL', _target.DRILLER1)
+PASSWORD = _target.PASSWORD
 
 USERS = "() => JSON.parse(localStorage.getItem('wwdm_users')||'[]')"
 BTN_TITLES = """() => [...document.querySelectorAll('button')]

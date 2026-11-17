@@ -7,6 +7,7 @@ How the SaaS work in `docs/SAAS_ARCHITECTURE_PROPOSAL.md` is carried out. This f
 | `IMPLEMENTATION_STATUS.md` | Current phase, tasks, branches, commits, decisions, blockers, next step |
 | `TEST_RESULTS.md` | Every gate and test run that counted, newest first |
 | `REVIEW_FINDINGS.md` | Every review finding and defect, with severity and status |
+| `SECURITY_TODO.md` | Security work waiting on the owner. Git-ignored while any item in it is still open, because this repository is public. |
 
 ## Roles
 
@@ -120,7 +121,17 @@ The production Supabase project ref is `bfteveoeodbvjxjlpnwz`. The rule: nothing
 
 Known gap: the Supabase CLI login on the owner's machine can reach every project in the account. An agent would have to work around the hook deliberately to use it, but the workflow cannot remove it; a separate login or machine for agent work would.
 
-Until Phase 0 is done, the existing `e2e/*.py` suites and `scripts/{create-user,delete-test-data,check-attribution}.sh` still target production, and are not to be run.
+Since Phase 0 the e2e suites take their target from `.env.e2e` or the environment and refuse the production project (`e2e/_target.py`); the management scripts need `SUPABASE_PROJECT_REF` and refuse production unless called with `--production` first. The working copy is linked to the staging project, whose ref is in `scripts/hooks/guard.conf`.
+
+### Staging
+
+Staging is a separate free project that holds only test data. It exists to be written to.
+
+- Allowed without asking: running the suites, creating and deleting test accounts and the rows tests create, applying migrations forward, deploying functions.
+- Ask the owner first: resetting the staging database, rolling migrations back, deleting or pausing the project. The guard asks for the forms of these it recognises.
+- SQL sent to staging is not inspected by anything. An agent that sends a destructive statement there loses test data, not customer data; treat it as a mistake to avoid, not a boundary that is enforced.
+- **Do not check out a branch that predates this tooling** (until the workflow and Phase 0 pull requests are merged, that includes `main`). Those branches track the Supabase link file pointing at production, and a checkout silently replaces the staging link with it; they also lack the guard. To look at another branch use `git show`, `git diff` or `git log`. A gate fails if the working copy is ever linked to production.
+- The staging allowances apply only in this checkout. In a git worktree or a second clone, Supabase commands and e2e runs ask, because that checkout may still point at production.
 
 ## Publishing findings
 
@@ -133,7 +144,7 @@ Within an approved phase the Lead keeps going: failing tests, review findings an
 Stop and ask the owner before:
 
 - Any production migration, deployment, or Edge Function deploy.
-- Any destructive database operation, on any project.
+- Any destructive database operation on production. On staging: a database reset, a migration rollback, or deleting or pausing the project (deleting test data there needs no approval; see "Staging").
 - Any change to the approved architecture or to a business rule in the proposal.
 - Any new paid service, or exceeding a free tier.
 - Anything that trades away security: weakening a policy, widening a grant, skipping an isolation test.
