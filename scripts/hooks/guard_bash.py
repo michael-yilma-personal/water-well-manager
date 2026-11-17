@@ -27,8 +27,73 @@ would, and looks inside:
 
 Then it applies the rules in docs/saas/IMPLEMENTATION_STATUS.md ("WF-4
 acceptance criteria", Guard hook, rules 1-10) as extended by RF-025 to RF-035
-in docs/saas/REVIEW_FINDINGS.md. A deny anywhere in the line wins over an ask;
-an ask wins over allow.
+in docs/saas/REVIEW_FINDINGS.md, by RF-043, RF-045 and RF-048 ("P0-6
+acceptance criteria"), by RF-052 to RF-056 ("P0-9 acceptance criteria") and
+by RF-059 and RF-061 ("P0-10 acceptance criteria"), by RF-063 and RF-065
+("P0-11 acceptance criteria") and by RF-066 and RF-068 ("P0-12 acceptance
+criteria").
+A deny anywhere in the line wins over an ask; an ask wins over allow.
+
+The effective directory of a command is the `cwd` of the hook JSON, then
+every `cd` / `chdir` / `pushd` / `env -C` before it on the line (also as
+`builtin cd`, `command cd`), with symlinks resolved. A directory the text
+does not show is unknown, and an unknown directory never counts as this
+project (RF-061): a hook `cwd` that is missing, empty or not an absolute
+path; `cd "$DIR"`, `cd -`, `cd` alone, `popd`; a `cd` to a directory that
+does not exist when the hook runs (the `cd` fails, or the directory is made
+on the same line); the command of `sudo -D` / `--chdir`, of `find -execdir`
+/ `-okdir`, and of `npx` / `bunx` / `pnpx` with `--prefix` / `--cwd`. The
+one exception is the exact word `$CLAUDE_PROJECT_DIR` (or with braces) after
+a cd: it is the project root, unless the line assigns that variable first.
+"This checkout" below means: the project root, or a directory below it with
+no `.git` (file or folder: a worktree, a submodule, a nested clone) between
+it and the root.
+
+After a git command that can change the working tree or create a checkout
+(RF-059: checkout, switch, pull, merge, rebase, reset, stash, restore,
+revert, cherry-pick, am, apply, bisect, worktree add, clone, submodule; RF-068:
+read-tree, checkout-index, sparse-checkout) the link file, the suites and the
+scripts on disk may no longer be the ones the hook read, in a subshell or a
+`bash -c` string as well. For the rest of the line a Supabase CLI call that
+would count as linked to staging, an e2e run, a test:* script and (RF-066) a
+management script - also with the literal staging prefix: an older branch's
+copy of it defaults to production - ask. `git checkout -b <new>` and `git switch -c <new>` with no start
+point do not count; with a start point they do. The git commands themselves
+stay allowed, and so does everything that never depended on the link or the
+tree (a call that names the staging ref, --local, the e2e self-test ...).
+
+The same holds (RF-063, RF-066) after every GitHub CLI call whose subcommand
+is not known to leave the working tree alone: `gh pr checkout`, `gh co`,
+`gh repo clone / sync / fork / create`, `gh issue develop`, `gh alias`,
+`gh extension`, `gh codespace`, any alias or extension name, a subcommand
+held in a variable. `gh pr close` counts too, in any form (RF-069): with
+`-d` / `--delete-branch` it can switch to the default branch. Known to be
+safe, and not counted: `gh pr view / list / checks / create / status / diff /
+comment / edit / ready / review / reopen`; `gh issue` with anything except
+`develop` (`gh issue close` stays safe); `gh run`, `gh workflow`,
+`gh api`, `gh auth`, `gh secret`, `gh variable`, `gh search`, `gh status`,
+`gh browse`, `gh label`, `gh release`, `gh cache` (but `gh run download` and
+`gh release download` write files, and count); `gh repo view / list`;
+`gh help`, and `gh` with no subcommand (`gh --version`). Global flags and
+their values before the subcommand (`-R owner/repo`, `--repo x`) are skipped.
+And after `hub`, which is read as git: `hub <subcommand>` counts when the git
+subcommand would (clone and pull are among them), and so do
+`hub pr checkout` and `hub sync`. The git push rules apply to `hub push` as
+they do to `git push`.
+
+A word that names a path under supabase/.temp (RF-065) - an argument, an
+option value, a redirection target or source, relative or absolute, the bare
+directory included, also inside a longer word such as `main:supabase/.temp/x`
+or a string of inline code - means the link file may have been written or
+replaced on this line, or is being handled by hand. From that word on, a
+Supabase CLI call that would count as linked to staging asks. A read counts
+too: the guard does not tell a read from a write. The word is looked for in
+the command it stands in before that command is judged, so a `bash -c`
+string that holds it anywhere asks for every such call in the string.
+A word that holds `supabase/` followed anywhere by `{`, `*`, `?` or `[`
+(RF-068) counts the same: the shell may expand it to that path
+(`supabase/.t*/project-ref`, `supabase/.{temp,x}`). What it would match is
+not looked at, so `ls supabase/migrations/*.sql` counts too.
 
 Deny:
   - git push (and git subtree push) to main or master, by name, by full ref,
@@ -46,26 +111,81 @@ Deny:
     HTTPie doing the same against api.github.com.
 Ask:
   - the production ref anywhere in the line;
-  - a supabase CLI call that is not provably local or staging; any supabase
-    call with an argument held in a variable, or with a SUPABASE_* variable
-    set in front of it (directly, with env, with export earlier in the line,
-    or from a dotenv file) - SUPABASE_ACCESS_TOKEN excepted, which names no
-    target; the destructive calls `projects delete`, `branches delete`,
-    `storage rm`, `functions delete` and `secrets unset` even on staging;
+  - a supabase CLI call that is not provably local or staging. "Linked to
+    staging" (RF-052) holds only when the link file of the project root is
+    the staging ref AND the call's effective directory - `--workdir` replaces
+    it - is in this checkout with no supabase/ folder of its own between it
+    and the root: the CLI uses the link of the directory it runs in;
+  - `supabase link` and `supabase unlink`, always (RF-061), also when the
+    new target is staging: every "linked to staging" allowance rests on that
+    link. Only --help / -h excuse them;
+  - any supabase call with an argument held in a variable, or with a
+    SUPABASE_* variable set in front of it (directly, with env, with export
+    earlier in the line, or from a dotenv file) - SUPABASE_ACCESS_TOKEN
+    excepted, which names no target;
+  - even on staging (RF-043, RF-054): every `projects` / `orgs` call except
+    `list` (create, delete, pause ...); `branches delete`, `storage rm`,
+    `functions delete`, `secrets unset`; `migration down` and `db reset`
+    without --local. Only `--help` / `-h` excuse a call (RF-056); `--version`
+    excuses nothing except as the bare `supabase --version`;
   - psql, pg_dump, pg_restore, pg_dumpall, pg_basebackup, dropdb, createdb,
     vacuumdb, reindexdb, clusterdb without a literal local or staging target,
     or with any PG* variable set in front of them;
   - curl, wget, http or https (HTTPie) to a supabase.co, supabase.in or
     api.supabase.com host, or to a URL built from a SUPABASE variable, that
-    is not provably staging; a URL containing `..` or `%` is never staging;
+    is not provably staging; a URL containing `..` or `%` is never staging.
+    The management API for the staging project (api.supabase.com
+    /v1/projects/<staging ref>...) is allowed, with these exceptions, judged
+    on the path after `.` and `..` segments are resolved (RF-056): a DELETE -
+    or a method held in a variable - on the project itself (RF-043), and any
+    request to its /pause endpoint (RF-054). Deleting staging test data stays
+    allowed: REST deletes on the staging host, and SQL posted to
+    /database/query, which is not inspected;
+  - curl with -K / --config and a Supabase address on the line (RF-056): the
+    file may hold the method or another address;
   - any other mutating curl, wget or HTTPie request to api.github.com;
-  - the management scripts, also when redirected or piped into a shell;
-  - the e2e suites: a file under e2e/ that is executed, or any argument that
-    names a path under e2e/ given to an interpreter or runner (python, pytest,
-    uv, poetry, pipenv, coverage, tox, nox, node, deno, a shell, ...); Python
-    whose script argument is a variable or `{}`; Python or a shell that reads
-    its program from a pipe or a redirected file;
-  - test:* package scripts with any runner, npm-run-all included;
+  - a management script (RF-048), unless the call sets
+    SUPABASE_PROJECT_REF=<staging ref> as a literal in front of the script
+    (directly or through env) and does not pass --production. Sourced, or
+    redirected or piped into a shell, it always asks. `bash -n` / `sh -n` /
+    `-o noexec` on one is a syntax check and is allowed, unless a later `+n`
+    or `+o noexec` switches it off again (RF-056). After a tree-changing
+    git, gh or hub command on the same line it asks even with the staging
+    prefix (RF-066). A dynamic word between
+    `env` and the script (`env $EXTRA script`, `env X=$Y script`) asks: it
+    may set SUPABASE_PROJECT_REF to another project (RF-056); the same word
+    in front of a supabase CLI call asks too;
+  - a command line that sets GATE_UNIT_TEST_CMD - in front of a command,
+    through env, on its own, or with export / declare (RF-055): scripts/gate.sh
+    would run that command in place of the unit tests;
+  - a shell that reads its commands from a pipe or a redirected file;
+  - Python whose script argument is a variable, a substitution or `{}`, or
+    that reads its program from standard input (a pipe, a `<` redirection,
+    `-`, xargs) - in every configuration (RF-053): it may be an e2e suite of
+    another checkout or commit. A here-document or here-string is inline
+    code and is not asked;
+  - Python given a relative script while the effective directory is unknown
+    (RF-061): the file may be an e2e suite of another checkout;
+  - the e2e suites: a file under an e2e/ folder that is executed, or any
+    argument that names a path under e2e/ given to an interpreter or runner
+    (python, pytest, uv, poetry, pipenv, coverage, tox, nox, node, deno, a
+    shell, ...); `python -m` with a module name, or `-m unittest` /
+    `-m pytest` with an argument, that has an `e2e` part anywhere in its
+    dotted name (RF-045, RF-061): `pkg.e2e.x` is the folder pkg/e2e of the
+    directory the call runs in. While STAGING_REF is empty they
+    always ask. Once it is set (RF-048, RF-053) a run is allowed only when
+    the file resolves to <project root>/e2e/... and the effective directory
+    is in this checkout: only the suites of this working tree are known to
+    refuse production. `python3 e2e/target_selftest.py` from this project,
+    that one file alone, is allowed in every configuration: it needs no
+    network and the gate runs it;
+  - test:* package scripts with any runner, npm-run-all included. While
+    STAGING_REF is empty they always ask; once it is set they are allowed
+    only when the effective directory is the project root itself (RF-053).
+    The runner's own directory flag (--prefix, --dir, --cwd, -C) moves that
+    directory; a workspace selector (-w, --workspace, --filter, -r) makes it
+    unknown. With an npm_config_* variable (either case) set in front of the
+    run, through env, or exported earlier in the line, they ask (RF-061);
   - a `git push` that names no branch when the directory it runs in is not
     known to the guard;
   - a command line longer than MAX_COMMAND characters or nested deeper than
@@ -73,18 +193,51 @@ Ask:
 
 Known limits (none of these is analysed):
   - the value of a variable: `B=main; git push origin "$B"`, `$CMD args`,
-    `bash "$script"`;
+    `bash "$script"`, `SUPABASE_PROJECT_REF=<staging> $WRAPPER script` (only a
+    dynamic word after `env` is treated as a possible assignment);
+  - the directory checks read the file system as it is when the hook runs:
+    a worktree or a supabase/ folder created earlier on the same command
+    line is not seen, and the guard cannot know which link file the CLI
+    itself would pick beyond the rule above. A tree-changing git command is
+    seen only on the same command line (RF-059): after a checkout of an older
+    branch in one command, the next command is judged by the files then on
+    disk - on a branch that predates the tooling the guard itself is gone.
+    The gate "working copy is not linked to production" is the backstop;
+  - a tree-changing git command hidden from the text: a git alias, a
+    subcommand held in a variable, a script or another tool that runs git
+    (only gh and hub are read, RF-063, RF-066; other git front ends are
+    not), or a known-safe gh subcommand that an alias of the same name has
+    replaced;
+  - `git rm`, `git mv`, `git clean` and `git lfs checkout` are not counted
+    as tree-changing (RF-069): they cannot restore a tracked link file; they
+    can only remove or move files, after which the later call fails;
+  - a path under supabase/.temp that the text does not spell (RF-065): held
+    in a variable, reached through a symlink, through a glob or brace list
+    that does not follow the text `supabase/` (`sup*/.temp`, RF-068), written
+    by a script, named in a here-document, or `cd supabase/.temp` in an
+    earlier command; a directory option that supplies the `supabase` part
+    (`tar -C supabase ...`, `env -C supabase ...`: only cd and its kin are
+    followed); a path assembled inside inline code
+    (`python3 -c "os.path.join('supabase', '.temp')"`) (RF-068);
+  - `$CLAUDE_PROJECT_DIR` is taken to hold the project root the hook was
+    given; an assignment through `read`, a loop or a sourced file is not seen;
+  - SQL sent to staging (psql, /database/query, `supabase db ...` on a
+    provably-staging target) is not inspected: it can delete anything there;
+  - the management API beyond the two exceptions above: other requests to
+    the staging project (restore, config changes, branch deletes) are
+    allowed; `curl -K` with no Supabase address on the line is not seen;
   - brace and glob expansion, shell aliases, git aliases, a shell function
     defined in an earlier command of the session;
   - what a script, a package script other than test:*, a Makefile target or a
-    file given to `curl -K` / `wget -i` does when it runs; what inline code
+    file given to `wget -i` does when it runs; what inline code
     (`python3 -c`, `node -e`, a here-document given to Python) does;
   - commands run through tools not listed as wrappers (ssh, docker, watch ...);
   - a push to main spelled through `push.default`, an upstream that differs
     from the branch name, or GIT_DIR / GIT_WORK_TREE in the environment;
-  - `supabase db reset` and `supabase migration repair` are allowed on a
-    provably-staging target like any other call (the existing tests pin
-    this); they ask everywhere else;
+  - `supabase migration repair` is allowed on a provably-staging target like
+    any other call (the tests pin this); it asks everywhere else;
+  - a SUPABASE_PROJECT_REF exported earlier in the line does not count for a
+    management script: only an assignment in front of the script itself does;
   - GitHub API routes other than the ones listed (contents, merge-upstream,
     workflow dispatch ...).
 
@@ -126,9 +279,14 @@ MSG_SUPABASE = ('This Supabase CLI call is not provably local or aimed at stagin
 MSG_SUPABASE_ACCOUNT = 'This Supabase CLI call acts on the account (projects or organizations), not on the local stack.'
 MSG_PG = 'This Postgres client call has no literal local or staging target; it may reach production.'
 MSG_HTTP = 'This request goes to a Supabase host, or to a URL built from a SUPABASE variable, that is not provably staging.'
-MSG_MGMT = 'This management script talks to the production Supabase project by default.'
-MSG_E2E = 'The e2e suites talk to the production Supabase project by default.'
-MSG_TEST_SCRIPT = 'The test:* package scripts run suites that talk to the production Supabase project by default.'
+MSG_MGMT = ('This management script is not provably aimed at staging: SUPABASE_PROJECT_REF is not set to the '
+            'literal staging ref in front of it, or --production is given.')
+MSG_E2E = ('No staging project is configured (STAGING_REF is empty), so this e2e run is approved by the owner.')
+MSG_TEST_SCRIPT = ('No staging project is configured (STAGING_REF is empty), so the test:* package scripts '
+                   'are approved by the owner.')
+MSG_SUPABASE_RESET = 'supabase db reset without --local wipes a remote database; the owner approves it even on staging.'
+MSG_PROJECT_DELETE = ('This request may DELETE the staging project itself through the management API; '
+                      'the owner approves it.')
 MSG_UNREADABLE = 'The guard could not analyse this command line, so it is not allowed without the owner.'
 MSG_TOO_BIG = ('This command line is longer or more deeply nested than the guard analyses, '
                'so it is not allowed without the owner.')
@@ -144,6 +302,83 @@ MSG_STDIN_SHELL = 'A shell is reading its commands from a pipe or a file here; t
 MSG_PY_STDIN = ('Python is given no literal script here: its program or its arguments come from a pipe, a file '
                 'or xargs, and may be an e2e suite.')
 MSG_PY_DYNAMIC = 'The script this Python call runs is held in a variable or a placeholder, and may be an e2e suite.'
+MSG_E2E_ELSEWHERE = ("This e2e run is not provably this project's own suite run from this checkout: the file does "
+                     'not resolve to <project root>/e2e/, or the directory it runs in is outside the project, '
+                     'inside a nested checkout or worktree, or not known. Only the suites of this working tree '
+                     'are known to refuse production.')
+MSG_TEST_ELSEWHERE = ('This test:* package script does not provably run in the project root, so it may be the '
+                      'script of another checkout, whose suites are not known to refuse production.')
+MSG_SUPABASE_DOWN = 'supabase migration down reverts migrations on a remote database; the owner approves it even on staging.'
+MSG_PROJECT_PAUSE = 'This request may PAUSE the staging project through the management API; the owner approves it.'
+MSG_CURL_CONFIG = ('curl reads more options from a file here (-K / --config) for a request to a Supabase host; '
+                   'the guard cannot see the method or the address it ends up with.')
+MSG_GATE_VAR = ('GATE_UNIT_TEST_CMD replaces the unit tests of scripts/gate.sh with another command; '
+                'a gate run with it is not a real run, so the owner approves it.')
+MSG_TREE_CHANGED = ('A git, gh or hub command earlier on this line can change the working tree or create a checkout '
+                    '(checkout, switch, pull, merge, rebase, reset, stash, gh pr checkout ...), so the project this working copy '
+                    'is linked to and the suites and scripts it holds are not known when this call runs. Run it as a '
+                    'separate command.')
+MSG_SUPABASE_LINK = ('supabase link / unlink changes the project this working copy is linked to; every '
+                     '"linked to staging" allowance rests on that link, so the owner approves it.')
+MSG_PY_UNKNOWN_DIR = ('Python is given a relative script here and the guard cannot tell which directory it runs '
+                      'in, so it may be an e2e suite of another checkout.')
+MSG_NPM_CONFIG = ('An npm_config_* variable is set in front of this test:* package script; it can point npm at '
+                  'another package or another shell, so the owner approves it.')
+MSG_LINK_TOUCHED = ('A word earlier on this line names a path under supabase/.temp, where the Supabase link '
+                    'file lives, so the project this working copy is linked to is not known when this call '
+                    'runs. Run it as a separate command.')
+SELFTEST = 'e2e/target_selftest.py'  # needs no network; allowed even while STAGING_REF is empty
+PROJECT_REF_VAR = 'SUPABASE_PROJECT_REF'  # the variable the management scripts read
+GATE_VAR = 'GATE_UNIT_TEST_CMD'  # RF-055: scripts/gate.sh runs this instead of the unit tests
+PROJECT_DIR_VAR = 'CLAUDE_PROJECT_DIR'  # RF-061: `cd "$CLAUDE_PROJECT_DIR"` is the project root
+# RF-059: git subcommands that can change the working tree or create a checkout.
+# `worktree` counts only as `worktree add`; `checkout -b <new>` and
+# `switch -c <new>` with no start point do not count (see Guard.git_changes_tree).
+# RF-068 adds read-tree, checkout-index and sparse-checkout.
+GIT_TREE_CHANGING = {'checkout', 'switch', 'pull', 'merge', 'rebase', 'reset', 'stash', 'restore', 'revert',
+                     'cherry-pick', 'am', 'apply', 'bisect', 'clone', 'submodule',
+                     'read-tree', 'checkout-index', 'sparse-checkout'}
+# RF-066: the gh subcommands known to leave the working tree alone. Every
+# other gh invocation counts as tree-changing (see Guard.gh_changes_tree).
+GH_SAFE_GROUPS = {'run', 'workflow', 'api', 'auth', 'secret', 'variable', 'search', 'status', 'browse', 'label',
+                  'release', 'cache', 'help'}
+GH_SAFE_PR = {'view', 'list', 'checks', 'create', 'status', 'diff', 'comment', 'edit', 'ready', 'review',
+              'reopen'}
+GH_SAFE_REPO = {'view', 'list'}
+GH_DOWNLOADING = {'run', 'release'}  # `gh run download`, `gh release download` write files
+# RF-065: a word that names supabase/.temp or a path below it, anywhere in the
+# word (`./supabase/.temp`, `/abs/supabase/.temp/project-ref`,
+# `main:supabase/.temp/x`, `of=supabase/.temp/x`). The file system here does
+# not tell upper from lower case, so neither does this.
+LINK_DIR_RE = re.compile(r'(?<![A-Za-z0-9_.-])supabase/+(?:\./+)*\.temp(?![A-Za-z0-9_.-])', re.I)
+# RF-068: `supabase/` followed anywhere in the word by a brace or glob
+# character: the shell may expand the word to a path under supabase/.temp.
+LINK_GLOB_RE = re.compile(r'supabase/.*[{*?\[]', re.I | re.S)
+
+
+class Assign(str):
+    """The name of a NAME=value word in front of a command, with its value.
+
+    value    the text after `=`, unquoted.
+    literal  True when the value holds no variable or substitution and the
+             assignment is a plain `NAME=value` (not `+=`, not an array element).
+    """
+    __slots__ = ('value', 'literal')
+
+    def __new__(cls, name, value='', literal=False):
+        self = str.__new__(cls, name)
+        self.value = value
+        self.literal = literal
+        return self
+
+
+def assignment(word):
+    """The Assign of a NAME=value word, or None when the word is not an assignment."""
+    m = ASSIGN_RE.match(word.text)
+    if not m:
+        return None
+    plain = m.group(2) is None and not m.group(0).endswith('+=')
+    return Assign(m.group(1), word.text[m.end():], plain and not word.dynamic)
 
 
 class TooDeep(Exception):
@@ -180,8 +415,9 @@ class Cmd(object):
     heredocs  bodies of here-documents and here-strings.
     stdin     the words of `< file` redirections.
     piped     True when the command reads from a pipe.
+    redirs    the words other redirections point at (`> file`, `2>> file`, `&> file`).
     """
-    __slots__ = ('words', 'subs', 'heredocs', 'keep', 'stdin', 'piped')
+    __slots__ = ('words', 'subs', 'heredocs', 'keep', 'stdin', 'piped', 'redirs')
 
     def __init__(self):
         self.words = []
@@ -190,6 +426,7 @@ class Cmd(object):
         self.keep = False
         self.stdin = []
         self.piped = False
+        self.redirs = []
 
 
 class Parser(object):
@@ -340,10 +577,12 @@ class Parser(object):
             self.i += 1
 
     def skip_target(self, cmd):
-        """Drop the word a redirection points at; substitutions inside it still count."""
+        """Take the word a redirection points at out of the arguments; substitutions
+        inside it still count, and the word is kept in cmd.redirs (RF-065)."""
         self.skip_blanks()
         if self.i < self.n and self.s[self.i] not in META:
-            self.read_word(cmd)
+            cmd.redirs.append(self.read_word(cmd))
+            cmd.keep = True
 
     def read_heredocs(self):
         s = self.s
@@ -600,9 +839,9 @@ SUPABASE_LONG = {
     '--org-id', '--db-password', '--size', '--lang', '--template', '--level', '--fail-on', '--exclude',
     '--version', '--last', '--from', '--to', '--query', '--branch', '--token', '--name', '--project-id',
 }
-# Deleting calls: asked even when the target is provably staging. `db reset`
-# and `migration repair` are not here because the existing tests pin them as
-# allowed on staging (see the header).
+# Deleting calls: asked even when the target is provably staging. A non-local
+# `db reset` asks too (RF-043, handled next to these in c_supabase).
+# `migration repair` is not here: the tests pin it as allowed on staging.
 SUPABASE_DESTRUCTIVE = (['projects', 'delete'], ['branches', 'delete'], ['storage', 'rm'],
                         ['functions', 'delete'], ['secrets', 'unset'])
 SUPABASE_ENV_EXEMPT = {'SUPABASE_ACCESS_TOKEN'}  # a credential, not a target
@@ -724,11 +963,14 @@ class Guard(object):
         self.staging = staging
         self.link = link
         self.project = project
+        self.root = os.path.realpath(project)  # the project root, symlinks resolved
         self.denies = []
         self.asks = []
         self.cmd = Cmd()      # the simple command being analysed (its pipe and redirections)
         self.env = set()      # variables assigned or exported earlier in the line
         self.switched = None  # branch after a `git checkout` / `git switch` earlier in the line
+        self.tree_changed = False  # RF-059, RF-063: a tree-changing git, gh or hub command ran earlier in the line
+        self.link_touched = False  # RF-065: a word earlier in the line names a path under supabase/.temp
         self.handlers = self.build_handlers()
 
     def deny(self, reason):
@@ -738,6 +980,137 @@ class Guard(object):
     def ask(self, reason):
         if reason not in self.asks:
             self.asks.append(reason)
+
+    def e2e(self, cwd, path='.'):
+        """Something under an e2e/ folder is run: path, read from the directory cwd.
+
+        While STAGING_REF is empty it asks. Once it is set (RF-048, narrowed by
+        RF-053) the run is allowed only when path resolves to <project root>/e2e
+        or below it and cwd is inside this project and outside any nested
+        checkout: only the suites of this working tree are known to refuse
+        production.
+        """
+        if not self.staging:
+            self.ask(MSG_E2E)
+            return
+        if self.tree_changed:
+            self.ask(MSG_TREE_CHANGED)  # RF-059: the suites on disk may be another commit's
+            return
+        base = self.directory(cwd)
+        if base is not None and self.in_checkout(base):
+            real = os.path.realpath(os.path.normpath(os.path.join(base, path)))
+            own = os.path.join(self.root, 'e2e')
+            if real == own or real.startswith(own + os.sep):
+                return
+        self.ask(MSG_E2E_ELSEWHERE)
+
+    def e2e_args(self, cwd, words):
+        """Apply the e2e rule to every argument that names a path under e2e/; True when one does."""
+        found = False
+        for w in words:
+            for text in self.names_e2e(cwd, w):
+                self.e2e(cwd, text)
+                found = True
+        return found
+
+    def test_script(self, cwd, assigns=()):
+        """A test:* package script is run in cwd. While STAGING_REF is empty it asks;
+        once it is set it is allowed only in the project root itself (RF-053),
+        with no tree-changing git command earlier in the line (RF-059) and no
+        npm_config_* variable set for it (RF-061)."""
+        if any(n.lower().startswith('npm_config_') for n in list(assigns) + sorted(self.env)):
+            self.ask(MSG_NPM_CONFIG)
+        if not self.staging:
+            self.ask(MSG_TEST_SCRIPT)
+        elif self.tree_changed:
+            self.ask(MSG_TREE_CHANGED)
+        elif self.directory(cwd) != self.root:
+            self.ask(MSG_TEST_ELSEWHERE)
+
+    def e2e_module(self, cwd, dotted):
+        """RF-061: a dotted module name is run. Every part that is `e2e` names an
+        e2e/ folder, looked up from the directory the call runs in: only
+        <project root>/e2e is this project's own. True when a part is e2e."""
+        parts = dotted.split('.')
+        found = False
+        for k, part in enumerate(parts):
+            if part.lower() == 'e2e':
+                self.e2e(cwd, '/'.join(parts[:k + 1]))
+                found = True
+        return found
+
+    def in_checkout(self, directory):
+        """True when directory is the project root, or below it with no `.git`
+        (file or folder: a worktree, a submodule, a nested clone) on the way up to the root."""
+        if directory != self.root and not directory.startswith(self.root + os.sep):
+            return False
+        d = directory
+        while d != self.root:
+            if os.path.lexists(os.path.join(d, '.git')):
+                return False
+            d = os.path.dirname(d)
+        return True
+
+    def linked_here(self, cwd):
+        """RF-052: True when a Supabase CLI call run in cwd uses the link of the
+        project root: cwd is the root, or below it in this checkout with no
+        supabase/ folder of its own on the way up to the root."""
+        directory = self.directory(cwd)
+        if directory is None or not self.in_checkout(directory):
+            return False
+        d = directory
+        while d != self.root:
+            if os.path.lexists(os.path.join(d, 'supabase')):
+                return False
+            d = os.path.dirname(d)
+        return True
+
+    def mgmt(self, assigns, args):
+        """RF-048: a management script is run. Allowed only with a literal
+        SUPABASE_PROJECT_REF=<staging ref> in front of it and no --production."""
+        ref = None
+        for a in assigns:
+            if a == PROJECT_REF_VAR:
+                ref = a  # the last one wins, as in a shell
+        if (not self.staging or ref is None or not getattr(ref, 'literal', False) or ref.value != self.staging
+                or any(w.text == '--production' for w in args)):
+            self.ask(MSG_MGMT)
+        if self.tree_changed:
+            # RF-066: the script on disk may be an older branch's copy, which
+            # defaults to production; the staging prefix proves nothing then.
+            self.ask(MSG_TREE_CHANGED)
+
+    def is_selftest(self, cwd, word):
+        """True when word is exactly the e2e self-test of this project."""
+        if word.dynamic or not cwd[0] or cwd[1] is None or word.text.startswith('/'):
+            return False
+        return posixpath.normpath(posixpath.join(cwd[1], word.text)) == SELFTEST
+
+    def staging_endpoint(self, word):
+        """The management API path below the staging project that a URL word
+        addresses, with `.` and `..` segments resolved as the client resolves
+        them: '' for the project itself, 'pause', 'database/query' ... None
+        when the word is not an address of the staging project on that API."""
+        if not self.staging:
+            return None
+        host, path, host_dynamic = self.url_parts(word)
+        if host_dynamic or host != 'api.supabase.com':
+            return None
+        resolved = posixpath.normpath('/' + re.split(r'[?#]', path, 1)[0].lstrip('/'))
+        prefix = '/v1/projects/' + self.staging
+        if resolved == prefix:
+            return ''
+        if resolved.startswith(prefix + '/'):
+            return resolved[len(prefix) + 1:]
+        return None
+
+    def staging_project_itself(self, word):
+        """True when a URL word is the management API address of the staging project itself."""
+        return self.staging_endpoint(word) == ''
+
+    def staging_project_pause(self, word):
+        """True when a URL word is the pause endpoint of the staging project (RF-054)."""
+        return self.staging_endpoint(word) == 'pause'
 
     # --- walking the line ---------------------------------------------------
 
@@ -762,6 +1135,8 @@ class Guard(object):
                 for sub in node.subs:
                     self.walk(sub, cwd, depth)
                 self.cmd = node
+                if any(self.names_link_dir(cwd, w) for w in node.words + node.redirs + node.stdin):
+                    self.link_touched = True  # RF-065: for this command and every later one
                 cwd = self.simple(node.words, cwd, depth, node.heredocs)
         return cwd
 
@@ -790,13 +1165,15 @@ class Guard(object):
                 if w.text == 'coproc':  # coproc command, or coproc NAME { ...; }
                     i += 2 if words[i + 2:i + 3] and words[i + 2].text == '{' else 1
                     continue
-            m = ASSIGN_RE.match(w.text) if w.bare else None
-            if m:
-                assigns.append(m.group(1))
+            found = assignment(w) if w.bare else None
+            if found is not None:
+                assigns.append(found)
                 i += 1
                 continue
             break
         words = words[i:]
+        if any(a == GATE_VAR for a in assigns):
+            self.ask(MSG_GATE_VAR)  # RF-055: set in front of a command, through env, or on its own
         if not words:
             self.env.update(assigns)  # NAME=value on its own: it stays set for the rest of the line
             return cwd
@@ -808,11 +1185,11 @@ class Guard(object):
         name = posixpath.basename(text).lower()
 
         if name in MGMT_SCRIPTS:
-            self.ask(MSG_MGMT)  # rule 9
+            self.mgmt(assigns, args)  # rule 9
         if '/' in text and not first.dynamic and self.under_e2e(cwd, text):
-            self.ask(MSG_E2E)  # rule 9: a file under e2e/ executed directly
+            self.e2e(cwd, text)  # rule 9: a file under e2e/ executed directly
         elif name.endswith('.py') and self.under_e2e(cwd, text):
-            self.ask(MSG_E2E)
+            self.e2e(cwd, text)
 
         handler = self.handlers.get(name)
         if handler is None and PYTHON_RE.match(name):
@@ -828,25 +1205,39 @@ class Guard(object):
     # or None when the text does not show where the command runs.
 
     def chdir(self, cwd, target):
-        inside, path = cwd
-        if target.startswith('/'):
-            real = os.path.realpath(target)
-            root = os.path.realpath(self.project)
-            if real == root:
-                return (True, '')
-            if real.startswith(root + os.sep):
-                return (True, real[len(root) + 1:])
-            return (False, target)
-        if path is None:
+        """The directory after `cd target` from cwd. `..` is taken off the text
+        first, as the shell's `cd` does; then symlinks are resolved, so a link
+        that leaves the project (or enters a worktree) is seen for what it is."""
+        if not target.startswith('/'):
+            base = self.directory(cwd)
+            if base is None:
+                return (False, None)
+            target = os.path.join(base, target)
+        real = os.path.realpath(os.path.normpath(target))
+        # RF-061: a directory that is not there when the hook runs. The `cd`
+        # fails (or the directory is made on this very line) and the commands
+        # after it run somewhere the text does not show. The path is tested as
+        # written too: `nope/..` only looks like its parent.
+        if not os.path.isdir(target) or not os.path.isdir(real):
             return (False, None)
-        joined = posixpath.normpath(posixpath.join(path, target))
-        if joined == '.':
-            joined = ''
-        return (inside and not joined.startswith('..'), joined)
+        if real == self.root:
+            return (True, '')
+        if real.startswith(self.root + os.sep):
+            return (True, real[len(self.root) + 1:])
+        return (False, real)
 
     def chdir_word(self, cwd, word):
         """The directory after `cd word` (or -C word); unknown when the word is not a literal path."""
-        if word is None or word.dynamic or word.text in ('', '-') or word.text.startswith('~'):
+        if word is None:
+            return (False, None)
+        if word.dynamic:
+            # RF-061: the one variable whose value the hook knows, unless the
+            # line itself has assigned it.
+            if (word.text in ('$' + PROJECT_DIR_VAR, '${' + PROJECT_DIR_VAR + '}')
+                    and PROJECT_DIR_VAR not in self.env and os.path.isdir(self.root)):
+                return (True, '')
+            return (False, None)
+        if word.text in ('', '-') or word.text.startswith('~'):
             return (False, None)
         return self.chdir(cwd, word.text)
 
@@ -855,22 +1246,42 @@ class Guard(object):
         return 'e2e' in posixpath.normpath(full).lower().split('/')
 
     def names_e2e(self, cwd, word):
-        """True when an argument word (or the value of --option=value) is a path under e2e/."""
+        """The paths under e2e/ that an argument word (or the value of --option=value) names; empty when none."""
         if word.dynamic:
-            return False
+            return []
         texts = [word.text]
         if word.text.startswith('-') and '=' in word.text:
             texts.append(word.text.split('=', 1)[1])
-        return any(t and self.under_e2e(cwd, t.split('::')[0]) for t in texts)
+        paths = [t.split('::')[0] for t in texts]
+        return [p for p in paths if p and self.under_e2e(cwd, p)]
+
+    def names_link_dir(self, cwd, word):
+        """RF-065: True when a word names supabase/.temp or a path below it: in
+        its text as written, or once the text is read as a path from cwd
+        (`cd supabase && ... .temp/project-ref`, `supabase/x/../.temp`).
+        RF-068: also when `supabase/` is followed anywhere in the word by a
+        brace or glob character."""
+        text = word.text
+        if LINK_DIR_RE.search(text) or LINK_GLOB_RE.search(text):
+            return True
+        if not text or '\0' in text:
+            return False
+        full = posixpath.normpath(text if text.startswith('/') else posixpath.join(cwd[1] or '', text))
+        if LINK_DIR_RE.search(full):
+            return True
+        # RF-068: `cd supabase && cp x .t*/project-ref`. Only for a relative
+        # word: the directory part comes from the cd, the pattern from the word.
+        return (not text.startswith('/') and re.search(r'[{*?\[]', text) is not None
+                and LINK_GLOB_RE.search(full) is not None)
 
     def directory(self, cwd):
-        """The absolute directory of cwd, or None when it is not known."""
+        """The absolute directory of cwd (symlinks resolved), or None when it is not known."""
         path = cwd[1]
         if path is None:
             return None
         if path.startswith('/'):
             return path
-        return os.path.normpath(os.path.join(self.project, path))
+        return os.path.normpath(os.path.join(self.root, path))
 
     def branch_at(self, directory):
         """The branch checked out in the repository holding directory; None when there is none."""
@@ -902,12 +1313,12 @@ class Guard(object):
 
     def build_handlers(self):
         table = {
-            'cd': self.c_cd, 'pushd': self.c_cd, 'popd': self.c_popd,
+            'cd': self.c_cd, 'chdir': self.c_cd, 'pushd': self.c_cd, 'popd': self.c_popd,
             'env': self.c_env, 'eval': self.c_eval, 'source': self.c_source, '.': self.c_source,
             'export': self.c_export, 'declare': self.c_export, 'typeset': self.c_export,
             'readonly': self.c_export, 'local': self.c_export,
             'find': self.c_find,
-            'git': self.c_git, 'gh': self.c_gh, 'supabase': self.c_supabase,
+            'git': self.c_git, 'hub': self.c_hub, 'gh': self.c_gh, 'supabase': self.c_supabase,
             'curl': self.c_http, 'wget': self.c_http, 'http': self.c_httpie, 'https': self.c_httpie,
             'npm': self.c_package, 'yarn': self.c_package, 'pnpm': self.c_package, 'bun': self.c_package,
             'npx': self.c_npx, 'bunx': self.c_npx, 'pnpx': self.c_npx,
@@ -941,13 +1352,21 @@ class Guard(object):
             m = ASSIGN_RE.match(a.text)
             if m:
                 self.env.add(m.group(1))
+            if a.text == GATE_VAR or (m and m.group(1) == GATE_VAR):
+                self.ask(MSG_GATE_VAR)  # RF-055: exported with or without a value
         return None
 
     def c_env(self, name, args, cwd, depth, assigns, heredocs):
         names = list(assigns)
+        tainted = False  # RF-056: a dynamic word in front of the command may set any variable
         i = 0
         while i < len(args):
             t = args[i].text
+            if args[i].dynamic:
+                tainted = True
+                if assignment(args[i]) is None and not t.startswith('-'):
+                    i += 1  # it may expand to more assignments; the command is looked for after it
+                    continue
             if t in ('-S', '--split-string'):
                 self.line(' '.join(a.text for a in args[i + 1:]), cwd, depth + 1)
                 return None
@@ -963,18 +1382,35 @@ class Guard(object):
                 cwd = self.chdir_word(cwd, Word(t.split('=', 1)[1], args[i].dynamic, args[i].vars))
                 i += 1
                 continue
-            if t in ('-u', '--unset', '-P'):
+            if t in ('-u', '--unset'):
+                removed = args[i + 1].text if i + 1 < len(args) else ''
+                names = [n for n in names if n != removed]
                 i += 2
                 continue
-            m = ASSIGN_RE.match(t)
-            if m:
-                names.append(m.group(1))
+            if t == '-P':
+                i += 2
+                continue
+            if t.startswith('--unset='):
+                names = [n for n in names if n != t.split('=', 1)[1]]
+                i += 1
+                continue
+            if t in ('-', '-i', '--ignore-environment'):
+                names = []  # the command starts from an empty environment
+                i += 1
+                continue
+            found = assignment(args[i])
+            if found is not None:
+                names.append(found)
                 i += 1
                 continue
             if t.startswith('-'):
                 i += 1
                 continue
             break
+        if tainted:
+            # The dynamic word may hold SUPABASE_PROJECT_REF=<another project> (or
+            # any other SUPABASE_* target): what the command reads is not literal.
+            names.append(Assign(PROJECT_REF_VAR, '', False))
         self.simple(args[i:], cwd, depth, heredocs, names)
         return None
 
@@ -995,9 +1431,11 @@ class Guard(object):
             _, _, rest = split(args, 'sk', {'--signal', '--kill-after'}, stop_first=True)
             rest = rest[1:]  # the duration
         elif name in ('sudo', 'doas'):
-            _, _, rest = split(args, 'ughpCDRTUrt', {'--user', '--group', '--host', '--prompt', '--chdir',
-                                                      '--role', '--type', '--other-user', '--close-from'},
-                               stop_first=True)
+            opts, _, rest = split(args, 'ughpCDRTUrt', {'--user', '--group', '--host', '--prompt', '--chdir',
+                                                         '--role', '--type', '--other-user', '--close-from'},
+                                  stop_first=True)
+            if any(key in ('-D', '--chdir') for key, _ in opts):
+                cwd = (False, None)  # RF-061: the command runs in another directory
         elif name == 'xargs':
             _, _, rest = split(args, 'nIPLsEdaJRS', {'--max-args', '--max-procs', '--delimiter', '--arg-file',
                                                       '--max-chars'}, stop_first=True)
@@ -1011,13 +1449,15 @@ class Guard(object):
             names += ['SUPABASE_FROM_DOTENV', 'PG_FROM_DOTENV']
         else:  # nohup, builtin, corepack, setsid, unbuffer
             _, _, rest = split(args, stop_first=True)
-        self.simple(rest, cwd, depth, heredocs, names)
-        return None
+        after = self.simple(rest, cwd, depth, heredocs, names)
+        # RF-061: `builtin cd dir` and `command cd dir` move the shell like `cd dir`.
+        return after if name in ('command', 'builtin') else None
 
     def c_shell(self, name, args, cwd, depth, assigns, heredocs):
         i = 0
         inline = False
         from_stdin = False
+        noexec = False
         while i < len(args):
             t = args[i].text
             if len(t) < 2 or t[0] not in '-+':
@@ -1033,8 +1473,12 @@ class Guard(object):
                     inline = True
                 if 's' in t[1:]:
                     from_stdin = True
+                if 'n' in t[1:]:
+                    noexec = t[0] == '-'  # RF-056: the last one wins, and +n switches it off again
                 if t[-1] in 'oO':
                     i += 1
+                    if t[-1] == 'o' and i < len(args) and args[i].text == 'noexec':
+                        noexec = t[0] == '-'  # -o noexec / +o noexec
             i += 1
         rest = args[i:]
         if inline:
@@ -1042,10 +1486,12 @@ class Guard(object):
                 self.line(rest[0].text, cwd, depth + 1)
             return None
         if rest and not from_stdin and rest[0].text not in STDIN_NAMES:
+            if noexec and not any(a.dynamic for a in args[:i]):
+                return None  # `bash -n file` parses the file and runs nothing
             if posixpath.basename(rest[0].text).lower() in MGMT_SCRIPTS:
-                self.ask(MSG_MGMT)
+                self.mgmt(assigns, rest[1:])
             if not rest[0].dynamic and self.under_e2e(cwd, rest[0].text):
-                self.ask(MSG_E2E)
+                self.e2e(cwd, rest[0].text)
             return None
         # The shell reads its commands from standard input.
         seen = False
@@ -1077,7 +1523,9 @@ class Guard(object):
                 j = i + 1
                 while j < len(args) and args[j].text not in (';', '+'):
                     j += 1
-                self.simple(args[i + 1:j], cwd, depth)
+                # RF-061: -execdir / -okdir run in the directory of each match.
+                inner = (False, None) if args[i].text in ('-execdir', '-okdir') else cwd
+                self.simple(args[i + 1:j], inner, depth)
                 i = j
             i += 1
         return None
@@ -1099,6 +1547,8 @@ class Guard(object):
         if not rest:
             return None
         sub = rest[0].text
+        if self.git_changes_tree(sub, rest[1:]):
+            self.tree_changed = True  # RF-059: for every call later in the line
         if sub in ('checkout', 'switch'):
             self.git_switch(sub, rest[1:], where)
         elif sub == 'push':
@@ -1111,6 +1561,38 @@ class Guard(object):
                     if forced or to_main:
                         self.deny(MSG_PUSH)
         return None
+
+    def c_hub(self, name, args, cwd, depth, assigns, heredocs):
+        """RF-063: hub is git with GitHub commands added. Its git subcommands are
+        read as git's (clone, pull, checkout ... change the tree; the push rules
+        apply); of its own, `hub pr checkout` and `hub sync` change the tree."""
+        _, _, rest = split(args, 'Cc', GIT_LONG, stop_first=True)
+        if rest:
+            if rest[0].text == 'sync':
+                self.tree_changed = True
+            elif rest[0].text == 'pr':
+                _, pos, _ = split(rest[1:])
+                if pos and pos[0].text == 'checkout':
+                    self.tree_changed = True
+        return self.c_git(name, args, cwd, depth, assigns, heredocs)
+
+    def git_changes_tree(self, sub, args):
+        """RF-059: True when `git <sub> args` can change the working tree or
+        create a checkout. `checkout -b <new>` and `switch -c <new>` only name
+        the commit that is already checked out; with a start point after the
+        new name they check that out, and count."""
+        if sub == 'worktree':
+            _, pos, _ = split(args)
+            return bool(pos) and pos[0].text == 'add'
+        if sub not in GIT_TREE_CHANGING:
+            return False
+        if sub == 'checkout':
+            opts, pos, _ = split(args, 'bB', {'--orphan'})
+            return not (not pos and any(key == '-b' for key, _ in opts))
+        if sub == 'switch':
+            opts, pos, _ = split(args, 'cC', {'--create', '--force-create', '--orphan'})
+            return not (not pos and any(key in ('-c', '--create') for key, _ in opts))
+        return True
 
     def git_switch(self, sub, args, where):
         """Remember the branch a `git checkout` / `git switch` leaves checked out."""
@@ -1215,6 +1697,8 @@ class Guard(object):
         if not rest:
             return None
         sub = rest[0].text
+        if self.gh_changes_tree(rest):
+            self.tree_changed = True  # RF-063, RF-066: for every call later in the line
         if sub == 'pr':
             _, _, after = split(rest[1:], 'R', {'--repo'}, stop_first=True)
             if after and after[0].text == 'merge':
@@ -1236,6 +1720,33 @@ class Guard(object):
                 self.github_path(endpoint, mutating)
         return None
 
+    def gh_changes_tree(self, rest):
+        """RF-066: True unless `gh <rest>` is known to leave the working tree
+        alone. rest starts at the subcommand: the global flags and their
+        values are already taken off, so a flag value that is a safe word
+        (`gh -R api co 5`) is not read as the subcommand. An alias, an
+        extension, an unknown word and a word held in a variable all count."""
+        first = rest[0]
+        if first.dynamic:
+            return True
+        sub = first.text
+        _, _, after = split(rest[1:], 'R', {'--repo'}, stop_first=True)
+        second = after[0] if after else None
+        if sub in GH_SAFE_GROUPS:
+            if sub in GH_DOWNLOADING:
+                # `download` writes files into the tree. A second word the text
+                # does not show may be it; so may any later bare `download`
+                # behind a flag whose value this table does not know.
+                return (second is not None and second.dynamic) or any(w.text == 'download' for w in rest[1:])
+            return False
+        if sub == 'issue':  # everything except exactly `develop`, which can check a branch out
+            return second is not None and (second.dynamic or second.text == 'develop')
+        if sub == 'pr':
+            return second is None or second.dynamic or second.text not in GH_SAFE_PR
+        if sub == 'repo':
+            return second is None or second.dynamic or second.text not in GH_SAFE_REPO
+        return True
+
     # rule 6
     def c_supabase(self, name, args, cwd, depth, assigns, heredocs):
         opts, pos, _ = split(args, SUPABASE_SHORT, SUPABASE_LONG)
@@ -1245,21 +1756,39 @@ class Guard(object):
         def values(key):
             return [value for k, value in opts if k == key]
 
-        if path[:1] and path[0] in ('projects', 'orgs') and path[1:2] != ['list']:
-            self.ask(MSG_SUPABASE_ACCOUNT)
-            return None
+        # RF-056: only --help / -h excuse a call (the CLI prints help and does
+        # nothing else). `--help=false` is not help, and a short flag written
+        # with `=` is not read reliably, so neither counts.
+        asks_help = (any(k in ('--help', '-h') and v is None for k, v in opts)
+                     and not any(re.match(r'^-[^-=]*=', w.text) for w in args))
         if any(w.dynamic for w in args):
             self.ask(MSG_SUPABASE_DYNAMIC)
+            return None
+        if path[:1] and path[0] in ('link', 'unlink') and not asks_help:
+            self.ask(MSG_SUPABASE_LINK)  # RF-061: also when the new target is staging
+            return None
+        if path[:1] and path[0] in ('projects', 'orgs') and path[1:2] != ['list'] and not asks_help:
+            self.ask(MSG_SUPABASE_ACCOUNT)  # create, delete, pause, restore ...: on any project
             return None
         overrides = [n for n in list(assigns) + sorted(self.env)
                      if n.upper().startswith('SUPABASE_') and n.upper() not in SUPABASE_ENV_EXEMPT]
         if overrides:
             self.ask(MSG_SUPABASE_ENV)
             return None
-        info = is_info(keys) or '-h' in keys
+        if asks_help:
+            return None
+        if '--version' in keys and not pos:
+            return None  # the bare version call: no subcommand, nothing runs
         local = any(k == '--local' and (v is None or v.text == 'true') for k, v in opts)
-        if path[:2] in SUPABASE_DESTRUCTIVE and not local and not info:
+        # `--version` (a migration, a function version) excuses none of these.
+        if path[:2] in SUPABASE_DESTRUCTIVE and not local:
             self.ask(MSG_SUPABASE_DESTRUCTIVE)
+            return None
+        if path[:2] == ['migration', 'down'] and not local:
+            self.ask(MSG_SUPABASE_DOWN)  # RF-054
+            return None
+        if path[:2] == ['db', 'reset'] and not local:
+            self.ask(MSG_SUPABASE_RESET)  # RF-043
             return None
         urls = values('--db-url')
         if urls:
@@ -1273,10 +1802,6 @@ class Guard(object):
             if not named_staging:
                 self.ask(MSG_SUPABASE)
             return None
-        if '--version' in keys and not pos:
-            return None
-        if '--help' in keys or '-h' in keys:
-            return None
         if local:
             return None
         if path[:1] and path[0] in ('start', 'stop', 'status', 'init'):
@@ -1285,10 +1810,18 @@ class Guard(object):
             return None
         if path[:2] in (['db', 'lint'], ['db', 'diff']) and '--linked' not in keys:
             return None  # both work on the local database unless told otherwise
-        workdirs_here = all(
-            v is not None and not v.dynamic and posixpath.normpath(posixpath.join(cwd[1] or '', v.text)) == '.'
-            for v in values('--workdir'))
-        if self.staging and self.link == self.staging and cwd[0] and workdirs_here:
+        # RF-052: the CLI uses the link of the directory it runs in (--workdir
+        # replaces that directory), so the link file of the project root proves
+        # staging only for a call that provably runs under that link.
+        where = [self.chdir_word(cwd, v) for v in values('--workdir')] or [cwd]
+        if self.staging and self.link == self.staging and all(self.linked_here(w) for w in where):
+            if self.tree_changed:
+                # RF-059: the link file was read before the line ran; a checkout
+                # of an older commit puts the tracked production link back.
+                self.ask(MSG_TREE_CHANGED)
+            if self.link_touched:
+                # RF-065: the link file may have been written since it was read.
+                self.ask(MSG_LINK_TOUCHED)
             return None  # the linked project is provably staging
         self.ask(MSG_SUPABASE)
         return None
@@ -1372,13 +1905,19 @@ class Guard(object):
         host = re.sub(r':\d*$', '', authority.rpartition('@')[2]).lower().rstrip('.')
         return host, path, '$' in authority or '`' in authority
 
+    def supabase_url(self, word):
+        """True when a URL word addresses a Supabase host or is built from a SUPABASE variable."""
+        host, _, host_dynamic = self.url_parts(word)
+        if any('SUPABASE' in v.upper() for v in word.vars):
+            return True
+        project_host = any(host == base or host.endswith('.' + base) for base in ('supabase.co', 'supabase.in'))
+        return not host_dynamic and (project_host or host == 'api.supabase.com')
+
     def url_asks(self, word):
         t = word.text
         host, path, host_dynamic = self.url_parts(word)
-        from_variable = any('SUPABASE' in v.upper() for v in word.vars)
         project_host = any(host == base or host.endswith('.' + base) for base in ('supabase.co', 'supabase.in'))
-        supabase_host = not host_dynamic and (project_host or host == 'api.supabase.com')
-        if not (from_variable or supabase_host):
+        if not self.supabase_url(word):
             return False
         if self.staging and not host_dynamic and '..' not in t and '%' not in t:
             # Staging must be the project the URL addresses: a label of the host,
@@ -1412,6 +1951,7 @@ class Guard(object):
             opts, pos, _ = split(args, WGET_SHORT, WGET_LONG)
         candidates = list(pos)
         method = None
+        methods = []  # every method named: one curl call can make several requests (--next)
         body = False
         for key, value in opts:
             if key in (CURL_BODY if name == 'curl' else WGET_BODY):
@@ -1420,6 +1960,7 @@ class Guard(object):
                 continue
             if key in ('-X', '--request') and name == 'curl' or key == '--method' and name == 'wget':
                 method = 'DYNAMIC' if value.dynamic else value.text.upper()
+                methods.append(method)
             if key == '--url':
                 candidates.append(value)
             elif name == 'curl' and key in CURL_REDIRECTS:
@@ -1427,6 +1968,17 @@ class Guard(object):
                     self.ask(MSG_HTTP)
         if any(self.url_asks(w) for w in candidates):
             self.ask(MSG_HTTP)
+        # RF-043: DELETE on the staging project itself, or a method the text does not show.
+        if any(m in ('DELETE', 'DYNAMIC') for m in methods) and any(
+                self.staging_project_itself(w) for w in candidates):
+            self.ask(MSG_PROJECT_DELETE)
+        # RF-054: the pause endpoint of the staging project, whatever the method.
+        if any(self.staging_project_pause(w) for w in candidates):
+            self.ask(MSG_PROJECT_PAUSE)
+        # RF-056: a config file may hold the method (-X DELETE) or another URL.
+        if name == 'curl' and any(key in ('-K', '--config') for key, _ in opts) and any(
+                self.supabase_url(w) for w in candidates):
+            self.ask(MSG_CURL_CONFIG)
         mutating = method not in ('GET', 'HEAD') if method is not None else body
         self.github_http(candidates, mutating, args)
         return None
@@ -1441,6 +1993,11 @@ class Guard(object):
         if pos and re.match(r'^[A-Za-z]+$', pos[0].text) and len(pos) > 1:
             method = pos[0].text.upper()
             items = pos[2:]
+        if (method == 'DELETE' or (pos and pos[0].dynamic)) and any(
+                self.staging_project_itself(w) for w in pos):
+            self.ask(MSG_PROJECT_DELETE)  # RF-043
+        if any(self.staging_project_pause(w) for w in pos):
+            self.ask(MSG_PROJECT_PAUSE)  # RF-054
         mutating = method not in ('GET', 'HEAD') if method is not None else any(
             re.search(r'[^\\]:?=', w.text) or w.dynamic for w in items)
         self.github_http(pos, mutating, args)
@@ -1448,11 +2005,20 @@ class Guard(object):
 
     # rule 9
     def c_package(self, name, args, cwd, depth, assigns, heredocs):
+        # RF-053: the runner's own directory flag, wherever it stands on the
+        # line, decides which package.json is used; a workspace selector picks
+        # one the text does not show.
+        opts, _, _ = split(args, 'CwF', {'--prefix', '--dir', '--cwd', '--filter', '--workspace'})
+        for key, value in opts:
+            if key in ('-C', '--prefix', '--dir', '--cwd'):
+                cwd = self.chdir_word(cwd, value)
+            elif key in ('-w', '-F', '--filter', '--workspace', '--workspaces', '-r', '--recursive'):
+                cwd = (False, None)
         for a in args:
             if a.text == '--':
                 break
             if a.text.startswith('test:'):
-                self.ask(MSG_TEST_SCRIPT)
+                self.test_script(cwd, assigns)
         _, _, rest = split(args, 'C', {'--prefix', '--dir', '--cwd', '--filter', '--workspace'}, stop_first=True)
         if not rest:
             return None
@@ -1463,7 +2029,7 @@ class Guard(object):
                 if a.text.startswith('-'):
                     continue
                 if a.text.startswith('test:'):
-                    self.ask(MSG_TEST_SCRIPT)
+                    self.test_script(cwd, assigns)
                 break
         if sub in ('exec', 'x', 'dlx'):
             self.c_npx(name, rest[1:], cwd, depth, assigns, heredocs)
@@ -1474,7 +2040,9 @@ class Guard(object):
 
     def c_npx(self, name, args, cwd, depth, assigns, heredocs):
         opts, _, rest = split(args, 'pcw', {'--package', '--call', '--cache', '--registry', '--workspace',
-                                             '--prefix', '--userconfig', '--loglevel'}, stop_first=True)
+                                             '--prefix', '--cwd', '--userconfig', '--loglevel'}, stop_first=True)
+        if any(key in ('--prefix', '--cwd') for key, _ in opts):
+            cwd = (False, None)  # RF-061: the tool runs for another directory
         for key, value in opts:
             if key in ('-c', '--call') and value is not None:
                 self.line(value.text, cwd, depth + 1)
@@ -1489,7 +2057,7 @@ class Guard(object):
             if a.text.startswith('-'):
                 continue
             if a.text.startswith('test:') or '*' in a.text or a.dynamic:
-                self.ask(MSG_TEST_SCRIPT)
+                self.test_script(cwd, assigns)
         return None
 
     def c_concurrently(self, name, args, cwd, depth, assigns, heredocs):
@@ -1502,16 +2070,15 @@ class Guard(object):
     def c_node(self, name, args, cwd, depth, assigns, heredocs):
         for i, a in enumerate(args):
             if a.text.startswith('--run=test:'):
-                self.ask(MSG_TEST_SCRIPT)
+                self.test_script(cwd, assigns)
             if a.text == '--run' and i + 1 < len(args) and args[i + 1].text.startswith('test:'):
-                self.ask(MSG_TEST_SCRIPT)
+                self.test_script(cwd, assigns)
         self.c_e2e_program(name, args, cwd, depth, assigns, heredocs)
         return None
 
     def c_e2e_program(self, name, args, cwd, depth, assigns, heredocs):
         """A program that runs the files it is given: any argument under e2e/ asks."""
-        if any(self.names_e2e(cwd, a) for a in args):
-            self.ask(MSG_E2E)
+        self.e2e_args(cwd, args)
         return None
 
     def c_runner(self, name, args, cwd, depth, assigns, heredocs):
@@ -1538,15 +2105,23 @@ class Guard(object):
         keys = [key for key, _ in opts]
         if is_info(keys) or '-V' in keys or '-h' in keys:
             return None
-        if any(self.names_e2e(cwd, a) for a in args):
-            self.ask(MSG_E2E)  # any argument that is a path under e2e/
+        if (rest and self.is_selftest(cwd, rest[0]) and not any(key in ('-c', '-m') for key in keys)
+                and not any(self.names_e2e(cwd, a) for a in rest[1:])):
+            return None  # the e2e self-test: no network, allowed while STAGING_REF is empty
+        self.e2e_args(cwd, args)  # any argument that is a path under e2e/
         for key, value in opts:
             if key == '-c':
                 return None  # inline code
             if key == '-m':
                 module = value.text if value is not None else ''
-                if module.split('.')[0].lower() == 'e2e' or self.under_e2e(cwd, '.'):
-                    self.ask(MSG_E2E)
+                if value is not None and not value.dynamic:
+                    self.e2e_module(cwd, module)  # RF-061: an e2e part anywhere in the name
+                if self.under_e2e(cwd, '.'):
+                    self.e2e(cwd)
+                if module in ('unittest', 'pytest'):
+                    for a in args:  # RF-045, RF-061: a dotted name with an e2e part
+                        if not a.dynamic and not a.text.startswith('-') and '/' not in a.text:
+                            self.e2e_module(cwd, a.text)
                 if value is not None and value.dynamic:
                     self.ask(MSG_PY_DYNAMIC)
                 if module == 'pytest':
@@ -1562,12 +2137,15 @@ class Guard(object):
         if script.dynamic or '{}' in script.text:
             self.ask(MSG_PY_DYNAMIC)
         elif self.under_e2e(cwd, script.text):
-            self.ask(MSG_E2E)
+            self.e2e(cwd, script.text)
+        elif not script.text.startswith(('/', '~')) and self.directory(cwd) is None:
+            self.ask(MSG_PY_UNKNOWN_DIR)  # RF-061: a bare file name in a directory the text does not show
         return None
 
     def c_pytest(self, name, args, cwd, depth, assigns, heredocs):
-        if self.under_e2e(cwd, '.') or any(self.names_e2e(cwd, w) for w in args):
-            self.ask(MSG_E2E)
+        if self.under_e2e(cwd, '.'):
+            self.e2e(cwd)
+        self.e2e_args(cwd, args)
         return None
 
 
@@ -1641,7 +2219,9 @@ def main():
         return
 
     guard = Guard(prod, staging, link, project)
-    cwd = (True, '')
+    # RF-061: a hook cwd that is missing, empty, not a string or not absolute
+    # is unknown; it is not taken to be the project root.
+    cwd = (False, None)
     start = data.get('cwd')
     if isinstance(start, str) and start.startswith('/'):
         cwd = guard.chdir(cwd, start)

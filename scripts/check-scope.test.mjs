@@ -558,25 +558,86 @@ describe('a changed HEAD is a violation for every role', { concurrency: CONCURRE
 });
 
 // ---------------------------------------------------------------------------
-// docs/saas/ is a note, not a violation (RF-008, RF-017)
+// docs/saas/ is the Lead's record: a violation for every role (P0-6, RF-038)
+//
+// Changed for RF-038. Before (WF-4, RF-008): a change under docs/saas/ was
+// listed as a note and the check exited 0. Owner approvals live in
+// docs/saas/IMPLEMENTATION_STATUS.md, so now it is a violation for every role
+// unless the Lead passes --allow 'docs/saas/*'.
 // ---------------------------------------------------------------------------
 
-describe('changes under docs/saas/ are listed as a note, not a violation', { concurrency: CONCURRENCY }, () => {
+describe('P0-6 RF-038: a change under docs/saas/ is a violation for every role', { concurrency: CONCURRENCY }, () => {
   const path = 'docs/saas/IMPLEMENTATION_STATUS.md';
+  const ALLOW_DOCS = 'docs/saas/*';
+
   for (const role of ROLES) {
-    it(`${role}: exit 0 and the changed file is listed`, async () => {
+    it(`${role}: changing ${path} is a violation and the file is named`, async () => {
       await requireRoot();
-      const result = await scenario({ role, change: edit(path) });
-      expectInScope(result);
-      assert.ok(result.out.includes(path), `expected the note to list ${path}:\n${result.out}`);
+      expectViolation(await scenario({ role, change: edit(path) }), path);
+    });
+
+    it(`${role}: a new file under docs/saas/ is a violation`, async () => {
+      await requireRoot();
+      expectViolation(await scenario({ role, change: edit('docs/saas/TEST_RESULTS.md') }), 'docs/saas/TEST_RESULTS.md');
+    });
+
+    it(`${role}: deleting ${path} is a violation`, async () => {
+      await requireRoot();
+      expectViolation(await scenario({ role, change: (repo) => remove(repo, path) }), path);
+    });
+
+    it(`${role}: changing ${path} with --allow '${ALLOW_DOCS}' is in scope`, async () => {
+      await requireRoot();
+      expectInScope(await scenario({ role, change: edit(path), allow: [ALLOW_DOCS] }));
+    });
+
+    it(`${role}: a new file under docs/saas/ with --allow '${ALLOW_DOCS}' is in scope`, async () => {
+      await requireRoot();
+      expectInScope(await scenario({ role, change: edit('docs/saas/TEST_RESULTS.md'), allow: [ALLOW_DOCS] }));
     });
   }
 
-  it('a new file under docs/saas/ is listed too', async () => {
+  it('--allow with the exact path permits that file', async () => {
     await requireRoot();
-    const result = await scenario({ role: 'reviewer', change: edit('docs/saas/TEST_RESULTS.md') });
-    expectInScope(result);
-    assert.ok(result.out.includes('docs/saas/TEST_RESULTS.md'), result.out);
+    expectInScope(await scenario({ role: 'developer', change: edit(path), allow: [path] }));
+  });
+
+  it('--allow with the exact path of one file does not permit another file under docs/saas/', async () => {
+    await requireRoot();
+    const result = await scenario({
+      role: 'developer',
+      change: (repo) => {
+        edit(path)(repo);
+        edit('docs/saas/REVIEW_FINDINGS.md')(repo);
+      },
+      allow: [path],
+    });
+    expectViolation(result, 'docs/saas/REVIEW_FINDINGS.md');
+  });
+
+  it('an --allow glob that does not match permits nothing', async () => {
+    await requireRoot();
+    // "*" stays inside one path segment, so docs/* is not docs/saas/<file>.
+    for (const allow of [['docs/*'], ['docs/readme.md'], ['src/**'], ['saas/*']]) {
+      expectViolation(await scenario({ role: 'developer', change: edit(path), allow }), path);
+    }
+  });
+
+  it('a file dirty under docs/saas/ before the snapshot and untouched afterwards is not attributed', async () => {
+    await requireRoot();
+    for (const role of ROLES) expectInScope(await scenario({ role, before: edit(path) }));
+  });
+
+  it('the developer changing code and docs/saas/ together is a violation that names the docs/saas/ file', async () => {
+    await requireRoot();
+    const result = await scenario({
+      role: 'developer',
+      change: (repo) => {
+        edit('src/app.ts')(repo);
+        edit(path)(repo);
+      },
+    });
+    expectViolation(result, path);
   });
 
   it('a docs/saas/ change does not hide a real violation', async () => {
@@ -591,6 +652,24 @@ describe('changes under docs/saas/ are listed as a note, not a violation', { con
     expectViolation(result, 'src/app.ts');
   });
 
+  it("--allow 'docs/saas/*' does not lift a role violation next to it", async () => {
+    await requireRoot();
+    const result = await scenario({
+      role: 'reviewer',
+      change: (repo) => {
+        edit(path)(repo);
+        edit('src/app.ts')(repo);
+      },
+      allow: [ALLOW_DOCS],
+    });
+    expectViolation(result, 'src/app.ts');
+  });
+
+  it("--allow 'docs/saas/*' does not open the rest of docs/ to the reviewer", async () => {
+    await requireRoot();
+    expectViolation(await scenario({ role: 'reviewer', change: edit('docs/readme.md'), allow: [ALLOW_DOCS] }), 'docs/readme.md');
+  });
+
   it('a path that only starts like docs/saas is not excused', async () => {
     await requireRoot();
     expectViolation(await scenario({ role: 'reviewer', change: edit('docs/saas-notes.md') }), 'docs/saas-notes.md');
@@ -599,6 +678,11 @@ describe('changes under docs/saas/ are listed as a note, not a violation', { con
   it('another directory named saas is not excused', async () => {
     await requireRoot();
     expectViolation(await scenario({ role: 'reviewer', change: edit('src/docs/saas/page.ts') }), 'src/docs/saas/page.ts');
+  });
+
+  it('another directory named docs/saas is ordinary code for the developer', async () => {
+    await requireRoot();
+    expectInScope(await scenario({ role: 'developer', change: edit('src/docs/saas/page.ts') }));
   });
 });
 
@@ -986,4 +1070,299 @@ describe('validation: a file whose name git prints quoted is still seen', { conc
       expectViolation(await scenario({ role, change: edit(path) }));
     });
   }
+});
+
+// ===========================================================================
+// P0-6 (written before implementation): RF-043 and RF-046
+// ===========================================================================
+
+describe('P0-6 RF-043: supabase/.temp/** is a protected path', { concurrency: CONCURRENCY }, () => {
+  // supabase/.temp/project-ref is the link file the guard hook reads to decide
+  // whether a supabase CLI call is "provably staging".
+  const LINK = 'supabase/.temp/project-ref';
+  const paths = [LINK, 'supabase/.temp/pooler-url', 'supabase/.temp/cli-latest', 'supabase/.temp/nested/dir/file'];
+
+  for (const role of ROLES) {
+    for (const path of paths) {
+      it(`${role} creating ${path} is a violation`, async () => {
+        await requireRoot();
+        expectViolation(await scenario({ role, change: edit(path) }), path);
+      });
+    }
+
+    it(`${role} rewriting an existing ${LINK} is a violation`, async () => {
+      await requireRoot();
+      const result = await scenario({
+        role,
+        before: (repo) => write(repo, LINK, 'stagingrefstagingref1'),
+        change: (repo) => write(repo, LINK, 'otherrefotherrefother1'),
+      });
+      expectViolation(result, LINK);
+    });
+
+    it(`${role} deleting ${LINK} is a violation`, async () => {
+      await requireRoot();
+      const result = await scenario({
+        role,
+        before: (repo) => write(repo, LINK, 'stagingrefstagingref1'),
+        change: (repo) => remove(repo, LINK),
+      });
+      expectViolation(result, LINK);
+    });
+
+    it(`${role} creating ${LINK} with --allow 'supabase/.temp/**' is in scope`, async () => {
+      await requireRoot();
+      expectInScope(await scenario({ role, change: edit(LINK), allow: ['supabase/.temp/**'] }));
+    });
+
+    it(`${role}: an existing ${LINK} left alone is in scope`, async () => {
+      await requireRoot();
+      expectInScope(await scenario({ role, before: (repo) => write(repo, LINK, 'stagingrefstagingref1') }));
+    });
+  }
+
+  it('--allow with the exact path of the link file permits it', async () => {
+    await requireRoot();
+    expectInScope(await scenario({ role: 'developer', change: edit(LINK), allow: [LINK] }));
+  });
+
+  it('--allow for another protected path does not permit the link file', async () => {
+    await requireRoot();
+    const result = await scenario({ role: 'developer', change: edit(LINK), allow: ['scripts/hooks/**', 'supabase/migrations/**'] });
+    expectViolation(result, LINK);
+  });
+
+  it('the rest of supabase/ is not protected: the developer may add a migration', async () => {
+    await requireRoot();
+    expectInScope(await scenario({ role: 'developer', change: edit('supabase/migrations/20260201000000_next.sql') }));
+  });
+
+  it('a directory that only looks like it is not protected', async () => {
+    await requireRoot();
+    expectInScope(await scenario({ role: 'developer', change: edit('supabase/.temporary/notes.ts') }));
+    expectInScope(await scenario({ role: 'developer', change: edit('src/supabase/.temp/cache.ts') }));
+  });
+
+  // The supabase CLI's own .gitignore usually hides .temp/. A protected file
+  // that git ignores must still be seen (as .claude/settings.local.json is).
+  const ignoreTemp = (repo) => appendFileSync(join(repo, '.gitignore'), 'supabase/.temp/\n');
+  for (const role of ROLES) {
+    it(`${role} creating a git-ignored ${LINK} is a violation`, async () => {
+      await requireRoot();
+      const result = await scenario({ role, before: ignoreTemp, change: (repo) => write(repo, LINK, 'otherrefotherrefother1') });
+      expectViolation(result, LINK);
+    });
+  }
+
+  it('developer rewriting a git-ignored link file is a violation; with --allow it is in scope', async () => {
+    await requireRoot();
+    const before = (repo) => {
+      ignoreTemp(repo);
+      write(repo, LINK, 'stagingrefstagingref1');
+    };
+    const change = (repo) => write(repo, LINK, 'otherrefotherrefother1');
+    expectViolation(await scenario({ role: 'developer', before, change }), LINK);
+    expectInScope(await scenario({ role: 'developer', before, change, allow: ['supabase/.temp/**'] }));
+  });
+});
+
+describe('P0-6 RF-046: __tests__/ under .claude/ and .github/ is not a test path', { concurrency: CONCURRENCY }, () => {
+  const paths = [
+    '.claude/__tests__/helper.mjs',
+    '.claude/hooks/__tests__/run.sh',
+    '.claude/agents/__tests__/extra-agent.md',
+    '.github/__tests__/setup.js',
+    '.github/workflows/__tests__/release.yml',
+  ];
+  for (const path of paths) {
+    it(`test-engineer adding ${path} is a violation (protected, not a test)`, async () => {
+      await requireRoot();
+      expectViolation(await scenario({ role: 'test-engineer', change: edit(path) }), path);
+    });
+
+    it(`developer adding ${path} is a violation`, async () => {
+      await requireRoot();
+      expectViolation(await scenario({ role: 'developer', change: edit(path) }), path);
+    });
+
+    // A test file stays closed to the developer whatever --allow says
+    // (ruling f); a protected path is lifted by --allow for any role. So this
+    // row tells the two apart.
+    it(`developer adding ${path} with --allow for exactly that path is in scope: it is a protected path`, async () => {
+      await requireRoot();
+      expectInScope(await scenario({ role: 'developer', change: edit(path), allow: [path] }));
+    });
+
+    it(`test-engineer adding ${path} with --allow for exactly that path is in scope`, async () => {
+      await requireRoot();
+      expectInScope(await scenario({ role: 'test-engineer', change: edit(path), allow: [path] }));
+    });
+  }
+
+  it('unchanged: *.test.<js or ts extension> files under .claude/ and .github/ stay test files', async () => {
+    await requireRoot();
+    for (const path of ['.claude/hooks/format.test.js', '.github/scripts/release.test.cjs', '.claude/hooks/format.test.mjs', '.github/scripts/release.test.ts']) {
+      expectInScope(await scenario({ role: 'test-engineer', change: edit(path) }));
+      expectViolation(await scenario({ role: 'developer', change: edit(path), allow: [path] }), path);
+    }
+  });
+
+  it('unchanged: __tests__/ elsewhere stays a test path, also under scripts/hooks/', async () => {
+    await requireRoot();
+    for (const path of ['src/__tests__/sync.ts', 'scripts/hooks/__tests__/guard.mjs']) {
+      expectInScope(await scenario({ role: 'test-engineer', change: edit(path) }));
+      expectViolation(await scenario({ role: 'developer', change: edit(path), allow: [path] }), path);
+    }
+  });
+});
+
+describe('P0-6 RF-046: .gitattributes and .git/info/exclude changes are violations', { concurrency: CONCURRENCY }, () => {
+  const EXCLUDE = '.git/info/exclude';
+  const hide = (repo) => {
+    mkdirSync(join(repo, '.git', 'info'), { recursive: true });
+    appendFileSync(join(repo, EXCLUDE), 'src/hidden.ts\n');
+  };
+
+  for (const role of ROLES) {
+    it(`${role} creating .gitattributes is a violation`, async () => {
+      await requireRoot();
+      const result = await scenario({ role, change: (repo) => write(repo, '.gitattributes', '*.test.ts -diff\n') });
+      expectViolation(result, '.gitattributes');
+    });
+
+    it(`${role} changing a committed .gitattributes is a violation`, async () => {
+      await requireRoot();
+      const result = await scenario({
+        role,
+        before: (repo) => {
+          write(repo, '.gitattributes', '* text=auto\n');
+          git(repo, 'add', '.gitattributes');
+          git(repo, 'commit', '-q', '-m', 'Attributes');
+        },
+        change: (repo) => write(repo, '.gitattributes', '* text=auto\n*.sql filter=secret\n'),
+      });
+      expectViolation(result, '.gitattributes');
+    });
+
+    it(`${role} adding a line to ${EXCLUDE} is a violation`, async () => {
+      await requireRoot();
+      const result = await scenario({ role, change: hide });
+      expectViolation(result);
+      assert.match(result.out, /info\/exclude/, `expected the output to name ${EXCLUDE}:\n${result.out}`);
+    });
+  }
+
+  it('developer deleting a committed .gitattributes is a violation', async () => {
+    await requireRoot();
+    const result = await scenario({
+      role: 'developer',
+      before: (repo) => {
+        write(repo, '.gitattributes', '* text=auto\n');
+        git(repo, 'add', '.gitattributes');
+        git(repo, 'commit', '-q', '-m', 'Attributes');
+      },
+      change: (repo) => remove(repo, '.gitattributes'),
+    });
+    expectViolation(result, '.gitattributes');
+  });
+
+  it('developer emptying .git/info/exclude is a violation', async () => {
+    await requireRoot();
+    const result = await scenario({ role: 'developer', before: hide, change: (repo) => writeFileSync(join(repo, EXCLUDE), '') });
+    expectViolation(result);
+    assert.match(result.out, /info\/exclude/);
+  });
+
+  it('developer deleting .git/info/exclude is a violation', async () => {
+    await requireRoot();
+    const result = await scenario({ role: 'developer', before: hide, change: (repo) => rmSync(join(repo, EXCLUDE)) });
+    expectViolation(result);
+    assert.match(result.out, /info\/exclude/);
+  });
+
+  it('hiding a new file through .git/info/exclude does not go unseen', async () => {
+    await requireRoot();
+    // The excluded file itself is ignored from now on; the exclude change is what gives it away.
+    const result = await scenario({
+      role: 'reviewer',
+      change: (repo) => {
+        hide(repo);
+        write(repo, 'src/hidden.ts', 'export const hidden = 1;\n');
+      },
+    });
+    expectViolation(result);
+    assert.match(result.out, /info\/exclude/);
+  });
+
+  it('control: an exclude file and a .gitattributes changed before the snapshot and left alone are in scope', async () => {
+    await requireRoot();
+    const before = (repo) => {
+      hide(repo);
+      write(repo, '.gitattributes', '* text=auto\n');
+    };
+    for (const role of ROLES) expectInScope(await scenario({ role, before }));
+  });
+
+  it('a directory attributes file is seen too', async () => {
+    await requireRoot();
+    const result = await scenario({ role: 'developer', change: (repo) => write(repo, 'src/.gitattributes', '*.ts -diff\n') });
+    expectViolation(result, 'src/.gitattributes');
+  });
+});
+
+describe('P0-6 RF-046: the Stop-gate key file is in the snapshot', { concurrency: CONCURRENCY }, () => {
+  // scripts/hooks/stop-gate.sh keeps the identifier of the last green tree in
+  // <git dir>/drill-stop-gate-green. Writing the current tree's identifier
+  // there makes the Stop hook skip the gate.
+  const KEY_FILE = '.git/drill-stop-gate-green';
+  const setKey = (value) => (repo) => writeFileSync(join(repo, KEY_FILE), value);
+
+  for (const role of ROLES) {
+    it(`${role}: the key file appearing is a violation`, async () => {
+      await requireRoot();
+      const result = await scenario({ role, change: setKey('0123456789abcdef0123456789abcdef01234567\n') });
+      expectViolation(result);
+      assert.match(result.out, /drill-stop-gate-green/, `expected the output to name the key file:\n${result.out}`);
+    });
+
+    it(`${role}: the key file changing is a violation`, async () => {
+      await requireRoot();
+      const result = await scenario({
+        role,
+        before: setKey('0123456789abcdef0123456789abcdef01234567\n'),
+        change: setKey('fedcba9876543210fedcba9876543210fedcba98\n'),
+      });
+      expectViolation(result);
+      assert.match(result.out, /drill-stop-gate-green/);
+    });
+
+    it(`${role}: control - a key file that is present and unchanged is in scope`, async () => {
+      await requireRoot();
+      expectInScope(await scenario({ role, before: setKey('0123456789abcdef0123456789abcdef01234567\n') }));
+    });
+  }
+
+  it('the key file being deleted is a violation', async () => {
+    await requireRoot();
+    const result = await scenario({
+      role: 'developer',
+      before: setKey('0123456789abcdef0123456789abcdef01234567\n'),
+      change: (repo) => rmSync(join(repo, KEY_FILE)),
+    });
+    expectViolation(result);
+    assert.match(result.out, /drill-stop-gate-green/);
+  });
+
+  it('a key-file change next to a permitted change is still a violation', async () => {
+    await requireRoot();
+    const result = await scenario({
+      role: 'developer',
+      change: (repo) => {
+        edit('src/app.ts')(repo);
+        setKey('0123456789abcdef0123456789abcdef01234567\n')(repo);
+      },
+    });
+    expectViolation(result);
+    assert.match(result.out, /drill-stop-gate-green/);
+  });
 });

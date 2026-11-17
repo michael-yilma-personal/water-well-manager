@@ -16,7 +16,7 @@
 import { after, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -243,4 +243,189 @@ describe('validation: a branch that merely resembles main is not exempt', () => 
       assert.ok(blocks(result), `expected the stop to be blocked: ${describeResult(result)}`);
     });
   }
+});
+
+// ===========================================================================
+// P0-6 RF-041 (written before implementation): the last-green cache
+//
+// "The Stop-gate cache key includes the path of every untracked file." The
+// hook skips the gate when the tree is the one the gate last passed on. A
+// file renamed inside an untracked directory changes neither `git status`
+// (which prints only the directory) nor any content hash, so the key must
+// carry the paths themselves.
+//
+// The gate stub appends a line to a log OUTSIDE the repository each time it
+// runs, so counting runs does not itself change the tree.
+// ===========================================================================
+
+/** A repository on a feature branch whose green gate stub counts its runs. `files` are left untracked. */
+function makeCountingRepo(files = {}) {
+  const repo = mkdtempSync(join(tmpdir(), 'stop-gate-cache-test-'));
+  const logDir = mkdtempSync(join(tmpdir(), 'stop-gate-cache-log-'));
+  TEMP_DIRS.push(repo, logDir);
+  const log = join(logDir, 'gate-runs.log');
+  git(repo, 'init', '-q', '-b', 'main');
+  mkdirSync(join(repo, 'scripts'), { recursive: true });
+  const gate = join(repo, 'scripts', 'gate.sh');
+  writeFileSync(gate, `#!/usr/bin/env bash\necho run >> '${log}'\nexit 0\n`);
+  chmodSync(gate, 0o755);
+  // Added for RF-064 (P0-11): the link directory is git-ignored, as in the real repository.
+  writeFileSync(join(repo, '.gitignore'), 'supabase/.temp/\n');
+  git(repo, 'add', '-A');
+  git(repo, 'commit', '-q', '-m', 'Fixture');
+  git(repo, 'checkout', '-q', '-b', 'feature/cache');
+  for (const [path, content] of Object.entries(files)) {
+    mkdirSync(dirname(join(repo, path)), { recursive: true });
+    writeFileSync(join(repo, path), content);
+  }
+  const runs = () => (existsSync(log) ? readFileSync(log, 'utf8').split('\n').filter(Boolean).length : 0);
+  return { repo, runs };
+}
+
+/** Run the hook and require that it let the stop through (the stub gate is green). */
+function stopOnce(repo) {
+  const result = runHook(repo, STOP);
+  assert.equal(result.status, 0, describeResult(result));
+  assert.ok(!blocks(result), `expected no block: ${describeResult(result)}`);
+}
+
+describe('P0-6 RF-041: the last-green cache sees the path of every untracked file', () => {
+  it('control: an unchanged tree does not run the gate a second time', () => {
+    const { repo, runs } = makeCountingRepo({ 'scratch/a.txt': 'same content\n' });
+    stopOnce(repo);
+    assert.equal(runs(), 1, 'the gate did not run on the first stop');
+    stopOnce(repo);
+    assert.equal(runs(), 1, 'the gate ran again although nothing changed');
+  });
+
+  const renames = [
+    ['a file renamed inside an untracked directory', { 'scratch/a.txt': 'same content\n' }, 'scratch/a.txt', 'scratch/b.txt'],
+    ['a file renamed so that it becomes a test file', { 'scratch/notes.txt': 'same content\n' }, 'scratch/notes.txt', 'scratch/notes.test.mjs'],
+    ['a file moved into a subdirectory of the same untracked directory', { 'scratch/a.txt': 'same content\n' }, 'scratch/a.txt', 'scratch/deeper/a.txt'],
+    ['a file renamed two levels down', { 'scratch/x/y/a.txt': 'same content\n' }, 'scratch/x/y/a.txt', 'scratch/x/y/b.txt'],
+    ['one of two files renamed, keeping the order of the two', { 'scratch/a.txt': 'first\n', 'scratch/m.txt': 'second\n' }, 'scratch/m.txt', 'scratch/z.txt'],
+    ['an empty file renamed', { 'scratch/a.txt': '' }, 'scratch/a.txt', 'scratch/b.txt'],
+    ['a file whose name holds a space renamed', { 'scratch/my notes.txt': 'same content\n' }, 'scratch/my notes.txt', 'scratch/my other notes.txt'],
+  ];
+  for (const [why, files, from, to] of renames) {
+    it(`re-runs the gate: ${why} (content unchanged)`, () => {
+      const { repo, runs } = makeCountingRepo(files);
+      stopOnce(repo);
+      stopOnce(repo);
+      assert.equal(runs(), 1, 'precondition: the green result was not cached');
+      mkdirSync(dirname(join(repo, to)), { recursive: true });
+      renameSync(join(repo, from), join(repo, to));
+      stopOnce(repo);
+      assert.equal(runs(), 2, `the gate was skipped after ${from} became ${to}`);
+    });
+  }
+
+  it('after the rename the new state is cached in turn', () => {
+    const { repo, runs } = makeCountingRepo({ 'scratch/a.txt': 'same content\n' });
+    stopOnce(repo);
+    renameSync(join(repo, 'scratch/a.txt'), join(repo, 'scratch/b.txt'));
+    stopOnce(repo);
+    assert.equal(runs(), 2, 'the gate was skipped after the rename');
+    stopOnce(repo);
+    assert.equal(runs(), 2, 'the gate ran again although nothing changed after the rename');
+  });
+});
+
+// ===========================================================================
+// P0-11 RF-064: the last-green cache sees the git-ignored link file
+//
+// "The 'unchanged since the last green run' key includes the content of
+// supabase/.temp/project-ref (or the fact that it is absent). Changing only
+// that file re-runs the gate." The file is git-ignored, so neither
+// `git status` nor the list of untracked files shows it. The refs are invented.
+// ===========================================================================
+
+describe('P0-11 RF-064: changing only supabase/.temp/project-ref re-runs the gate', () => {
+  const LINK = 'supabase/.temp/project-ref';
+  const REF_A = 'stagingrefstagingref1';
+  const REF_B = 'prodrefprodrefprodref1';
+
+  /** A counting repository after two stops, the second of which was skipped. `link` is the link file's content, or null for none. */
+  function cachedRepo(link) {
+    const made = makeCountingRepo(link === null ? {} : { [LINK]: link });
+    stopOnce(made.repo);
+    stopOnce(made.repo);
+    assert.equal(made.runs(), 1, 'precondition: the green result was not cached');
+    return made;
+  }
+
+  it('the fixture ignores the link file: git does not list it as untracked', () => {
+    const { repo } = makeCountingRepo({ [LINK]: REF_A });
+    const status = spawnSync('git', ['status', '--porcelain', '--untracked-files=all'], { cwd: repo, env: GIT_ENV, encoding: 'utf8' });
+    assert.equal(status.status, 0, status.stderr);
+    assert.equal(status.stdout, '', 'the link file shows up in git status, so this would not test RF-064');
+  });
+
+  it('control: an unchanged link does not run the gate again', () => {
+    const { repo, runs } = cachedRepo(REF_A);
+    stopOnce(repo);
+    assert.equal(runs(), 1, 'the gate ran again although the link did not change');
+  });
+
+  it('control: with no link file at all, nothing changing does not run the gate again', () => {
+    const { repo, runs } = cachedRepo(null);
+    stopOnce(repo);
+    assert.equal(runs(), 1, 'the gate ran again although nothing changed');
+  });
+
+  it('control: the link file rewritten with the same content does not run the gate again', () => {
+    const { repo, runs } = cachedRepo(REF_A);
+    writeFileSync(join(repo, LINK), REF_A);
+    stopOnce(repo);
+    assert.equal(runs(), 1, 'the key depends on more than the content of the link file');
+  });
+
+  it('re-runs the gate when the link file is created', () => {
+    const { repo, runs } = cachedRepo(null);
+    mkdirSync(dirname(join(repo, LINK)), { recursive: true });
+    writeFileSync(join(repo, LINK), REF_A);
+    stopOnce(repo);
+    assert.equal(runs(), 2, 'the gate was skipped after the link file appeared');
+  });
+
+  it('re-runs the gate when the content of the link file changes', () => {
+    const { repo, runs } = cachedRepo(REF_A);
+    writeFileSync(join(repo, LINK), REF_B);
+    stopOnce(repo);
+    assert.equal(runs(), 2, 'the gate was skipped after the link changed to another project');
+  });
+
+  it('re-runs the gate when the link file is deleted', () => {
+    const { repo, runs } = cachedRepo(REF_A);
+    rmSync(join(repo, LINK));
+    stopOnce(repo);
+    assert.equal(runs(), 2, 'the gate was skipped after the link file was removed');
+  });
+
+  it('re-runs the gate when an empty link file takes the place of no link file', () => {
+    const { repo, runs } = cachedRepo(null);
+    mkdirSync(dirname(join(repo, LINK)), { recursive: true });
+    writeFileSync(join(repo, LINK), '');
+    stopOnce(repo);
+    assert.equal(runs(), 2, 'an empty link file and an absent one gave the same key');
+  });
+
+  it('re-runs the gate when a second line is added to the link file', () => {
+    const { repo, runs } = cachedRepo(`${REF_A}\n`);
+    writeFileSync(join(repo, LINK), `${REF_A}\n${REF_B}\n`);
+    stopOnce(repo);
+    assert.equal(runs(), 2, 'the gate was skipped although the link file gained a line');
+  });
+
+  it('after the change the new state is cached in turn, and changing back re-runs it', () => {
+    const { repo, runs } = cachedRepo(REF_A);
+    writeFileSync(join(repo, LINK), REF_B);
+    stopOnce(repo);
+    assert.equal(runs(), 2, 'the gate was skipped after the link changed');
+    stopOnce(repo);
+    assert.equal(runs(), 2, 'the gate ran again although the link did not change a second time');
+    writeFileSync(join(repo, LINK), REF_A);
+    stopOnce(repo);
+    assert.equal(runs(), 3, 'the gate was skipped after the link changed back');
+  });
 });

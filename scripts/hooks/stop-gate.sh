@@ -14,7 +14,12 @@
 # gate last passed on, so a turn that changed nothing costs a fraction of a
 # second instead of a full gate run. The state is identified by the HEAD
 # commit, `git status --porcelain=v1 -z`, a hash of `git diff --binary HEAD`
-# and the content hashes of the untracked files that are not ignored. The
+# and the path and content hash of every untracked file that is not ignored
+# (the path too, because a file renamed inside an untracked directory changes
+# neither `git status` nor any content hash), and the content hash of the
+# Supabase link file supabase/.temp/project-ref, or the fact that it is absent
+# (RF-064: the file is git-ignored, so nothing above sees it, and the gate
+# "working copy is not linked to production" depends on it). The
 # identifier of the last green state is kept in the git directory
 # (drill-stop-gate-green), never in the working tree. Only a green result is
 # remembered: a red gate runs again every time. If the state cannot be
@@ -25,7 +30,7 @@
 # runs the gate), it allows the second stop by design, and it is only as good
 # as scripts/gate.sh. Input it cannot read is treated as a first attempt, so a
 # red gate still blocks. The skip does not see git-ignored files (node_modules,
-# .env files) or anything outside the repository (the Node version, global
+# .env files; the Supabase link file is the one exception) or anything outside the repository (the Node version, global
 # tools): a change there alone does not trigger a new run. Deleting
 # drill-stop-gate-green in the git directory forces one.
 
@@ -48,14 +53,17 @@ case "$BRANCH" in
 esac
 WHERE="${BRANCH:-a detached HEAD}"
 
+LINK_FILE="supabase/.temp/project-ref"
+
 # Print an identifier of the current tree state, or fail when there is none.
 tree_key() {
-  local head diff status untracked
+  local head diff status untracked link
   head="$(git rev-parse --verify -q HEAD 2>/dev/null)" || return 1
   diff="$(git diff --binary HEAD 2>/dev/null | git hash-object --stdin; exit "${PIPESTATUS[0]}")" || return 1
   status="$(git status --porcelain=v1 -z 2>/dev/null | git hash-object --stdin; exit "${PIPESTATUS[0]}")" || return 1
   untracked="$(
     git ls-files -o --exclude-standard -z 2>/dev/null | while IFS= read -r -d '' f; do
+      printf 'path %s\0\n' "$f"
       if [ -L "$f" ]; then
         printf 'link %s\n' "$(readlink "$f")"
       elif [ -f "$f" ]; then
@@ -65,7 +73,13 @@ tree_key() {
     done | git hash-object --stdin
     exit "${PIPESTATUS[0]}"
   )" || return 1
-  printf 'quick-gate-v1\n%s\n%s\n%s\n%s\n' "$head" "$diff" "$status" "$untracked" | git hash-object --stdin
+  # RF-064: the link file is git-ignored, so it is hashed on its own.
+  if [ -e "$LINK_FILE" ] || [ -L "$LINK_FILE" ]; then
+    link="present $(git hash-object --no-filters -- "$LINK_FILE" 2>/dev/null || printf 'unreadable')"
+  else
+    link="absent"
+  fi
+  printf 'quick-gate-v3\n%s\n%s\n%s\n%s\n%s\n' "$head" "$diff" "$status" "$untracked" "$link" | git hash-object --stdin
 }
 
 GREEN_FILE=""
@@ -78,7 +92,9 @@ if [ -n "$KEY" ] && [ -f "$GREEN_FILE" ] && [ "$(cat "$GREEN_FILE" 2>/dev/null)"
   exit 0   # nothing changed since the gate last passed
 fi
 
-if OUT="$(scripts/gate.sh quick 2>&1)"; then
+# GATE_UNIT_TEST_CMD replaces the unit tests in the gate's own tests; it must
+# never do so here.
+if OUT="$(env -u GATE_UNIT_TEST_CMD scripts/gate.sh quick 2>&1)"; then
   if [ -n "$KEY" ] && [ "$(tree_key 2>/dev/null)" = "$KEY" ]; then
     printf '%s\n' "$KEY" > "$GREEN_FILE" 2>/dev/null || true
   fi

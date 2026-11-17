@@ -18,10 +18,36 @@
 #   ask    things the owner approves each time: anything that names the
 #          production Supabase project or is not provably local or staging
 #          (supabase CLI, psql and the other Postgres clients, curl / wget /
-#          HTTPie to Supabase), other changes through the GitHub API with
-#          curl or wget, the management scripts, the e2e suites, test:*
-#          package scripts, a shell or Python fed its program through a pipe,
-#          and a command line too long or too deeply nested to analyse.
+#          HTTPie to Supabase). A supabase CLI call counts as linked to
+#          staging only when it runs in this checkout, under the link of the
+#          project root: not in a worktree, a nested clone, a directory with
+#          its own supabase/ folder, or outside the project. Even on
+#          staging: `supabase migration down` and `db reset` without --local,
+#          deleting or pausing the project (CLI or management API), and the
+#          other deleting CLI calls; `--help` / `-h` excuse a call, --version
+#          does not. Also: curl -K / --config with a Supabase address, other
+#          changes through the GitHub API with curl or wget, a management
+#          script unless SUPABASE_PROJECT_REF=<staging ref> is written in
+#          front of it and --production is not given (a dynamic word after
+#          `env` asks), a command line that sets GATE_UNIT_TEST_CMD, a shell
+#          or Python fed its program through a pipe or a redirection, Python
+#          given a script held in a variable, and a command line too long or
+#          too deeply nested to analyse. The e2e suites (except
+#          e2e/target_selftest.py) and test:* package scripts ask while
+#          STAGING_REF is empty; once it is set they are allowed only for
+#          this project's own e2e/ files run from this checkout, and test:*
+#          only from the project root, because only the suites of this
+#          working tree are known to refuse production. Deleting staging
+#          test data (delete-test-data.sh, REST deletes, SQL) is allowed, and
+#          SQL sent to staging is not inspected. Also (P0-10): `supabase
+#          link` / `unlink` always; a linked-to-staging supabase call, an e2e
+#          run or a test:* script that comes after a tree-changing git
+#          command on the same line (checkout, switch, pull, merge, rebase,
+#          reset, stash ...; not `checkout -b <new>` / `switch -c <new>`);
+#          the same three when the directory they run in is not known (no
+#          absolute hook cwd, a cd to a missing directory, sudo -D,
+#          find -execdir, npx --prefix); Python given a relative script in an
+#          unknown directory; a test:* script with npm_config_* set.
 #   exit 2 fail closed: no interpreter, input that is not hook JSON, missing
 #          or inconsistent configuration (no PROD_REF, STAGING_REF equal to
 #          PROD_REF), or an analyser that crashed. Claude Code blocks the
