@@ -8,17 +8,39 @@
 # has row level security enabled. The catalog check is the authority on RLS;
 # the static check in the gate is only a fast hint.
 #
-# The runner has internet access, but nothing here holds credentials for any
-# Supabase project: no secrets are passed to these jobs, the token GitHub
-# issues is read-only (see `permissions`), and the checkout steps do not
-# leave it in the git configuration (`persist-credentials: false`). The only
-# database is the throwaway one the `database` job starts on 127.0.0.1.
-# Tests that need a running API (RLS isolation, Edge Function authorization,
-# offline sync) join this workflow in SaaS Phase 0/1; see
-# docs/saas/WORKFLOW.md.
+# The `e2e-staging` job runs three suites that need a running API against the
+# STAGING project: RLS isolation (e2e/rls_e2e.py), the data logger
+# (e2e/data_logger_e2e.py) and offline sync (e2e/offline_sync_e2e.py). It is
+# the only job given all its secrets, and only three: the staging project's URL, its
+# publishable key (the key the app itself ships with) and the password of the
+# staging test accounts. They reach the suite steps only, not the install
+# steps. The suites read them from the environment (no .env.e2e is written)
+# and refuse the production project themselves (e2e/_target.py); the browser
+# suites start their own app server against the same project.
 #
-# Actions are pinned to commit SHAs and the Supabase CLI to a version, so a
-# moved tag cannot change what runs here. Update them deliberately.
+# GitHub does not give secrets to a pull request from a fork (or from
+# Dependabot), and a secret cannot be tested in a job-level `if`. So a small
+# job, `e2e-secrets-probe`, runs first: it checks nothing out, is given the URL
+# secret alone, and reports in its output `available` ('true' or 'false')
+# whether that secret is set. Without it, it prints that the staging suites
+# were SKIPPED (log line, warning annotation, step summary). `e2e-staging`
+# needs that job and has a job-level `if` on the output, so without secrets
+# GitHub shows it as skipped, not as a green check for tests that never ran.
+# A pull request from a branch of this repository, and a push to main, have
+# the secrets, so the suites run and a failing suite fails the job.
+#
+# Apart from those two jobs nothing here holds credentials for any Supabase
+# project: no secrets are passed to `gates` or `database`, the token GitHub
+# issues is read-only (see `permissions`), and the checkout steps do not
+# leave it in the git configuration (`persist-credentials: false`). No job
+# has credentials for production, and none has a key that bypasses row level
+# security. The only other database is the throwaway one the `database` job
+# starts on 127.0.0.1. Edge Function authorization tests join this workflow
+# in SaaS Phase 1; see docs/saas/WORKFLOW.md.
+#
+# Actions are pinned to commit SHAs, the Supabase CLI to a version and the
+# Python Playwright package to a minor version, so a moved tag cannot change
+# what runs here. Update them deliberately.
 name: CI
 
 on:
@@ -114,3 +136,74 @@ jobs:
           echo "Row level security is enabled on every table in public."
       - name: Lint the schema
         run: supabase db lint --local --fail-on error
+
+  e2e-secrets-probe:
+    name: Are the secrets for the suites available?
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      available: ${{ steps.probe.outputs.available }}
+    steps:
+      - name: Check for the staging secrets (without them the suites are SKIPPED)
+        id: probe
+        # A secret cannot be used in a job-level `if`, so it is tested here
+        # through an environment variable. Only whether it is empty is used.
+        env:
+          DRILL_E2E_SUPABASE_URL: ${{ secrets.DRILL_E2E_SUPABASE_URL }}
+        run: |
+          if [ -n "${DRILL_E2E_SUPABASE_URL}" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+            echo "The staging secrets are available: the e2e suites run in the e2e-staging job."
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            message="e2e suites SKIPPED, NOT RUN: the staging secrets are not available to this run (a pull request from a fork or from Dependabot). The e2e-staging job is skipped and tested nothing."
+            echo "::warning title=e2e suites skipped::${message}"
+            echo "${message}"
+            echo "### ${message}" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  e2e-staging:
+    name: e2e suites against the staging project (RLS, data logger, offline sync)
+    needs: e2e-secrets-probe
+    if: needs.e2e-secrets-probe.outputs.available == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install the app (the browser suites start it with vite)
+        run: npm ci
+      - name: Install Python Playwright and Chromium
+        # The runner's own python3. Its pip may refuse to install outside a
+        # virtual environment (PEP 668); on a throwaway runner that is safe to
+        # override. The package is pinned to the minor version the suites are
+        # run with locally.
+        env:
+          PIP_BREAK_SYSTEM_PACKAGES: "1"
+        run: |
+          set -euo pipefail
+          python3 -m pip install "playwright==1.60.*"
+          python3 -m playwright install --with-deps chromium
+      - name: RLS isolation (e2e/rls_e2e.py)
+        env:
+          DRILL_E2E_SUPABASE_URL: ${{ secrets.DRILL_E2E_SUPABASE_URL }}
+          DRILL_E2E_PUBLISHABLE_KEY: ${{ secrets.DRILL_E2E_PUBLISHABLE_KEY }}
+          DRILL_E2E_PASSWORD: ${{ secrets.DRILL_E2E_PASSWORD }}
+        run: python3 e2e/rls_e2e.py
+      - name: Data logger (e2e/data_logger_e2e.py)
+        env:
+          DRILL_E2E_SUPABASE_URL: ${{ secrets.DRILL_E2E_SUPABASE_URL }}
+          DRILL_E2E_PUBLISHABLE_KEY: ${{ secrets.DRILL_E2E_PUBLISHABLE_KEY }}
+          DRILL_E2E_PASSWORD: ${{ secrets.DRILL_E2E_PASSWORD }}
+        run: python3 e2e/data_logger_e2e.py
+      - name: Offline sync (e2e/offline_sync_e2e.py)
+        env:
+          DRILL_E2E_SUPABASE_URL: ${{ secrets.DRILL_E2E_SUPABASE_URL }}
+          DRILL_E2E_PUBLISHABLE_KEY: ${{ secrets.DRILL_E2E_PUBLISHABLE_KEY }}
+          DRILL_E2E_PASSWORD: ${{ secrets.DRILL_E2E_PASSWORD }}
+        run: python3 e2e/offline_sync_e2e.py
