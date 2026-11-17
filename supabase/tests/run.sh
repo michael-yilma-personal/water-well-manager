@@ -182,24 +182,134 @@ else
   pass "$name"
 fi
 
-# 4. The test files, in order. The rollback rehearsal is last and has
-#    preconditions of its own.
+# 4. Transaction control in a migration or rollback file. Three things below
+#    run those files inside a transaction they roll back; a file that commits
+#    on its own would make the rehearsal permanent, and decision 24 forbids
+#    it anyway. The detector is tried first, on every spelling, because a
+#    detector that misses one is how such a file would get through.
+SPLITTER="$HERE/lib/sql_statements.py"
+have_python=1
+command -v python3 >/dev/null 2>&1 || have_python=0
+
+has_txn_control() { python3 "$SPLITTER" txn-control "$1" >/dev/null 2>&1; [ "$?" -eq 1 ]; }
+
+txn_case() {   # txn_case yes|no "label" "sql"
+  local expect="$1" label="$2" got="no"
+  printf '%s\n' "$3" >"$TMP/txn_case.sql"
+  if [ "$have_python" -eq 0 ]; then
+    fail "[c31] transaction-control detector: $label :: python3 is not on PATH"
+    return
+  fi
+  python3 "$SPLITTER" txn-control "$TMP/txn_case.sql" >/dev/null 2>"$TMP/txn_case.err"
+  case "$?" in
+    0) got="no" ;;
+    1) got="yes" ;;
+    *) fail "[c31] transaction-control detector: $label :: the detector itself failed: $(head -n 1 "$TMP/txn_case.err")"; return ;;
+  esac
+  if [ "$got" = "$expect" ]; then
+    pass "[c31] transaction-control detector: $label"
+  else
+    fail "[c31] transaction-control detector: $label :: expected $expect, got $got"
+  fi
+}
+
+txn_case yes "reports begin;"                         'create table a (i int); begin; select 1;'
+txn_case yes "reports BEGIN TRANSACTION;"             'BEGIN TRANSACTION;'
+txn_case yes "reports begin work;"                    'begin work;'
+txn_case yes "reports start transaction;"             'start   transaction isolation level serializable;'
+txn_case yes "reports commit;"                        'select 1;
+commit;'
+txn_case yes "reports commit work;"                   'select 1; commit work;'
+txn_case yes "reports commit transaction;"            'COMMIT TRANSACTION;'
+txn_case yes "reports end;"                           'select 1;
+end;'
+txn_case yes "reports END WORK;"                      'END WORK;'
+txn_case yes "reports abort;"                         'abort;'
+txn_case yes "reports rollback;"                      '  Rollback ;'
+txn_case yes "reports rollback work;"                 'rollback work;'
+txn_case yes "reports commit after a comment"         '-- done
+/* really */ commit;'
+txn_case yes "reports commit as the last statement with no semicolon" 'select 1; commit'
+txn_case yes "reports end; after a function body that has its own end;" 'do $$ begin perform 1; end; $$;
+end;'
+txn_case no  "ignores begin and end; inside a DO block" 'do $$
+begin
+  perform 1;
+end;
+$$;'
+txn_case no  "ignores begin and end; inside a tagged function body" 'create function f() returns void language plpgsql as $fn$
+begin
+  begin
+    perform 1;
+  end;
+  commit;
+end;
+$fn$;'
+txn_case no  "ignores commit; in a line comment"      'select 1; -- commit;
+select 2;'
+txn_case no  "ignores commit; in a block comment"     'select 1; /* commit; */ select 2;'
+txn_case no  "ignores commit; in a string"            "select 'x; commit; y';"
+txn_case no  "ignores case ... end;"                  'select case when true then 1 end;'
+txn_case no  "ignores rollback to savepoint"          'savepoint s; rollback to savepoint s;'
+txn_case no  "ignores a column named end"             'select "end", "commit" from t;'
+
+# Whether the four files may be run inside a transaction here.
+ready=1
+for need in "$MIG_CORE" "$MIG_DRILL" "$RB_DRILL" "$RB_CORE"; do
+  what="[c24] supabase/${need#"$SUPA"/} contains no transaction control"
+  if [ ! -f "$need" ]; then
+    fail "$what :: file not found"
+    ready=0
+  elif [ "$have_python" -eq 0 ]; then
+    fail "$what :: not checked, python3 is not on PATH"
+    ready=0
+  elif has_txn_control "$need"; then
+    fail "$what :: $(python3 "$SPLITTER" txn-control "$need" | head -n 3 | tr '\n' ';')"
+    ready=0
+  elif ! python3 "$SPLITTER" txn-control "$need" >/dev/null 2>&1; then
+    fail "$what :: the detector itself failed"
+    ready=0
+  else
+    pass "$what"
+  fi
+done
+
+# Decision 31: the Drill rollback refuses when two organizations hold records.
+rollback_refuses() {
+  local out="$TMP/guard.out" rc
+  psql -X -q -At -v ON_ERROR_STOP=1 -v rollback_drill="$RB_DRILL" \
+    -f "$HERE/guards/rollback_refuses.sql" >"$out" 2>"$TMP/guard.err"
+  rc=$?
+  if ! grep -q '^FIXTURE-READY$' "$out"; then
+    fail "[c31] the Drill rollback refuses when two organizations hold records :: not checked, the fixture did not load: $(head -n 1 "$TMP/guard.err")"
+  elif grep -q '^REACHED-END$' "$out" || [ "$rc" -eq 0 ]; then
+    fail "[c31] the Drill rollback refuses when two organizations hold records :: the script ran to its end without raising"
+  else
+    pass "[c31] the Drill rollback refuses when two organizations hold records"
+  fi
+  # It ran inside a transaction that psql abandoned, so nothing may have changed.
+  if [ "$(psql -X -q -At -c "select (to_regclass('public.organizations') is not null and exists (select 1 from pg_attribute where attrelid = 'public.boreholes'::regclass and attname = 'org_id' and not attisdropped) and not exists (select 1 from public.organizations where name = 'Second company'))::int" 2>/dev/null)" = "1" ]; then
+    pass "[c31] ... and the database is as it was"
+  else
+    fail "[c31] ... and the database is as it was :: tenancy objects are missing or the test's rows were left behind"
+  fi
+}
+
+# 5. The test files, in order. The last two run migration files inside a
+#    transaction and so wait on the check above.
 for f in "$HERE"/sql/[0-9]*.sql; do
   case "$(basename "$f")" in
+    80_reapply_in_transaction.sql)
+      if [ "$ready" -eq 1 ]; then run_file "$f"; else fail "[c31] second application of the Drill migration not tried :: see the transaction-control checks above"; fi
+      ;;
     90_rollback_in_transaction.sql)
-      ready=1
-      for need in "$MIG_CORE" "$MIG_DRILL" "$RB_DRILL" "$RB_CORE"; do
-        if [ ! -f "$need" ]; then
-          fail "[c14] rollback rehearsal not run :: supabase/${need#"$SUPA"/} is missing"
-          ready=0
-        elif grep -E -i -q '^[[:space:]]*(begin|commit|rollback|start[[:space:]]+transaction)[[:space:]]*;' "$need"; then
-          # The rehearsal wraps the scripts in a transaction it rolls back. A
-          # script that commits on its own would make the rehearsal permanent.
-          fail "[c14] rollback rehearsal not run :: supabase/${need#"$SUPA"/} contains transaction control (BEGIN/COMMIT/ROLLBACK)"
-          ready=0
-        fi
-      done
-      [ "$ready" -eq 1 ] && run_file "$f"
+      if [ "$ready" -eq 1 ]; then
+        rollback_refuses
+        run_file "$f"
+      else
+        fail "[c31] rollback refusal not tried :: see the transaction-control checks above"
+        fail "[c14] rollback rehearsal not run :: see the transaction-control checks above"
+      fi
       ;;
     *) run_file "$f" ;;
   esac

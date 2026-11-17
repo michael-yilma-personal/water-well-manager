@@ -24,6 +24,15 @@ select t.ok('[c14] precondition: tenancy is applied before the rehearsal',
   $$ select to_regclass('public.organizations') is not null
         and exists (select 1 from pg_attribute where attrelid = 'public.boreholes'::regclass and attname = 'org_id' and not attisdropped) $$);
 
+-- Decision 31: the Drill rollback refuses only when MORE than one organization
+-- holds record rows. A second organization with a member and no records does
+-- not stop it; everything below must hold with one in place. (The refusal
+-- itself is tried by run.sh, guards/rollback_refuses.sql.)
+insert into public.organizations (id, name) values (t.uid('org_empty'), 'No records');
+insert into auth.users (id, email) values (t.uid('rb_member'), 'rb_member@db-test.invalid');
+delete from public.memberships where user_id = t.uid('rb_member');
+insert into public.memberships (org_id, user_id, role) values (t.uid('org_empty'), t.uid('rb_member'), 'Driller');
+
 \i :rollback_drill
 \i :rollback_core
 

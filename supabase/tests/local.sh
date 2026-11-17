@@ -33,6 +33,13 @@
 #             migrations added is gone and the data is intact.
 #   core      stub + saas_core alone, applied twice (criterion 4), with nothing
 #             of Drill's in the database (section A, criterion 2's default).
+#   statement by statement (hosted)
+#             the Drill migration applied one statement per transaction on
+#             legacy data, with an installed build's insert tried after each
+#             statement (decision 29).
+#   rollback guard (hosted)
+#             the Drill rollback against two organizations that both hold
+#             records: it must raise and change nothing (decision 31).
 #
 # Output and exit status are as for run.sh: one line per check, a total,
 # non-zero when anything failed.
@@ -53,7 +60,7 @@ MIG_DRILL="$MIGRATIONS/20261116010000_drill_tenancy.sql"
 RB_CORE="$SUPA/rollback/20261116000000_saas_core.sql"
 RB_DRILL="$SUPA/rollback/20261116010000_drill_tenancy.sql"
 
-for tool in initdb pg_ctl postgres psql; do
+for tool in initdb pg_ctl postgres psql python3; do
   command -v "$tool" >/dev/null 2>&1 || { echo "local.sh: $tool is not on PATH (brew install postgresql@17)." >&2; exit 2; }
 done
 
@@ -320,6 +327,126 @@ for WORLD in bare hosted; do
   phase_fresh "$WORLD"
   phase_upgrade "$WORLD"
 done
+
+# --- statement by statement: decision 29 ---------------------------------------
+#
+# local.sh applies a migration the way `psql -1` does, all or nothing. If the
+# tool that applies it to a real project ever does not, clients keep writing
+# while the Drill migration is half done. This phase applies it one statement
+# per transaction on a database holding legacy data and, after every
+# statement, tries what an installed build does (upgrade/window_probe.sql).
+
+phase_statement_by_statement() {
+  local db="stepwise" tbl n bad rc what f
+  PHASE="hosted, statement by statement"
+  new_db "$db"
+  load_stub "$db" hosted || fail "[harness] the Supabase stand-in loads :: $(first_error)"
+  while IFS= read -r f; do
+    apply "$db" "$f" || fail "[harness] $(basename "$f") applies :: $(first_error)"
+  done < <(pre_tenancy_migrations)
+  apply "$db" "$HERE/upgrade/seed_legacy.sql" || fail "[harness] the legacy data loads :: $(first_error)"
+
+  if [ ! -f "$MIG_CORE" ] || [ ! -f "$MIG_DRILL" ] || ! command -v python3 >/dev/null 2>&1; then
+    for what in "[c29] drill_tenancy applies one statement at a time" \
+                "[c29] the states in between were looked at" \
+                "[c29] boreholes: an installed build's insert (no org_id) succeeds after every statement, once the column exists" \
+                "[c29] pipe_records: an installed build's insert (no org_id) succeeds after every statement, once the column exists"; do
+      fail "$what :: not checked, a migration file or python3 is missing"
+    done
+    return
+  fi
+  apply "$db" "$MIG_CORE" || fail "[harness] saas_core applies :: $(first_error)"
+  psql -X -q -v ON_ERROR_STOP=1 -d "$db" >/dev/null 2>&1 <<'SQL'
+create schema t_probe;
+create table t_probe.results (stmt text, tbl text, state text, msg text);
+SQL
+  python3 "$HERE/lib/sql_statements.py" probe-script "$MIG_DRILL" "$HERE/upgrade/window_probe.sql" >"$WORK/stepwise.sql"
+  psql -X -q -v ON_ERROR_STOP=1 -d "$db" -f "$WORK/stepwise.sql" >/dev/null 2>"$WORK/apply.err"
+  rc=$?
+  if [ "$rc" -eq 0 ]; then
+    pass "[c29] drill_tenancy applies one statement at a time"
+  else
+    fail "[c29] drill_tenancy applies one statement at a time :: $(first_error)"
+  fi
+
+  n="$(psql -X -q -At -d "$db" -c "select count(distinct stmt) from t_probe.results where tbl = 'boreholes'" 2>/dev/null)"
+  if [ "${n:-0}" -ge 3 ]; then
+    pass "[c29] the states in between were looked at (${n} of them from the moment boreholes.org_id exists)"
+  else
+    fail "[c29] the states in between were looked at :: only ${n:-0} probe(s) ran"
+  fi
+
+  for tbl in boreholes pipe_records; do
+    what="[c29] $tbl: an installed build's insert (no org_id) succeeds after every statement, once the column exists"
+    bad="$(psql -X -q -At -d "$db" -c "select count(*) || ' state(s) refuse it: ' || string_agg('after statement ' || stmt || ' -> ' || state || ' ' || left(coalesce(msg, ''), 70), '; ' order by stmt) from (select * from t_probe.results where tbl = '$tbl' and state <> '00000' order by stmt limit 40) x having count(*) > 0" 2>/dev/null)"
+    if [ "${n:-0}" -lt 3 ]; then
+      fail "$what :: not checked, the probe did not run"
+    elif [ -n "$bad" ]; then
+      fail "$what :: $bad"
+    else
+      pass "$what"
+    fi
+  done
+
+  # Applied this way the result must be the same working database.
+  psql -X -q -d "$db" -c "drop schema t_probe cascade" >/dev/null 2>&1
+  suite "$db" "$HERE/upgrade/after_migration.sql"
+}
+
+# --- rollback guard: decision 31 ------------------------------------------------
+#
+# With two organizations holding records, the Drill rollback must raise and
+# change nothing: applied here one statement per transaction, so "nothing"
+# does not lean on a surrounding transaction.
+
+phase_rollback_guard() {
+  local db="guard" f s rc ok=1
+  PHASE="hosted, rollback guard"
+  new_db "$db"
+  load_stub "$db" hosted || { fail "[harness] the Supabase stand-in loads :: $(first_error)"; ok=0; }
+  while IFS= read -r f; do
+    apply "$db" "$f" || { fail "[harness] $(basename "$f") applies :: $(first_error)"; ok=0; }
+  done < <(all_migrations)
+  [ -f "$MIG_DRILL" ] && [ -f "$RB_DRILL" ] && [ -f "$RB_CORE" ] || ok=0
+  apply "$db" "$HERE/guards/two_companies.sql" || { fail "[harness] two organizations with records are loaded :: $(first_error)"; ok=0; }
+  rm -f "$WORK"/snap.before "$WORK"/snap.after
+  snapshot "$db" "$WORK/snap.before" || ok=0
+
+  if [ "$ok" -eq 1 ]; then
+    psql -X -q -v ON_ERROR_STOP=1 -d "$db" -f "$RB_DRILL" >/dev/null 2>"$WORK/apply.err"
+    rc=$?
+    if [ "$rc" -ne 0 ]; then
+      pass "[c31] the Drill rollback raises when two organizations hold record rows"
+    else
+      fail "[c31] the Drill rollback raises when two organizations hold record rows :: it ran to its end"
+    fi
+    snapshot "$db" "$WORK/snap.after"
+    for s in $SECTIONS; do
+      same_section "$s" "$WORK/snap.before" "$WORK/snap.after" "[c31] ... and changed nothing, though applied one statement at a time: the $s"
+    done
+    if [ "$(psql -X -q -At -d "$db" -c "select count(distinct org_id) from public.boreholes" 2>/dev/null)" = "2" ]; then
+      pass "[c31] ... and both organizations' records still carry their organization"
+    else
+      fail "[c31] ... and both organizations' records still carry their organization :: org_id is gone or changed"
+    fi
+
+    # One organization with records: as before.
+    psql -X -q -d "$db" -c "delete from public.boreholes where org_id = '7e57da7a-0000-4000-8000-000000000002'" >/dev/null 2>&1
+    apply_checked "$db" "$RB_DRILL" "[c31] with records in one organization only, the Drill rollback runs as before (a second, empty organization exists)"
+    apply_checked "$db" "$RB_CORE"  "[c31] ... and the saas_core rollback after it"
+  else
+    fail "[c31] the Drill rollback raises when two organizations hold record rows :: not checked, the database could not be prepared"
+    for s in $SECTIONS; do
+      fail "[c31] ... and changed nothing, though applied one statement at a time: the $s :: not checked"
+    done
+    fail "[c31] ... and both organizations' records still carry their organization :: not checked"
+    fail "[c31] with records in one organization only, the Drill rollback runs as before (a second, empty organization exists) :: not checked"
+    fail "[c31] ... and the saas_core rollback after it :: not checked"
+  fi
+}
+
+phase_statement_by_statement
+phase_rollback_guard
 
 # --- core: the foundation alone, twice ----------------------------------------
 

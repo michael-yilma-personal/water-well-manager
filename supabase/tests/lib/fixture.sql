@@ -13,10 +13,10 @@
 --          Administrator
 --   padmin: platform administrator with no membership
 --
--- The organizations are created before the accounts on purpose: criterion 9
--- gives a new profile a membership only "while exactly one organization
--- exists", so with three in place the accounts start with none and every
--- membership below is explicit.
+-- Every membership here is explicit. A new account may be enrolled in the
+-- founding organization automatically (criterion 9, decision 27); whatever
+-- the accounts were given on creation is removed before theirs are inserted,
+-- so nobody in this cast belongs to the founding organization.
 
 insert into t.blockers values ('the two-organization fixture');
 
@@ -108,8 +108,8 @@ begin
   insert into auth.users (id, email)
     select t.uid(actor), actor || '@db-test.invalid' from t.accounts;
 
-  -- Legacy profiles.role, set before any membership exists so nothing is
-  -- mirrored. Single-organization accounts carry the role they hold there, as
+  -- Legacy profiles.role, set before the cast's memberships exist so nothing
+  -- is mirrored into them. Single-organization accounts carry the role they hold there, as
   -- every real account does today, so a policy still trusting profiles.role
   -- (is_admin(), is_reviewer()) shows up as a cross-organization leak. The
   -- three below say Administrator and must get nothing from it.
@@ -119,6 +119,8 @@ begin
       and (select count(*) from t.members x where x.actor = m.actor) = 1;
   update public.profiles set role = 'Administrator'
     where id in (t.uid('stranger'), t.uid('dual'), t.uid('mixed'));
+
+  delete from public.memberships where user_id in (select t.uid(actor) from t.accounts);
 
   insert into public.memberships (org_id, user_id, role, status)
     select t.uid(org), t.uid(actor), role, status from t.members;

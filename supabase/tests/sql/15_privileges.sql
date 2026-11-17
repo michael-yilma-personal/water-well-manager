@@ -10,7 +10,7 @@
 --
 -- Read from the ACLs themselves (grants to the role or to PUBLIC), not through
 -- has_table_privilege(), so that an unlisted privilege shows up by name.
--- plan: 68
+-- plan: 82
 begin;
 \ir ../lib/helpers.sql
 
@@ -91,6 +91,33 @@ from (values ('profiles'), ('boreholes'), ('pipe_records'), ('drilling_events'),
 order by tbl;
 select t.rows('[c25] the service role writes an audit row', 'service',
   $$ insert into public.audit_log (action) values ('test.service') $$, 1);
+
+-- ---------------------------------------------------------------------------
+-- Decision 31: a signed-out client can call none of the helpers
+-- ---------------------------------------------------------------------------
+-- EXECUTE is granted to PUBLIC by default in any world, and to anon by name in
+-- the hosted one; has_function_privilege() sees both.
+
+select t.ok(format('[c31] anon holds no EXECUTE on %s', sig),
+  format($$ select to_regprocedure(%1$L) is not null and not has_function_privilege('anon', to_regprocedure(%1$L), 'EXECUTE') $$, 'public.' || sig))
+from (values ('is_org_member(uuid)'), ('has_org_role(uuid,text[])'), ('saas_admin_roles()'),
+             ('is_org_admin(uuid)'), ('is_platform_admin()'), ('my_organizations()')) v(sig);
+select t.ok(format('[c31] authenticated keeps EXECUTE on %s', sig),
+  format($$ select to_regprocedure(%1$L) is not null and has_function_privilege('authenticated', to_regprocedure(%1$L), 'EXECUTE') $$, 'public.' || sig))
+from (values ('is_org_member(uuid)'), ('has_org_role(uuid,text[])'), ('saas_admin_roles()'),
+             ('is_org_admin(uuid)'), ('is_platform_admin()'), ('my_organizations()')) v(sig);
+-- Every other helper too, whatever it is called: a SECURITY DEFINER function
+-- in public that is not a trigger function is one the policies call with the
+-- owner's rights.
+select t.ok('[c31] anon holds EXECUTE on no SECURITY DEFINER function in public (trigger functions aside): ' ||
+            coalesce((select string_agg(p.oid::regprocedure::text, ', ' order by p.oid::regprocedure::text) from pg_proc p
+                      where p.pronamespace = 'public'::regnamespace and p.prosecdef and p.prorettype <> 'trigger'::regtype
+                        and has_function_privilege('anon', p.oid, 'EXECUTE')), 'none'),
+  $$ select not exists (select 1 from pg_proc p
+       where p.pronamespace = 'public'::regnamespace and p.prosecdef and p.prorettype <> 'trigger'::regtype
+         and has_function_privilege('anon', p.oid, 'EXECUTE')) $$);
+select t.throws('[c31] a signed-out client calling my_organizations() is refused', 'anon',
+  $$ select * from public.my_organizations() $$, '42501');
 
 rollback;
 select 'done';

@@ -2,10 +2,40 @@
 -- criterion 12.
 --   new     <org_id>/<user_id>/<file>
 --   legacy  <user_id>/<file>          (the only form an installed build knows)
--- plan: 158
+--
+-- Decision 30: legacy-path photos belong to the FOUNDING organization only
+-- (proposal 5.3). Its Administrator reads them; the Administrator of any
+-- other organization the owner belongs to does not. The founding organization
+-- is the one that exists before this file creates A and B; a small founding
+-- cast (f_*) is added to the usual fixture for it.
+-- plan: 178
 begin;
 \ir ../lib/helpers.sql
+
+create table t.founding as select id from public.organizations;
+grant select on t.founding to public;
+
 \ir ../lib/fixture.sql
+
+-- The founding cast: Administrator, Supervisor, Driller, a deactivated Driller,
+-- and a Driller who is also a Driller in A.
+insert into t.blockers values ('the founding cast');
+insert into auth.users (id, email)
+  select t.uid(a), a || '@db-test.invalid' from unnest(array['f_admin', 'f_super', 'f_driller', 'f_gone', 'f_dual']) a;
+delete from public.memberships
+  where user_id in (t.uid('f_admin'), t.uid('f_super'), t.uid('f_driller'), t.uid('f_gone'), t.uid('f_dual'));
+insert into public.memberships (org_id, user_id, role, status) values
+  ((select id from t.founding), t.uid('f_admin'),   'Administrator', 'active'),
+  ((select id from t.founding), t.uid('f_super'),   'Supervisor',    'active'),
+  ((select id from t.founding), t.uid('f_driller'), 'Driller',       'active'),
+  ((select id from t.founding), t.uid('f_gone'),    'Driller',       'deactivated'),
+  ((select id from t.founding), t.uid('f_dual'),    'Driller',       'active'),
+  (t.uid('org_a'),              t.uid('f_dual'),    'Driller',       'active');
+delete from t.blockers
+where what = 'the founding cast'
+  and (select count(*) from t.founding) = 1
+  and (select count(*) from public.memberships
+       where user_id in (t.uid('f_admin'), t.uid('f_super'), t.uid('f_driller'), t.uid('f_gone'), t.uid('f_dual'))) = 6;
 
 -- A path from labels: t.p('org_a', 'a_driller', 'p.jpg') or t.p('a_driller', 'old.jpg').
 create function t.p(variadic parts text[]) returns text
@@ -29,6 +59,9 @@ insert into t.photos values
   (t.p('dual',      'old.jpg'),        'dual'),
   (t.p('stranger',  'old.jpg'),        'stranger'),
   (t.p('a_gone',    'old.jpg'),        'a_gone'),
+  (t.p('f_driller', 'old.jpg'),        'f_driller'),
+  (t.p('f_gone',    'old.jpg'),        'f_gone'),
+  (t.p('f_dual',    'old.jpg'),        'f_dual'),
   -- Paths that are neither form.
   ('misc/x.jpg',                                   null),
   ('x.jpg',                                        null),
@@ -46,10 +79,10 @@ insert into storage.objects (bucket_id, name, owner)
 
 delete from t.blockers
 where what = 'the photo fixture'
-  and (select count(*) from storage.objects where bucket_id = 'drilling-photos' and name in (select path from t.photos)) = 16
+  and (select count(*) from storage.objects where bucket_id = 'drilling-photos' and name in (select path from t.photos)) = 19
   and (select count(*) from storage.objects where bucket_id = 'db-test-other') = 1;
 
-select t.ok('[fixture] 16 photos are stored in drilling-photos and one in another bucket', $$ select true $$);
+select t.ok('[fixture] 19 photos are stored in drilling-photos and one in another bucket', $$ select true $$);
 
 -- ---------------------------------------------------------------------------
 -- Reading
@@ -90,14 +123,27 @@ insert into t.read_cases values
   ('anon',       t.p('org_a', 'a_driller', 'p.jpg'), false, 'new path: signed out'),
   -- legacy path
   ('a_driller',  t.p('a_driller', 'old.jpg'), true,  'legacy path: the owner'),
-  ('a_admin',    t.p('a_driller', 'old.jpg'), true,  'legacy path: an Administrator who shares an organization with the owner'),
+  ('a_admin',    t.p('a_driller', 'old.jpg'), false, 'c30 legacy path: Administrator of the owner''s organization, which is not the founding one'),
   ('b_driller',  t.p('b_driller', 'old.jpg'), true,  'legacy path: the owner'),
-  ('b_admin',    t.p('b_driller', 'old.jpg'), true,  'legacy path: an Administrator who shares an organization with the owner'),
+  ('b_admin',    t.p('b_driller', 'old.jpg'), false, 'c30 legacy path: Administrator of the owner''s organization, which is not the founding one'),
   ('dual',       t.p('dual', 'old.jpg'),      true,  'legacy path: the owner'),
-  ('a_admin',    t.p('dual', 'old.jpg'),      true,  'legacy path: Administrator of A, which the owner belongs to'),
-  ('b_admin',    t.p('dual', 'old.jpg'),      true,  'legacy path: Administrator of B, which the owner belongs to'),
+  ('a_admin',    t.p('dual', 'old.jpg'),      false, 'c30 legacy path: Administrator of A, which the owner belongs to and which is not the founding one'),
+  ('b_admin',    t.p('dual', 'old.jpg'),      false, 'c30 legacy path: Administrator of B, which the owner belongs to and which is not the founding one'),
   ('stranger',   t.p('stranger', 'old.jpg'),  true,  'legacy path: the owner'),
-  ('a_admin',    t.p('a_gone', 'old.jpg'),    true,  'legacy path: Administrator; the owner is a deactivated member of their organization'),
+  ('a_admin',    t.p('a_gone', 'old.jpg'),    false, 'c30 legacy path: Administrator of the deactivated owner''s organization, which is not the founding one'),
+  -- Decision 30: the founding organization's Administrator, and nobody else's.
+  ('f_admin',    t.p('f_driller', 'old.jpg'), true,  'c30 legacy path: the founding organization''s Administrator'),
+  ('f_admin',    t.p('f_gone', 'old.jpg'),    true,  'c30 legacy path: the founding organization''s Administrator; the owner is deactivated'),
+  ('f_admin',    t.p('f_dual', 'old.jpg'),    true,  'c30 legacy path: the founding organization''s Administrator; the owner is also in A'),
+  ('f_driller',  t.p('f_driller', 'old.jpg'), true,  'c30 legacy path: the owner, a founding member'),
+  ('f_dual',     t.p('f_dual', 'old.jpg'),    true,  'c30 legacy path: the owner, in the founding organization and in A'),
+  ('a_admin',    t.p('f_dual', 'old.jpg'),    false, 'c30 legacy path: Administrator of A, which the owner ALSO belongs to'),
+  ('a_admin',    t.p('f_driller', 'old.jpg'), false, 'c30 legacy path: Administrator of another organization'),
+  ('b_admin',    t.p('f_dual', 'old.jpg'),    false, 'c30 legacy path: Administrator of another organization'),
+  ('f_super',    t.p('f_driller', 'old.jpg'), false, 'c30 legacy path: the founding organization''s Supervisor (Administrators only)'),
+  ('f_driller',  t.p('f_dual', 'old.jpg'),    false, 'c30 legacy path: a founding colleague'),
+  ('f_gone',     t.p('f_gone', 'old.jpg'),    false, 'c18 legacy path: the owner, a deactivated founding member'),
+  ('f_admin',    t.p('org_a', 'a_driller', 'p.jpg'), false, 'new path: the founding organization''s Administrator has no reach into A'),
   ('b_admin',    t.p('a_gone', 'old.jpg'),    false, 'legacy path: Administrator of another organization; the owner is deactivated'),
   ('a_super',    t.p('a_driller', 'old.jpg'), false, 'legacy path: a Supervisor'),
   ('a_driller2', t.p('a_driller', 'old.jpg'), false, 'legacy path: a colleague'),
@@ -134,9 +180,14 @@ grant select on t.odd to public;
 
 select t.rows(format('[c11] photos: %s reading the odd path %s gets no row and no error', actor, path), actor,
   format('select name from storage.objects where bucket_id = ''drilling-photos'' and name = %L', path), 0)
-from t.odd cross join (values ('a_admin'), ('b_admin'), ('a_driller'), ('a_super'), ('padmin'), ('stranger'), ('anon')) v(actor)
+from t.odd cross join (values ('a_admin'), ('b_admin'), ('a_driller'), ('a_super'), ('padmin'), ('stranger')) v(actor)
 where not (actor = 'a_admin' and under_org_a)
 order by path, actor;
+-- A signed-out client holds EXECUTE on none of the helpers (decision 31), so
+-- for it the refusal may be 42501 rather than an empty result.
+select t.none(format('[c11][c31] photos: a signed-out client reading the odd path %s is refused', path), 'anon',
+  format('select name from storage.objects where bucket_id = ''drilling-photos'' and name = %L', path))
+from t.odd order by path;
 select t.rows(format('[c20] photos: the Administrator of A reads %s, a path under <A>/ with no user id in it', path), 'a_admin',
   format('select name from storage.objects where bucket_id = ''drilling-photos'' and name = %L', path), 1)
 from t.odd where under_org_a order by path;
@@ -148,12 +199,16 @@ from (values ('a_admin'), ('b_admin'), ('a_driller'), ('dual'), ('a_super'), ('p
 select t.rows(format('[c11][c12] photos: %s listing the bucket gets exactly %s object(s)', actor, n), actor,
   $$ select name from storage.objects where bucket_id = 'drilling-photos' $$, n)
 from (values
-  ('a_admin', 8),     -- A/a_driller, A/a_gone, A/dual, A/not-a-uuid/x, A/x, legacy a_driller, legacy dual, legacy a_gone
-  ('b_admin', 4),     -- B/dual, B/b_driller, legacy b_driller, legacy dual
+  -- Decision 30: A and B are not the founding organization, so their
+  -- Administrators list no legacy-path photo at all (were 8 and 4).
+  ('a_admin', 5),     -- A/a_driller, A/a_gone, A/dual, A/not-a-uuid/x, A/x
+  ('b_admin', 2),     -- B/dual, B/b_driller
   ('a_driller', 2),   -- own new, own legacy
   ('dual', 3),        -- own in A, own in B, own legacy
-  ('a_super', 0), ('a_exadmin', 0), ('a_gone', 0), ('padmin', 0), ('anon', 0)
+  ('a_super', 0), ('a_exadmin', 0), ('a_gone', 0), ('f_gone', 0), ('padmin', 0)
 ) v(actor, n);
+select t.none('[c11][c12][c31] photos: a signed-out client listing the bucket is refused', 'anon',
+  $$ select name from storage.objects where bucket_id = 'drilling-photos' $$);
 
 select t.none('[c11] photos: the policies cover the drilling-photos bucket only (reading another bucket)', 'a_driller',
   $$ select name from storage.objects where bucket_id = 'db-test-other' $$);
@@ -173,6 +228,13 @@ insert into t.upload_cases values
   ('a_admin',   t.p('org_a', 'a_admin', 'n.jpg'),   true,  'c20 new path: an Administrator is an active member too'),
   ('b_admin',   t.p('org_b', 'b_admin', 'n.jpg'),   true,  'c20 new path: an Administrator is an active member too'),
   ('a_driller', t.p('a_driller', 'n.jpg'),          true,  'legacy path: own folder'),
+  ('f_driller', t.p('f_driller', 'n.jpg'),          true,  'c30 legacy path: an active founding member on the installed build'),
+  ('f_admin',   t.p('f_admin', 'n.jpg'),            true,  'c30 legacy path: own folder, active founding member'),
+  ('a_gone',    t.p('a_gone', 'n.jpg'),             false, 'c30 legacy path: own folder, but the uploader''s only membership is deactivated'),
+  ('f_gone',    t.p('f_gone', 'n.jpg'),             false, 'c30 legacy path: own folder, but deactivated in the founding organization'),
+  ('a_invited', t.p('a_invited', 'n.jpg'),          false, 'c30 legacy path: own folder, but invited is not active'),
+  ('stranger',  t.p('stranger', 'n.jpg'),           false, 'c30 legacy path: own folder, but no membership at all'),
+  ('padmin',    t.p('padmin', 'n.jpg'),             false, 'c30 legacy path: own folder, but no membership at all'),
   ('b_driller', t.p('b_driller', 'n.jpg'),          true,  'legacy path: own folder'),
   ('a_driller', t.p('org_b', 'a_driller', 'n.jpg'), false, 'new path: own id under an organization they are not in'),
   ('a_driller', t.p('org_b', 'b_driller', 'n.jpg'), false, 'new path: another organization''s member''s folder'),
