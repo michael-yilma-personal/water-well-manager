@@ -35,3 +35,17 @@ _to_delete/
 
 # --- SaaS workflow: finding detail that must not be published -------------
 docs/saas/private/
+
+# --- Supabase CLI link state: machine-specific, and must never point this
+# working copy at production by default --------------------------------------
+supabase/.temp/
+
+# Python bytecode
+__pycache__/
+
+# --- Local files: never commit ---------------------------------------------
+.secrets.local
+*.secrets.local
+
+# --- Owner's local notes ------------------------------------------------
+docs/saas/SECURITY_TODO.md
