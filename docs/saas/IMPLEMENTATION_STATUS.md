@@ -6,7 +6,7 @@ Requirements: `docs/SAAS_ARCHITECTURE_PROPOSAL.md`. How the work is run: `docs/s
 
 - **Phase:** Phase 0 — Preparation (approved). Phase 1 is approved to start after Phase 0, on staging only; its production migration is not approved.
 - **Branch:** `saas/phase-1-tenancy`, branched from `saas/phase-0-preparation` at `8d07755`. Pull requests 3 (workflow tooling) and 4 (Phase 0) are open with green CI, awaiting the owner's merge, in that order.
-- **In progress:** Phase 1, tasks P1-1, P1-2 and P1-4: implemented and green on a throwaway local Postgres (TEST_RESULTS 41); the first run on the real image in CI failed for one cause (TEST_RESULTS 42, criterion 25); the security review is under way. Staging is not touched until both pass.
+- **In progress:** Phase 1, tasks P1-1, P1-2 and P1-4: implemented and green on a throwaway local Postgres (TEST_RESULTS 41); green in CI on the real image (TEST_RESULTS 44); the security review is under way. Staging is not touched until it passes.
 - **Next step:** fix what CI and the review find; then apply to staging and run P1-3, P1-5, P1-6. **Do not check out `main` or any branch that predates the tooling until the pull requests are merged (RF-059).**
 - **Waiting on the owner:** the action recorded for RF-050 (deferred by the owner; does not block development); approval to delete the `probe` function from production (RF-049); confirmation of the staging rule (RF-054); branch protection on `main`; merging the workflow and Phase 0 pull requests so `main` stops carrying the production link files (RF-059).
 
@@ -44,10 +44,10 @@ Defaults taken where the proposal left a decision open (each can be changed befo
 
 | Id | Task | Status | Evidence |
 |---|---|---|---|
-| P1-1 | Reusable foundation migration `saas_core`: organizations, memberships, platform administrators, audit log, helper functions | Implemented; green locally; CI and review pending | TEST_RESULTS 40, 41 |
-| P1-2 | Drill migration `drill_tenancy`: founding organization, memberships from profiles, `org_id` on the four record tables, compatibility triggers for installed builds, organization-scoped policies for tables and photos | Implemented; green locally; CI and review pending; not yet on staging | TEST_RESULTS 40, 41 |
+| P1-1 | Reusable foundation migration `saas_core`: organizations, memberships, platform administrators, audit log, helper functions | Implemented; green locally and in CI; review pending | TEST_RESULTS 40 to 44 |
+| P1-2 | Drill migration `drill_tenancy`: founding organization, memberships from profiles, `org_id` on the four record tables, compatibility triggers for installed builds, organization-scoped policies for tables and photos | Implemented; green locally and in CI; review pending; not yet on staging | TEST_RESULTS 40 to 44 |
 | P1-3 | Tenant-isolation suite `e2e/saas/tenant_isolation_e2e.py` and a fixture that creates a second organization on staging | Not started | — |
-| P1-4 | Schema check: every table in `public` has RLS and is organization-scoped or allowlisted; run in CI's database job | Implemented; first CI run pending | TEST_RESULTS 41 |
+| P1-4 | Schema check: every table in `public` has RLS and is organization-scoped or allowlisted; run in CI's database job | Done; runs in CI | TEST_RESULTS 44 |
 | P1-5 | Compatibility proof: the 21 existing suites, unchanged, pass against the migrated staging database (the current app sends no `org_id`, so it stands in for the installed 1.1.7 build) | Not started | — |
 | P1-6 | Migration rehearsal on staging data: row counts before and after match; every row carries the founding `org_id`; a written rollback script | Not started | — |
 
