@@ -6,7 +6,7 @@ Requirements: `docs/SAAS_ARCHITECTURE_PROPOSAL.md`. How the work is run: `docs/s
 
 - **Phase:** Phase 0 — Preparation (approved). Phase 1 is approved to start after Phase 0, on staging only; its production migration is not approved.
 - **Branch:** `saas/phase-1-tenancy`, branched from `saas/phase-0-preparation` at `8d07755`. Pull requests 3 (workflow tooling) and 4 (Phase 0) are open with green CI, awaiting the owner's merge, in that order.
-- **In progress:** Phase 1, tasks P1-1, P1-2 and P1-4: implemented and green on a throwaway local Postgres (TEST_RESULTS 41); first run on the real image in CI and the security review are under way. Staging is not touched until both pass.
+- **In progress:** Phase 1, tasks P1-1, P1-2 and P1-4: implemented and green on a throwaway local Postgres (TEST_RESULTS 41); the first run on the real image in CI failed for one cause (TEST_RESULTS 42, criterion 25); the security review is under way. Staging is not touched until both pass.
 - **Next step:** fix what CI and the review find; then apply to staging and run P1-3, P1-5, P1-6. **Do not check out `main` or any branch that predates the tooling until the pull requests are merged (RF-059).**
 - **Waiting on the owner:** the action recorded for RF-050 (deferred by the owner; does not block development); approval to delete the `probe` function from production (RF-049); confirmation of the staging rule (RF-054); branch protection on `main`; merging the workflow and Phase 0 pull requests so `main` stops carrying the production link files (RF-059).
 
@@ -101,6 +101,8 @@ Defaults taken where the proposal left a decision open (each can be changed befo
 22. `TRUNCATE` is revoked from `anon` and `authenticated` on every table in `public`.
 23. `memberships.user_id` is `on delete cascade`, so an account with no records can still be deleted as today.
 24. An expired ban counts as active. A forged `org_id` on a borehole is rejected (`42501`), not replaced. The child-row and immutability triggers apply to the service role too. Re-sending the same `org_id` in an update is not a change. Migration and rollback files contain no transaction statements. Mirroring from a profile is defined only for users with at most one membership.
+
+25. Privileges are explicit after the tenancy migrations, and the same whether the database started with a hosted project's default grants or with none (TEST_RESULTS 42): `service_role` holds everything on every table in `public`; `authenticated` holds SELECT, INSERT and UPDATE on the four record tables, SELECT and UPDATE of `name` and `badge_number` on `profiles`, and SELECT on the four foundation tables; `anon` holds nothing. This removes privileges the API roles hold today only by default and never needed (for example REFERENCES and TRIGGER, and everything for `anon`); row level security already denied their use.
 
 ### Phase 0 — Preparation (approved 2026-11-15)
 
