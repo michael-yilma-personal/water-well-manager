@@ -6,8 +6,8 @@ Requirements: `docs/SAAS_ARCHITECTURE_PROPOSAL.md`. How the work is run: `docs/s
 
 - **Phase:** Phase 0 — Preparation (approved). Phase 1 is approved to start after Phase 0, on staging only; its production migration is not approved.
 - **Branch:** `saas/phase-0-preparation`, branched from `chore/agent-workflow` at the commit after `8fc667b`. The workflow tooling is pull request 3 (CI green), awaiting the owner's merge.
-- **In progress:** first push and the Phase 0 pull request. Phase 0 is committed locally only. **Push precondition:** the commits to be pushed are rebuilt from the final tree, and a search of every commit message and diff to be pushed for withheld wording returns no hit.
-- **Next step:** push; open the Phase 0 pull request; watch CI including the new staging job. Then Phase 1 on `saas/phase-1-tenancy`. **Do not check out `main` or any branch that predates the tooling until the pull requests are merged (RF-059).**
+- **In progress:** nothing in Phase 0. Pull request 4 is open with green CI (TEST_RESULTS 39), awaiting the owner's review and merge. Phase 1 starts on `saas/phase-1-tenancy`, on staging only.
+- **Next step:** Phase 1, task P1-1, tests first. Then Phase 1 on `saas/phase-1-tenancy`. **Do not check out `main` or any branch that predates the tooling until the pull requests are merged (RF-059).**
 - **Waiting on the owner:** the action recorded for RF-050 (deferred by the owner; does not block development); approval to delete the `probe` function from production (RF-049); confirmation of the staging rule (RF-054); branch protection on `main`; merging the workflow and Phase 0 pull requests so `main` stops carrying the production link files (RF-059).
 
 ## Phases
@@ -15,7 +15,7 @@ Requirements: `docs/SAAS_ARCHITECTURE_PROPOSAL.md`. How the work is run: `docs/s
 | Phase | Branch | Status | Pull request |
 |---|---|---|---|
 | Workflow setup | `chore/agent-workflow` | Done; CI green; awaiting the owner's merge | https://github.com/michael-yilma-personal/water-well-manager/pull/3 |
-| 0 Preparation | `saas/phase-0-preparation` | In progress | — |
+| 0 Preparation | `saas/phase-0-preparation` | Done; CI green; awaiting the owner's merge (after pull request 3) | https://github.com/michael-yilma-personal/water-well-manager/pull/4 |
 | 1 Tenancy in the database | `saas/phase-1-tenancy` | Approved to start after Phase 0; production migration not approved | — |
 | 2 Organization-aware apps | — | Not approved | — |
 | 3 Subscriptions and entitlements | — | Not approved | — |
@@ -108,9 +108,10 @@ Acceptance criteria from the proposal: the existing unit and e2e suites pass aga
 | P0-10 | Fix the fifth review's findings (RF-059, RF-061) | Done; remainder in P0-11 | TEST_RESULTS 29, 31 |
 | P0-11 | Fix the sixth review's findings (RF-063 to RF-065) | Done; remainder in P0-12 | TEST_RESULTS 32, 33 |
 | P0-12 | Fix the seventh review's findings (RF-066 to RF-068) | Done; verified by the eighth review | TEST_RESULTS 34 to 36 |
+| P0-14 | Pin the staging e2e job to a versioned runner image | Done | TEST_RESULTS 38, 39 |
 | P0-13 | Eighth review: `gh pr close` leaves the known-safe list (RF-069); rebuild the commits before pushing (RF-070) | Done | TEST_RESULTS 37 |
 | P0-7 | Real JSX type checking: `@types/react` and `@types/react-dom`, plus a test that a wrong prop fails | Done | TEST_RESULTS 26, 29 |
-| P0-8 | Run the RLS, Data Logger and offline-sync suites against staging from CI | Implemented; first CI run pending the push; skip behaviour changes in P0-11 | TEST_RESULTS 29 |
+| P0-8 | Run the RLS, Data Logger and offline-sync suites against staging from CI | Done; green in CI | TEST_RESULTS 29 |
 
 #### P0-3 acceptance criteria — tests and scripts target staging and refuse production
 
