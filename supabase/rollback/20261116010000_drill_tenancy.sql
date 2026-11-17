@@ -12,6 +12,10 @@
 -- for accounts with one membership, so the old policies see current roles. A
 -- role changed directly on a membership is not copied back.
 --
+-- Grants: this restores the table privileges a HOSTED Supabase project had
+-- before the migration (the hosted defaults, less what the earlier migrations
+-- revoked), not the explicit ones the migration set. See the last section.
+--
 -- Organizations and memberships are left in place; they belong to saas_core
 -- and go with its rollback. No transaction statements: the caller wraps it.
 
@@ -123,12 +127,26 @@ end
 $$;
 
 -- ---------------------------------------------------------------------------
--- Grants, as they were
+-- Grants, as a hosted project had them
 -- ---------------------------------------------------------------------------
+--
+-- The migration replaced the default grants with explicit ones. This puts
+-- back what a HOSTED Supabase project held before it: everything for the API
+-- roles (the hosted default), less what 20260806010000 took away. It is wider
+-- than the migrated state on purpose, because a rollback restores the previous
+-- state exactly. On a database that started with no default grants (the local
+-- image) this leaves more than was there before; nothing depends on that.
+-- The foundation's tables keep their own grants until saas_core is rolled back.
 
--- The migration revoked TRUNCATE from the client roles on every table. This
--- returns it on the five pre-tenancy tables only because a rollback restores
--- the previous state exactly; the foundation's tables stay revoked.
-grant truncate on public.profiles, public.boreholes, public.pipe_records,
+grant all on public.profiles, public.boreholes, public.pipe_records,
   public.drilling_events, public.shift_logs
-  to anon, authenticated;
+  to anon, authenticated, service_role;
+
+revoke delete on public.boreholes, public.pipe_records,
+  public.drilling_events, public.shift_logs
+  from anon, authenticated;
+
+-- Table-level UPDATE goes (which also clears the column grant), then the two
+-- editable columns come back: role is not self-editable.
+revoke update, delete on public.profiles from anon, authenticated;
+grant update (name, badge_number) on public.profiles to authenticated;

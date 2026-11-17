@@ -65,14 +65,20 @@ alter table public.memberships     enable row level security;
 alter table public.platform_admins enable row level security;
 alter table public.audit_log       enable row level security;
 
--- Supabase's default privileges hand every new table to the API roles in
--- full. Take all of it back and return only SELECT to signed-in users; RLS
--- then decides which rows.
+-- Privileges are stated in full rather than inherited. A hosted Supabase
+-- project hands every new table to the API roles by default; a database built
+-- from migrations alone (the local image, CI) hands them nothing. Revoking
+-- everything and granting exactly what is needed ends in the same place from
+-- either start: signed-in users may SELECT (RLS decides which rows), the
+-- service role does the writing, a signed-out client has nothing.
 revoke all on public.organizations, public.memberships, public.platform_admins, public.audit_log
   from anon, authenticated;
 revoke all on sequence public.audit_log_id_seq from anon, authenticated;
 grant select on public.organizations, public.memberships, public.platform_admins, public.audit_log
   to authenticated;
+grant all on public.organizations, public.memberships, public.platform_admins, public.audit_log
+  to service_role;
+grant usage, select on sequence public.audit_log_id_seq to service_role;
 
 -- ---------------------------------------------------------------------------
 -- Helper functions
@@ -81,7 +87,9 @@ grant select on public.organizations, public.memberships, public.platform_admins
 -- All are security definer so that a policy can ask about memberships without
 -- going back through the policies on memberships (which would recurse), and
 -- all pin search_path. Each answers only about the caller, so being callable
--- by anyone gives nothing away.
+-- by anyone gives nothing away: they keep PostgreSQL's default EXECUTE for
+-- PUBLIC, which is what makes them callable from policies in either kind of
+-- database.
 
 -- Only an ACTIVE membership counts: invited and deactivated members get
 -- nothing through these.

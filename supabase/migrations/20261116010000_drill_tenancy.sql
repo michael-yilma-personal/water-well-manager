@@ -467,19 +467,39 @@ create policy drilling_photos_select on storage.objects
   );
 
 -- ---------------------------------------------------------------------------
--- 9. TRUNCATE
+-- 9. Privileges, stated in full
 -- ---------------------------------------------------------------------------
+--
+-- The earlier migrations only subtracted from whatever the API roles held by
+-- default. On a hosted project that default is everything (TRUNCATE,
+-- REFERENCES, TRIGGER and, from PostgreSQL 17, MAINTAIN included, for the
+-- signed-out role too); on a database built from the migrations alone it is
+-- nothing, and the app could not read its own tables. Revoke everything, then
+-- grant exactly what each role uses, so both end the same:
+--   anon           nothing
+--   authenticated  records: SELECT, INSERT, UPDATE (no DELETE: deletion is soft)
+--                  profiles: SELECT, and UPDATE of name and badge_number only,
+--                  so role stays not self-editable
+--   service_role   everything (the admin-users function)
+-- Row level security still decides which rows. A table-level REVOKE also
+-- clears column-level grants, so the profiles column grant is made after it.
+-- The foundation's tables are granted in saas_core.
+--
+-- Functions keep PostgreSQL's default EXECUTE for PUBLIC: the policies call
+-- the helpers as the signed-in user. The trigger functions cannot be called
+-- outside a trigger whatever their grants.
 
--- Supabase's default privileges include TRUNCATE, which row level security
--- does not govern. The API cannot send one today, but no client role should
--- hold it on any table.
-do $$
-declare
-  r record;
-begin
-  for r in select tablename from pg_tables where schemaname = 'public'
-  loop
-    execute format('revoke truncate on public.%I from anon, authenticated', r.tablename);
-  end loop;
-end
-$$;
+revoke all on public.profiles, public.boreholes, public.pipe_records,
+  public.drilling_events, public.shift_logs
+  from anon, authenticated;
+
+grant select, insert, update on public.boreholes, public.pipe_records,
+  public.drilling_events, public.shift_logs
+  to authenticated;
+
+grant select on public.profiles to authenticated;
+grant update (name, badge_number) on public.profiles to authenticated;
+
+grant all on public.profiles, public.boreholes, public.pipe_records,
+  public.drilling_events, public.shift_logs
+  to service_role;
