@@ -6,8 +6,8 @@ Requirements: `docs/SAAS_ARCHITECTURE_PROPOSAL.md`. How the work is run: `docs/s
 
 - **Phase:** Phase 0 — Preparation (approved). Phase 1 is approved to start after Phase 0, on staging only; its production migration is not approved.
 - **Branch:** `saas/phase-1-tenancy`, branched from `saas/phase-0-preparation` at `8d07755`. Pull requests 3 (workflow tooling) and 4 (Phase 0) are open with green CI, awaiting the owner's merge, in that order.
-- **In progress:** Phase 1. The tenth review (TEST_RESULTS 47) no longer blocks: no High in the database, changes requested (RF-079 to RF-087, three Medium). The validation left the database suite red on two confirmed defects (TEST_RESULTS 48). Tests first for decisions 39 to 43 and for P1-7, then the Developer. Staging is not touched until a review passes.
-- **Next step:** Test Engineer (write mode) for decisions 39 to 43 and P1-7; Developer; gates; validation and the eleventh review; then apply to staging and run P1-3, P1-5, P1-6. **Do not check out `main` or any branch that predates the tooling until the pull requests are merged (RF-059).**
+- **In progress:** Phase 1. Tests first are written for criteria 39 to 46 and for P1-7 (TEST_RESULTS 49: red as intended); the Developer is implementing. Staging is not touched until a review passes.
+- **Next step:** Developer (criteria 39 to 46, P1-7); gates; validation and the eleventh review; then apply to staging and run P1-3, P1-5, P1-6. **Do not check out `main` or any branch that predates the tooling until the pull requests are merged (RF-059).**
 - **For the owner to look at:** `.claude/settings.json` was edited on 2026-11-17 at 20:38 (the guard hook commented out, which also makes the file invalid JSON). Not made by the Lead or an agent as far as can be told; left as found and not committed.
 - **Waiting on the owner:** the action recorded for RF-050 (deferred by the owner; does not block development); approval to delete the `probe` function from production (RF-049); confirmation of the staging rule (RF-054); branch protection on `main`; merging the workflow and Phase 0 pull requests so `main` stops carrying the production link files (RF-059).
 
@@ -51,7 +51,7 @@ Defaults taken where the proposal left a decision open (each can be changed befo
 | P1-4 | Schema check: every table in `public` has RLS and is organization-scoped or allowlisted; run in CI's database job | Done; runs in CI | TEST_RESULTS 44 |
 | P1-5 | Compatibility proof: the 21 existing suites, unchanged, pass against the migrated staging database (the current app sends no `org_id`, so it stands in for the installed 1.1.7 build) | Not started | — |
 | P1-6 | Migration rehearsal on staging data: row counts before and after match; every row carries the founding `org_id`; a written rollback script | Not started | — |
-| P1-7 | `admin-users` authorises on membership, not on the global `profiles.role`: the caller needs an active Administrator membership in the founding organization, and may list, create, re-role, ban, unban and delete only accounts that are members of it (criterion 27, RF-072) | Not started | — |
+| P1-7 | `admin-users` authorises on membership, not on the global `profiles.role`: the caller needs an active Administrator membership in the founding organization, and may list, create, re-role, ban, unban and delete only accounts that are members of it (criterion 27, RF-072) | Tests written; implementation under way | TEST_RESULTS 49 |
 
 #### Phase 1 acceptance criteria
 
@@ -126,6 +126,9 @@ Defaults taken where the proposal left a decision open (each can be changed befo
 42. `saas_core` leaves no point, applied one statement at a time on a database with a hosted project's default grants, at which `anon` or `authenticated` can insert, update or delete in a foundation table (RF-083).
 43. The legacy photo path needs an **active membership in the founding organization**: to upload, and to read one's own. This tightens criterion 30 (RF-087).
 44. Confirmed as specified: a ban leaves an `invited` membership alone; the founding Administrator reads no legacy photo whose owner is not a founding member. The message for an undecidable founding organization says how to add and set the flag by hand (RF-084).
+
+45. A founding organization that has no membership at all is a first application, however its flag came to be set: the migration enrols every profile then. So the procedure the error message gives (add the flag column by hand, set it on one organization, apply again) ends with every legacy account enrolled.
+46. After the Drill rollback alone the legacy model is in force again, where a ban is the only deactivation. A re-application therefore sets each founding membership's status from the ban alone: banned is deactivated (marked as by the ban), not banned is active; an `invited` membership is left as it is. Criterion 42 is judged by behaviour: a refusal by row level security counts.
 
 #### P1-7 acceptance criteria — `admin-users` authorises on membership (criterion 27, RF-072)
 

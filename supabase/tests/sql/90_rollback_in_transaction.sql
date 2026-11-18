@@ -16,7 +16,7 @@
 -- file when one of them is missing or contains transaction control.
 -- supabase/tests/local.sh additionally compares a full catalog snapshot
 -- before the migration and after the rollback on a scratch database.
--- plan: 105
+-- plan: 106
 begin;
 \ir ../lib/helpers.sql
 
@@ -24,14 +24,24 @@ select t.ok('[c14] precondition: tenancy is applied before the rehearsal',
   $$ select to_regclass('public.organizations') is not null
         and exists (select 1 from pg_attribute where attrelid = 'public.boreholes'::regclass and attname = 'org_id' and not attisdropped) $$);
 
--- Decision 31: the Drill rollback refuses only when MORE than one organization
--- holds record rows. A second organization with a member and no records does
--- not stop it; everything below must hold with one in place. (The refusal
--- itself is tried by run.sh, guards/rollback_refuses.sql.)
+-- Decisions 31 and 41: the Drill rollback refuses when more than one
+-- organization holds record rows, and when an organization other than the
+-- founding one has a membership. A second organization with NEITHER records
+-- nor members does not stop it; everything below must hold with one in place.
+-- (The refusals themselves are tried by run.sh, guards/rollback_refuses.sql
+-- and guards/rollback_refuses_members.sql.)
+--
+-- Changed for decision 41: until then this fixture gave the second
+-- organization a member (rb_member, a Driller) and required the rollback to
+-- run all the same. Decision 41 requires the opposite, so the member now
+-- stays where a new account is enrolled, in the founding organization.
 insert into public.organizations (id, name) values (t.uid('org_empty'), 'No records');
 insert into auth.users (id, email) values (t.uid('rb_member'), 'rb_member@db-test.invalid');
-delete from public.memberships where user_id = t.uid('rb_member');
-insert into public.memberships (org_id, user_id, role) values (t.uid('org_empty'), t.uid('rb_member'), 'Driller');
+select t.ok('[c41] setup: the second organization has no member and no record; the new account is a founding member',
+  format($$ select not exists (select 1 from public.memberships where org_id = %L)
+               and not exists (select 1 from public.boreholes where org_id = %L)
+               and (select count(*) from public.memberships where user_id = %L and org_id <> %L) = 1 $$,
+         t.uid('org_empty'), t.uid('org_empty'), t.uid('rb_member'), t.uid('org_empty')));
 
 \i :rollback_drill
 \i :rollback_core

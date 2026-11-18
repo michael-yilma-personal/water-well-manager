@@ -295,6 +295,49 @@ rollback_refuses() {
   fi
 }
 
+# Decision 41: it also refuses when another organization has a membership and
+# no records at all.
+rollback_refuses_members() {
+  local out="$TMP/guard41.out" rc what="[c41] the Drill rollback refuses when a non-founding organization has a membership but no records"
+  psql -X -q -At -v ON_ERROR_STOP=1 -v rollback_drill="$RB_DRILL" \
+    -f "$HERE/guards/rollback_refuses_members.sql" >"$out" 2>"$TMP/guard41.err"
+  rc=$?
+  if ! grep -q '^FIXTURE-READY$' "$out"; then
+    fail "$what :: not checked, the fixture did not load: $(head -n 1 "$TMP/guard41.err")"
+  elif grep -q '^REACHED-END$' "$out" || [ "$rc" -eq 0 ]; then
+    fail "$what :: the script ran to its end without raising"
+  else
+    pass "$what"
+  fi
+  # It ran inside a transaction that psql abandoned, so nothing may have changed.
+  if [ "$(psql -X -q -At -c "select (to_regclass('public.organizations') is not null and exists (select 1 from pg_attribute where attrelid = 'public.boreholes'::regclass and attname = 'org_id' and not attisdropped) and not exists (select 1 from public.organizations where name = 'Second company (members only)'))::int" 2>/dev/null)" = "1" ]; then
+    pass "[c41] ... and the database is as it was"
+  else
+    fail "[c41] ... and the database is as it was :: tenancy objects are missing or the test's rows were left behind"
+  fi
+}
+
+# Decision 44: what the "cannot tell which organization is the founding one"
+# error tells the operator. $1 is psql's error output, $2 the check's name.
+# Everything the server sent counts (message, detail, hint); only the wording
+# needed to tell "add the column" from "set the column" is looked for: the
+# column's name, and an instruction to add it (ALTER TABLE ... ADD COLUMN, or
+# the words "add ... column").
+founding_message_says_add() {
+  grep -v '^CONTEXT:' "$1" | tr '\n' ' ' | grep -q 'is_founding' \
+    && grep -v '^CONTEXT:' "$1" | tr '\n' ' ' | grep -q -i -E '(add[[:space:]]+column|add[[:space:]]+(the|a|this)[[:space:]]+([a-z_]+[[:space:]]+)?column|alter[[:space:]]+table[^;]*[[:space:]]add[[:space:]])'
+}
+founding_message_check() {
+  local err="$1" what="$2"
+  if ! grep -q -i 'founding' "$err"; then
+    fail "$what :: not checked, the migration did not stop on the founding organization"
+  elif founding_message_says_add "$err"; then
+    pass "$what"
+  else
+    fail "$what :: the message is: $(grep -m 1 -E 'ERROR' "$err" | sed 's/^psql:[^ ]* //' | cut -c 1-260)"
+  fi
+}
+
 # Decisions 27 and 30: on a first application with several organizations and
 # none marked founding, the Drill migration raises instead of picking one.
 first_run_refuses() {
@@ -311,6 +354,11 @@ first_run_refuses() {
   else
     pass "[c27][c30] a first application with several organizations and none marked founding raises instead of picking one"
   fi
+  # Decision 44 (RF-084): on a real first application the failed transaction
+  # takes the flag column away again, so "set the flag" alone cannot be
+  # followed. The message must say how to ADD the column as well. (local.sh
+  # follows the instructions on a database in exactly that state.)
+  founding_message_check "$TMP/first.err" "[c44] the message for an undecidable founding organization says how to add the flag column, not only to set it"
   # It ran inside a transaction that psql abandoned, so nothing may have changed.
   if [ "$(psql -X -q -At -c "select ((select count(*) from public.organizations where is_founding) = 1 and not exists (select 1 from public.organizations where name = 'Second company (first run)'))::int" 2>/dev/null)" = "1" ]; then
     pass "[c27][c30] ... and the database is as it was: one organization is marked, the test's is gone"
@@ -335,9 +383,13 @@ for f in "$HERE"/sql/[0-9]*.sql; do
     85_drill_rollback_alone.sql)
       if [ "$ready" -eq 1 ]; then run_file "$f"; else fail "[c14] the Drill rollback on its own not tried :: see the transaction-control checks above"; fi
       ;;
+    86_reapply_after_drill_rollback.sql)
+      if [ "$ready" -eq 1 ]; then run_file "$f"; else fail "[c39] re-application after the Drill rollback alone not tried :: see the transaction-control checks above"; fi
+      ;;
     90_rollback_in_transaction.sql)
       if [ "$ready" -eq 1 ]; then
         rollback_refuses
+        rollback_refuses_members
         run_file "$f"
       else
         fail "[c31] rollback refusal not tried :: see the transaction-control checks above"
