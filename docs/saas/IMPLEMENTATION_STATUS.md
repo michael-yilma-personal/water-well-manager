@@ -6,8 +6,8 @@ Requirements: `docs/SAAS_ARCHITECTURE_PROPOSAL.md`. How the work is run: `docs/s
 
 - **Phase:** Phase 0 — Preparation (approved). Phase 1 is approved to start after Phase 0, on staging only; its production migration is not approved.
 - **Branch:** `saas/phase-1-tenancy`, branched from `saas/phase-0-preparation` at `8d07755`. Pull requests 3 (workflow tooling) and 4 (Phase 0) are open with green CI, awaiting the owner's merge, in that order.
-- **In progress:** Phase 1. The twelfth review (TEST_RESULTS 56) says the migrations are safe to apply to staging and leaves one Medium and one Low (RF-097, RF-098), both outside single-transaction application. The validation found no defect (TEST_RESULTS 57). A last small fix round, tests first, for criteria 52 and 53.
-- **Next step:** Test Engineer (write mode) and Developer for criteria 52 and 53; gates; a review of that diff; apply to staging, deploy `admin-users` there, and run P1-3, P1-5, P1-6. **Do not check out `main` or any branch that predates the tooling until the pull requests are merged (RF-059).**
+- **In progress:** Phase 1. Tests first are written for criteria 52 and 53 (TEST_RESULTS 58: red as intended); the Developer is implementing.
+- **Next step:** Developer for criteria 52 and 53; gates; a review of that diff; apply to staging, deploy `admin-users` there, and run P1-3, P1-5, P1-6. **Do not check out `main` or any branch that predates the tooling until the pull requests are merged (RF-059).**
 - **For the owner to look at:** `.claude/settings.json` was edited on 2026-11-17 at 20:38 (the guard hook commented out, which also makes the file invalid JSON). Not made by the Lead or an agent as far as can be told; left as found and not committed.
 - **Waiting on the owner:** the action recorded for RF-050 (deferred by the owner; does not block development); approval to delete the `probe` function from production (RF-049); confirmation of the staging rule (RF-054); branch protection on `main`; merging the workflow and Phase 0 pull requests so `main` stops carrying the production link files (RF-059).
 

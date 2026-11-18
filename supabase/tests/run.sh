@@ -478,6 +478,63 @@ rollback_guard_more() {
   fi
 }
 
+# Criterion 53 (RF-098): the Drill rollback also refuses when a stored photo
+# has the shape of the new path (<uuid>/<uuid>/...) and its first segment is
+# the id of NO organization (the organization's row was deleted), in either
+# case of the letters; legacy paths (<user id>/<file>) never stop it.
+# guards/rollback_refuses_c53.sql says what state each case builds. Every case
+# runs inside a transaction that is never committed.
+rollback_refuses_c53() {
+  local out="$TMP/guard53.out" rc c name
+  local intact="select (to_regclass('public.organizations') is not null and exists (select 1 from pg_attribute where attrelid = 'public.boreholes'::regclass and attname = 'org_id' and not attisdropped) and (select count(*) from public.organizations where is_founding) = 1 and not exists (select 1 from auth.users where email like 'guard53-%@db-test.invalid') and not exists (select 1 from public.boreholes where name = 'founding company hole (guard 53)') and not exists (select 1 from storage.objects where name ilike '%7e57da7a-0000-4000-8000-0000000053%'))::int"
+
+  for c in orphan orphan_upper orphan_deep; do
+    case "$c" in
+      orphan)       name="[c53] the Drill rollback refuses when a photo is stored at <uuid>/<uuid>/<file> and its first segment is the id of no organization" ;;
+      orphan_upper) name="[c53] the Drill rollback refuses when a photo is stored at <UUID>/<uuid>/<file>, the first segment in upper case and the id of no organization" ;;
+      orphan_deep)  name="[c53] the Drill rollback refuses when a photo is stored at <uuid>/<uuid>/a/b/<file> and its first segment is the id of no organization" ;;
+    esac
+    psql -X -q -At -v ON_ERROR_STOP=1 -v rollback_drill="$RB_DRILL" -v case="$c" \
+      -f "$HERE/guards/rollback_refuses_c53.sql" >"$out" 2>"$TMP/guard53.err"
+    rc=$?
+    if ! grep -q '^FIXTURE-READY$' "$out"; then
+      fail "$name :: not checked, the fixture did not load: $(grep -m 1 -E 'ERROR|FATAL' "$TMP/guard53.err" | cut -c 1-200)"
+    elif grep -q '^REACHED-END$' "$out" || [ "$rc" -eq 0 ]; then
+      fail "$name :: the script ran to its end without raising"
+    elif ! grep -q -i 'refus' "$TMP/guard53.err"; then
+      fail "$name :: it stopped, but not by refusing: $(grep -m 1 -E 'ERROR|FATAL' "$TMP/guard53.err" | cut -c 1-200)"
+    else
+      pass "$name"
+    fi
+  done
+
+  for c in legacy founding_upper; do
+    case "$c" in
+      legacy)         name="[c53] the Drill rollback still runs when the only photos are legacy paths <user id>/<file> (of a member, of an account that no longer exists, one whose file name is a uuid) and a new-path photo under the founding organization" ;;
+      founding_upper) name="[c53] the Drill rollback still runs when the only photo is a new-path photo under the founding organization's id spelled in upper case" ;;
+    esac
+    psql -X -q -At -v ON_ERROR_STOP=1 -v rollback_drill="$RB_DRILL" -v case="$c" \
+      -f "$HERE/guards/rollback_refuses_c53.sql" >"$out" 2>"$TMP/guard53.err"
+    rc=$?
+    if ! grep -q '^FIXTURE-READY$' "$out"; then
+      fail "$name :: not checked, the fixture did not load: $(grep -m 1 -E 'ERROR|FATAL' "$TMP/guard53.err" | cut -c 1-200)"
+    elif [ "$rc" -ne 0 ] || ! grep -q '^REACHED-END$' "$out"; then
+      fail "$name :: $(grep -m 1 -E 'ERROR|FATAL' "$TMP/guard53.err" | cut -c 1-200)"
+    elif ! grep -q '^ROLLED-BACK$' "$out"; then
+      fail "$name :: it ran to its end but boreholes still has org_id"
+    else
+      pass "$name"
+    fi
+  done
+
+  # Every case ran inside a transaction that psql abandoned or rolled back.
+  if [ "$(psql -X -q -At -c "$intact" 2>/dev/null)" = "1" ]; then
+    pass "[c53] ... and after those five cases the database is as it was"
+  else
+    fail "[c53] ... and after those five cases the database is as it was :: tenancy objects or the mark are missing, or the test's rows were left behind"
+  fi
+}
+
 # Decision 44: what the "cannot tell which organization is the founding one"
 # error tells the operator. $1 is psql's error output, $2 the check's name.
 # Everything the server sent counts (message, detail, hint); only the wording
@@ -557,11 +614,13 @@ for f in "$HERE"/sql/[0-9]*.sql; do
         rollback_unflagged
         rollback_refuses_c48
         rollback_guard_more
+        rollback_refuses_c53
         run_file "$f"
       else
         fail "[c31] rollback refusal not tried :: see the transaction-control checks above"
         fail "[c48] rollback refusal for a memberless organization's records and photos not tried :: see the transaction-control checks above"
         fail "[c48] the further cases of the rollback guard not tried :: see the transaction-control checks above"
+        fail "[c53] rollback refusal for a photo under the folder of an organization that no longer exists not tried :: see the transaction-control checks above"
         fail "[c14] rollback rehearsal not run :: see the transaction-control checks above"
       fi
       ;;

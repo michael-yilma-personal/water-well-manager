@@ -92,6 +92,16 @@
 #             accounts already belong to a second organization only: they get
 #             no founding membership; the accounts with no membership
 #             anywhere are enrolled (criterion 49).
+#   started in flight (hosted)
+#             the Drill migration on legacy data while accounts are banned
+#             and unbanned by statements that START while a statement of the
+#             migration is already running (lib/in_flight_started.py holds
+#             the migration at points inside each statement and issues them
+#             there): once statement by statement, once as one transaction,
+#             and statement by statement with the founding organization
+#             marked by hand beforehand. The banned accounts must end
+#             deactivated, the unbanned ones active and able to insert a
+#             borehole (criterion 52).
 #
 # Output and exit status are as for run.sh: one line per check, a total,
 # non-zero when anything failed.
@@ -155,7 +165,7 @@ fi
 
 # listen_addresses='' : no TCP at all. The socket directory is private (0700).
 if ! pg_ctl -D "$DATA" -l "$WORK/server.log" -w start \
-      -o "-c listen_addresses='' -c unix_socket_directories='$SOCK' -c unix_socket_permissions=0700 -c port=$PORT -c fsync=off -c max_connections=20" \
+      -o "-c listen_addresses='' -c unix_socket_directories='$SOCK' -c unix_socket_permissions=0700 -c port=$PORT -c fsync=off -c max_connections=80" \
       >"$WORK/pg_ctl.log" 2>&1; then
   echo "local.sh: the scratch server did not start:" >&2
   cat "$WORK/pg_ctl.log" "$WORK/server.log" >&2 2>/dev/null
@@ -984,6 +994,85 @@ SQL
   fi
 }
 
+# --- started in flight: criterion 52 ---------------------------------------------
+#
+# RF-097. The two phases above open their ban and their unban BEFORE a
+# statement of the migration and commit them after it. An Administrator can
+# also press "deactivate" or "reactivate" a moment AFTER the operator started
+# a statement. lib/in_flight_started.py stops the migration at points inside
+# each statement (an advisory lock the harness holds; no sleep decides
+# anything) and issues a ban and an unban there.
+#
+#   first    the starting state of phase_in_flight: legacy data, no
+#            organization, no membership.
+#   byhand   the other first application (see phase_in_flight_other): one
+#            organization, marked founding by hand, nobody a member.
+
+phase_in_flight_started() {
+  local kind="$1" mode="$2" db="started_$1_$2" f ok=1 line n=0 got
+  case "$kind" in
+    first) PHASE="hosted, started in flight ($mode)" ;;
+    *)     PHASE="hosted, started in flight, $kind ($mode)" ;;
+  esac
+  new_db "$db"
+  load_stub "$db" hosted || { fail "[harness] the Supabase stand-in loads :: $(first_error)"; ok=0; }
+  while IFS= read -r f; do
+    apply "$db" "$f" || { fail "[harness] $(basename "$f") applies :: $(first_error)"; ok=0; }
+  done < <(pre_tenancy_migrations)
+  apply "$db" "$HERE/upgrade/seed_legacy.sql" || { fail "[harness] the legacy data loads :: $(first_error)"; ok=0; }
+  [ -f "$MIG_CORE" ] && [ -f "$MIG_DRILL" ] || ok=0
+  [ "$ok" -eq 1 ] && { apply "$db" "$MIG_CORE" || { fail "[harness] saas_core applies :: $(first_error)"; ok=0; }; }
+
+  if [ "$ok" -eq 1 ] && [ "$kind" = "byhand" ]; then
+    psql -X -q -v ON_ERROR_STOP=1 -d "$db" >/dev/null 2>"$WORK/apply.err" <<'SQL' || { fail "[harness] one organization, marked founding by hand :: $(first_error)"; ok=0; }
+insert into public.organizations (id, name) values ('7e57da7a-0000-4000-8000-000000000521', 'Marked by hand');
+alter table public.organizations add column is_founding boolean not null default false;
+update public.organizations set is_founding = true;
+SQL
+    got="$(psql -X -q -At -d "$db" -c "select ((select count(*) from public.organizations where is_founding) = 1 and not exists (select 1 from public.memberships))::int" 2>/dev/null)"
+    if [ "$ok" -eq 1 ] && [ "$got" = "1" ]; then
+      pass "[harness] started in flight, marked by hand ($mode): one organization is marked founding and nobody is a member of anything"
+    else
+      fail "[harness] started in flight, marked by hand ($mode): one organization is marked founding and nobody is a member of anything"
+      ok=0
+    fi
+  fi
+
+  if [ "$ok" -ne 1 ]; then
+    fail "[c52] started in flight ($mode): accounts banned and unbanned by statements that start while the migration runs :: not checked, the database could not be prepared or a migration is missing"
+    return
+  fi
+
+  python3 "$HERE/lib/in_flight_started.py" "$db" "$MIG_DRILL" "$mode" >"$WORK/started.out" 2>"$WORK/started.err"
+  while IFS= read -r line; do
+    case "$line" in
+      "ok	"*)   n=$((n + 1)); pass "${line#ok	}" ;;
+      "FAIL	"*) n=$((n + 1)); fail "${line#FAIL	}" ;;
+      "")       ;;
+      *)        echo "$line" ;;
+    esac
+  done <"$WORK/started.out"
+  # Four outcomes and the harness's own check, or the tool did not run to its end.
+  if [ "$n" -ne 5 ] || [ -s "$WORK/started.err" ]; then
+    fail "[harness] started in flight ($mode): lib/in_flight_started.py ran to its end :: $n of 5 lines; $(head -n 1 "$WORK/started.err" | cut -c 1-200)"
+  fi
+
+  # The harness leaves nothing of its own behind: no hook, no schema.
+  if [ "$(psql -X -q -At -d "$db" -c "select (to_regnamespace('drill_fly') is null and not exists (select 1 from pg_event_trigger where evtname like 'drill_fly%') and not exists (select 1 from pg_trigger where tgname like 'drill_fly%'))::int" 2>/dev/null)" = "1" ]; then
+    pass "[harness] started in flight ($mode): the harness's hooks and schema are gone again"
+  else
+    fail "[harness] started in flight ($mode): the harness's hooks and schema are gone again"
+  fi
+
+  # Whatever started in flight, the result is the same working database.
+  # (after_migration.sql names the organization the migration creates, so it
+  # is not run where the organization was made by hand.)
+  if [ "$kind" = "first" ]; then
+    psql -X -q -d "$db" -c "delete from auth.users where email ~ '^fly2-(ban|unban)-[0-9]+-[0-9]+@db-test[.]invalid\$'" >/dev/null 2>&1
+    suite "$db" "$HERE/upgrade/after_migration.sql"
+  fi
+}
+
 # --- rollback, statement by statement: criterion 47 -----------------------------
 #
 # RF-088: the Drill rollback, run without one wrapping transaction, passed
@@ -1373,6 +1462,9 @@ phase_in_flight_other reapply stepwise
 phase_in_flight_other reapply single
 phase_in_flight_other byhand stepwise
 phase_in_flight_other byhand single
+phase_in_flight_started first stepwise
+phase_in_flight_started first single
+phase_in_flight_started byhand stepwise
 
 # --- core: the foundation alone, twice ----------------------------------------
 
