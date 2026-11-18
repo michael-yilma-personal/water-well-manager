@@ -295,12 +295,45 @@ rollback_refuses() {
   fi
 }
 
-# 5. The test files, in order. The last two run migration files inside a
-#    transaction and so wait on the check above.
+# Decisions 27 and 30: on a first application with several organizations and
+# none marked founding, the Drill migration raises instead of picking one.
+first_run_refuses() {
+  local out="$TMP/first.out" rc
+  psql -X -q -At -v ON_ERROR_STOP=1 -v mig_drill="$MIG_DRILL" \
+    -f "$HERE/guards/first_run_refuses.sql" >"$out" 2>"$TMP/first.err"
+  rc=$?
+  if ! grep -q '^FIXTURE-READY$' "$out"; then
+    fail "[c27][c30] a first application with several organizations and none marked founding raises instead of picking one :: not checked, the fixture did not load: $(head -n 1 "$TMP/first.err")"
+  elif grep -q '^REACHED-END$' "$out" || [ "$rc" -eq 0 ]; then
+    fail "[c27][c30] a first application with several organizations and none marked founding raises instead of picking one :: the migration ran to its end"
+  elif ! grep -q -i 'founding' "$TMP/first.err"; then
+    fail "[c27][c30] a first application with several organizations and none marked founding raises instead of picking one :: it stopped, but on something else: $(grep -m 1 -E 'ERROR|FATAL' "$TMP/first.err" | cut -c 1-200)"
+  else
+    pass "[c27][c30] a first application with several organizations and none marked founding raises instead of picking one"
+  fi
+  # It ran inside a transaction that psql abandoned, so nothing may have changed.
+  if [ "$(psql -X -q -At -c "select ((select count(*) from public.organizations where is_founding) = 1 and not exists (select 1 from public.organizations where name = 'Second company (first run)'))::int" 2>/dev/null)" = "1" ]; then
+    pass "[c27][c30] ... and the database is as it was: one organization is marked, the test's is gone"
+  else
+    fail "[c27][c30] ... and the database is as it was: one organization is marked, the test's is gone :: the mark is missing or the test's rows were left behind"
+  fi
+}
+
+# 5. The test files, in order. The last three run migration or rollback files
+#    inside a transaction and so wait on the check above.
 for f in "$HERE"/sql/[0-9]*.sql; do
   case "$(basename "$f")" in
     80_reapply_in_transaction.sql)
-      if [ "$ready" -eq 1 ]; then run_file "$f"; else fail "[c31] second application of the Drill migration not tried :: see the transaction-control checks above"; fi
+      if [ "$ready" -eq 1 ]; then
+        first_run_refuses
+        run_file "$f"
+      else
+        fail "[c27][c30] first application with several organizations not tried :: see the transaction-control checks above"
+        fail "[c31] second application of the Drill migration not tried :: see the transaction-control checks above"
+      fi
+      ;;
+    85_drill_rollback_alone.sql)
+      if [ "$ready" -eq 1 ]; then run_file "$f"; else fail "[c14] the Drill rollback on its own not tried :: see the transaction-control checks above"; fi
       ;;
     90_rollback_in_transaction.sql)
       if [ "$ready" -eq 1 ]; then

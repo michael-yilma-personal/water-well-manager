@@ -1,7 +1,7 @@
 -- Criteria 6 and 7 on a database that held data before the tenancy
 -- migrations (upgrade/seed_legacy.sql). Run by supabase/tests/local.sh only:
 -- CI's database starts empty, so it cannot show a backfill.
--- plan: 34
+-- plan: 37
 begin;
 \ir ../lib/helpers.sql
 
@@ -77,6 +77,18 @@ select t.rows('[c11] the administrator reads the photo under the legacy path', '
   format('select name from storage.objects where bucket_id = ''drilling-photos'' and name = %L', t.uid('l_driller') || '/old.jpg'), 1);
 select t.none('[c11] the supervisor does not', 'l_super',
   format('select name from storage.objects where bucket_id = ''drilling-photos'' and name = %L', t.uid('l_driller') || '/old.jpg'));
+
+-- Decision 28, for a ban that was already in force when the migration ran:
+-- the ban is what deactivated that membership, so lifting it brings the
+-- membership back. Last in the file: the checks above need the ban in place.
+update auth.users set banned_until = null where id = t.uid('l_banned');
+select t.ok('[c28] an account banned before the migration is unbanned after it: its membership is active again',
+  $$ select t.m('l_banned') = 'Driller/active/D-9' $$);
+select t.rows('[c28] ... and it reads its borehole again', 'l_banned',
+  format('select id from public.boreholes where id = %L', t.rid('boreholes', 'l_banned')), 1);
+update auth.users set banned_until = null where id = t.uid('l_expired');
+select t.ok('[c24] clearing a ban that had run out before the migration leaves that membership active',
+  $$ select t.m('l_expired') = 'Supervisor/active/-' $$);
 
 rollback;
 select 'done';

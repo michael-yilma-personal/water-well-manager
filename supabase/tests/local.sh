@@ -35,8 +35,10 @@
 #             of Drill's in the database (section A, criterion 2's default).
 #   statement by statement (hosted)
 #             the Drill migration applied one statement per transaction on
-#             legacy data, with an installed build's insert tried after each
-#             statement (decision 29).
+#             legacy data, with an installed build's inserts (the four record
+#             tables and a photo upload) tried after each statement, and an
+#             account created after each statement tried once the migration
+#             is through (decision 29).
 #   rollback guard (hosted)
 #             the Drill rollback against two organizations that both hold
 #             records: it must raise and change nothing (decision 31).
@@ -350,7 +352,13 @@ phase_statement_by_statement() {
     for what in "[c29] drill_tenancy applies one statement at a time" \
                 "[c29] the states in between were looked at" \
                 "[c29] boreholes: an installed build's insert (no org_id) succeeds after every statement, once the column exists" \
-                "[c29] pipe_records: an installed build's insert (no org_id) succeeds after every statement, once the column exists"; do
+                "[c29] pipe_records: an installed build's insert (no org_id) succeeds after every statement, once the column exists" \
+                "[c29] drilling_events: an installed build's insert (no org_id) succeeds after every statement, once the column exists" \
+                "[c29] shift_logs: an installed build's insert (no org_id) succeeds after every statement, once the column exists" \
+                "[c29] photo upload: an installed build's upload to <user_id>/<file> succeeds after every statement" \
+                "[c29] read own borehole: the installed build still reads it after every statement" \
+                "[c29] read own photo: the installed build still reads it after every statement" \
+                "[c29] an account created between any two statements can insert (no org_id) once the migration is through"; do
       fail "$what :: not checked, a migration file or python3 is missing"
     done
     return
@@ -376,17 +384,63 @@ SQL
     fail "[c29] the states in between were looked at :: only ${n:-0} probe(s) ran"
   fi
 
-  for tbl in boreholes pipe_records; do
+  for tbl in boreholes pipe_records drilling_events shift_logs "photo upload" "read own borehole" "read own photo"; do
     what="[c29] $tbl: an installed build's insert (no org_id) succeeds after every statement, once the column exists"
+    case "$tbl" in
+      "photo upload") what="[c29] photo upload: an installed build's upload to <user_id>/<file> succeeds after every statement" ;;
+      "read own"*)    what="[c29] $tbl: the installed build still reads it after every statement" ;;
+    esac
+    seen="$(psql -X -q -At -d "$db" -c "select count(distinct stmt) from t_probe.results where tbl = '$tbl'" 2>/dev/null)"
     bad="$(psql -X -q -At -d "$db" -c "select count(*) || ' state(s) refuse it: ' || string_agg('after statement ' || stmt || ' -> ' || state || ' ' || left(coalesce(msg, ''), 70), '; ' order by stmt) from (select * from t_probe.results where tbl = '$tbl' and state <> '00000' order by stmt limit 40) x having count(*) > 0" 2>/dev/null)"
-    if [ "${n:-0}" -lt 3 ]; then
-      fail "$what :: not checked, the probe did not run"
+    if [ "${n:-0}" -lt 3 ] || [ "${seen:-0}" -lt 3 ]; then
+      fail "$what :: not checked, the probe did not run (${seen:-0} state(s) seen)"
     elif [ -n "$bad" ]; then
       fail "$what :: $bad"
     else
       pass "$what"
     fi
   done
+
+  # The accounts the probe created, one after each statement (the dashboard's
+  # "add user" while the migration is half done). Whenever it was created, an
+  # account must end up able to do what an installed build does: a borehole
+  # sent without org_id. Tried as each of them now that the migration is
+  # through; each attempt is undone.
+  what="[c29] an account created between any two statements can insert (no org_id) once the migration is through"
+  psql -X -q -v ON_ERROR_STOP=1 -d "$db" >/dev/null 2>"$WORK/accounts.err" <<'SQL'
+create table t_probe.accounts (stmt text, state text, msg text);
+do $accounts$
+declare
+  a record;
+begin
+  for a in select id, email from auth.users where email like 'window-%@db-test.invalid' order by email loop
+    begin
+      perform set_config('request.jwt.claims', json_build_object('sub', a.id, 'role', 'authenticated')::text, true);
+      perform set_config('role', 'authenticated', true);
+      insert into public.boreholes (id, name, created_by, recorded_at)
+        values (gen_random_uuid(), 'probe', a.id, now());
+      raise exception using errcode = 'TR001', message = 'undo';
+    exception
+      when sqlstate 'TR001' then
+        insert into t_probe.accounts values (substr(a.email, 8, 3), '00000', null);
+      when others then
+        insert into t_probe.accounts values (substr(a.email, 8, 3), sqlstate, sqlerrm);
+    end;
+  end loop;
+end
+$accounts$;
+SQL
+  seen="$(psql -X -q -At -d "$db" -c "select count(*) from t_probe.accounts" 2>/dev/null)"
+  bad="$(psql -X -q -At -d "$db" -c "select count(*) || ' of ' || (select count(*) from t_probe.accounts) || ' accounts are refused (' || min(state) || ' ' || left(min(msg), 60) || '): those created after statements ' || string_agg(stmt, ', ' order by stmt) from t_probe.accounts where state <> '00000' having count(*) > 0" 2>/dev/null)"
+  if [ "${seen:-0}" -lt 3 ]; then
+    fail "$what :: not checked, no such accounts were created: $(head -n 1 "$WORK/accounts.err" 2>/dev/null)"
+  elif [ -n "$bad" ]; then
+    fail "$what :: $bad"
+  else
+    pass "$what (${seen} accounts)"
+  fi
+  # The files below expect the legacy accounts and no others.
+  psql -X -q -d "$db" -c "delete from auth.users where email like 'window-%@db-test.invalid'" >/dev/null 2>&1
 
   # Applied this way the result must be the same working database.
   psql -X -q -d "$db" -c "drop schema t_probe cascade" >/dev/null 2>&1

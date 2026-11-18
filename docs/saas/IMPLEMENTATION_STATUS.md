@@ -6,8 +6,9 @@ Requirements: `docs/SAAS_ARCHITECTURE_PROPOSAL.md`. How the work is run: `docs/s
 
 - **Phase:** Phase 0 — Preparation (approved). Phase 1 is approved to start after Phase 0, on staging only; its production migration is not approved.
 - **Branch:** `saas/phase-1-tenancy`, branched from `saas/phase-0-preparation` at `8d07755`. Pull requests 3 (workflow tooling) and 4 (Phase 0) are open with green CI, awaiting the owner's merge, in that order.
-- **In progress:** Phase 1. The database fixes for RF-071 to RF-077 are committed (`5b3e1fe`) and green locally and in CI (TEST_RESULTS 46); the Test Engineer's validation and the tenth security review of them are running. The `admin-users` half of RF-072 is task P1-7, not started. Staging is not touched until the re-review passes.
-- **Next step:** triage the validation and the tenth review; then P1-7 (tests first); then apply to staging and run P1-3, P1-5, P1-6. **Do not check out `main` or any branch that predates the tooling until the pull requests are merged (RF-059).**
+- **In progress:** Phase 1. The tenth review (TEST_RESULTS 47) no longer blocks: no High in the database, changes requested (RF-079 to RF-087, three Medium). The validation left the database suite red on two confirmed defects (TEST_RESULTS 48). Tests first for decisions 39 to 43 and for P1-7, then the Developer. Staging is not touched until a review passes.
+- **Next step:** Test Engineer (write mode) for decisions 39 to 43 and P1-7; Developer; gates; validation and the eleventh review; then apply to staging and run P1-3, P1-5, P1-6. **Do not check out `main` or any branch that predates the tooling until the pull requests are merged (RF-059).**
+- **For the owner to look at:** `.claude/settings.json` was edited on 2026-11-17 at 20:38 (the guard hook commented out, which also makes the file invalid JSON). Not made by the Lead or an agent as far as can be told; left as found and not committed.
 - **Waiting on the owner:** the action recorded for RF-050 (deferred by the owner; does not block development); approval to delete the `probe` function from production (RF-049); confirmation of the staging rule (RF-054); branch protection on `main`; merging the workflow and Phase 0 pull requests so `main` stops carrying the production link files (RF-059).
 
 ## Phases
@@ -44,8 +45,8 @@ Defaults taken where the proposal left a decision open (each can be changed befo
 
 | Id | Task | Status | Evidence |
 |---|---|---|---|
-| P1-1 | Reusable foundation migration `saas_core`: organizations, memberships, platform administrators, audit log, helper functions | Implemented; green locally and in CI; fixes for RF-071 to RF-077 committed, **re-review running** | TEST_RESULTS 40 to 46 |
-| P1-2 | Drill migration `drill_tenancy`: founding organization, memberships from profiles, `org_id` on the four record tables, compatibility triggers for installed builds, organization-scoped policies for tables and photos | Implemented; green locally and in CI; fixes for RF-071 to RF-077 committed, **re-review running**; not yet on staging | TEST_RESULTS 40 to 46 |
+| P1-1 | Reusable foundation migration `saas_core`: organizations, memberships, platform administrators, audit log, helper functions | Implemented; green locally and in CI; tenth review: changes requested (RF-079 to RF-087), **fixes under way** | TEST_RESULTS 40 to 48 |
+| P1-2 | Drill migration `drill_tenancy`: founding organization, memberships from profiles, `org_id` on the four record tables, compatibility triggers for installed builds, organization-scoped policies for tables and photos | Implemented; green locally and in CI; tenth review: changes requested (RF-079 to RF-087), **fixes under way**; not yet on staging | TEST_RESULTS 40 to 48 |
 | P1-3 | Tenant-isolation suite `e2e/saas/tenant_isolation_e2e.py` and a fixture that creates a second organization on staging | Not started | — |
 | P1-4 | Schema check: every table in `public` has RLS and is organization-scoped or allowlisted; run in CI's database job | Done; runs in CI | TEST_RESULTS 44 |
 | P1-5 | Compatibility proof: the 21 existing suites, unchanged, pass against the migrated staging database (the current app sends no `org_id`, so it stands in for the installed 1.1.7 build) | Not started | — |
@@ -116,6 +117,27 @@ Defaults taken where the proposal left a decision open (each can be changed befo
 30. Legacy photos (`<user_id>/<file>`) belong to the founding organization only, as the proposal (5.3) says; this replaces the wider reading in criterion 11. Uploading to the legacy path needs an active membership (RF-074, RF-077).
 
 31. Re-applying the Drill migration does not re-enrol a removed member. The rollback refuses to run when more than one organization holds records. `anon` may execute none of the helper functions. Accepted without change: a member can learn whether a user id is in their own organization; a ban that expires is not mirrored; `23503` versus `42501` reveals whether a borehole id exists (RF-077).
+
+**E. Decisions after the tenth review and the validation (2026-11-17; numbers 32 to 38 are P1-7's, below)**
+
+39. The membership in the founding organization always follows the legacy tables once the Drill migration is through, whatever happened while it ran or while it was rolled back. The mirror triggers are created before the enrolment, so an account created, re-roled or banned at any point of the migration is not missed. Whenever the migration marks the founding organization (a first application, or a re-application after the Drill rollback alone), every existing founding membership is brought into line with its profile (role, badge) and with the account's ban. A member removed while the migration was in force is still not re-enrolled by a plain re-application (criterion 31) (RF-079, RF-082).
+40. Any direct change of a membership's status clears the mark that a ban deactivated it; an unban then leaves it as it is (RF-086).
+41. The Drill rollback also refuses when an organization other than the founding one has a membership (RF-081).
+42. `saas_core` leaves no point, applied one statement at a time on a database with a hosted project's default grants, at which `anon` or `authenticated` can insert, update or delete in a foundation table (RF-083).
+43. The legacy photo path needs an **active membership in the founding organization**: to upload, and to read one's own. This tightens criterion 30 (RF-087).
+44. Confirmed as specified: a ban leaves an `invited` membership alone; the founding Administrator reads no legacy photo whose owner is not a founding member. The message for an undecidable founding organization says how to add and set the flag by hand (RF-084).
+
+#### P1-7 acceptance criteria — `admin-users` authorises on membership (criterion 27, RF-072)
+
+`admin-users` stays the legacy crew function of the founding organization until `saas-members` replaces it in Phase 2. Its request and response shapes do not change, so the current dashboard and the existing crew suites work unchanged.
+
+32. The caller needs a valid session (otherwise 401) and an **active** membership with the role Administrator in the founding organization (otherwise 403). `profiles.role` is not consulted. With no founding organization the answer is 403.
+33. The list (GET) holds only accounts that have a membership in the founding organization, whatever its status; role and badge come from that membership.
+34. Changing a role, deactivating, deleting and reactivating need a target that has a membership in the founding organization. Any other id, existing or not, gets 404 "No such account" and nothing is changed; the two cases are indistinguishable.
+35. A target that also has a membership in another organization is refused with 409 and nothing is changed: a ban or a deletion acts on the whole account, and this function may not reach into another organization. (Managing such accounts belongs to `saas-members`.)
+36. Creating an account is unchanged; the new account ends with an active founding membership carrying the requested role and badge. The rules against changing or removing oneself stay.
+37. The decisions in 32, 34 and 35 are made by pure functions in `supabase/functions/admin-users/policy.ts` (no imports, no Deno or network use), so they are unit-tested in the gate: `callerMayAdminister(foundingOrgId, callerMemberships)` returns a boolean; `targetDecision(foundingOrgId, targetMemberships)` returns `'ok'`, `'not-found'` or `'other-organization'`; a membership is `{ orgId, role, status }`. `index.ts` uses them and nothing else to decide. The function as deployed is proved on staging with real sign-ins and a second organization, in the tenant-isolation suite (P1-3).
+38. The function needs the tenancy migrations: it is deployed after them, never before. On production both are the owner's step.
 
 ### Phase 0 — Preparation (approved 2026-11-15)
 

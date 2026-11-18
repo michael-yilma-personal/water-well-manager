@@ -16,7 +16,7 @@
 -- file when one of them is missing or contains transaction control.
 -- supabase/tests/local.sh additionally compares a full catalog snapshot
 -- before the migration and after the rollback on a scratch database.
--- plan: 104
+-- plan: 105
 begin;
 \ir ../lib/helpers.sql
 
@@ -78,6 +78,14 @@ select t.ok('[c14] after rollback: the pre-tenancy functions are still there',
   $$ select to_regprocedure('public.is_admin()') is not null and to_regprocedure('public.is_reviewer()') is not null
         and to_regprocedure('public.handle_new_user()') is not null and to_regprocedure('public.pipe_records_guard_update()') is not null
         and to_regprocedure('public.touch_modified_at()') is not null $$);
+-- Added in validation. The restored policies apply to every role, the
+-- signed-out one included, and call these two; the migration had taken them
+-- from signed-out clients (decision 31). Without EXECUTE back, a signed-out
+-- read would be an error where it was an empty result before tenancy.
+select t.ok('[c14] after rollback: every API role can call is_admin() and is_reviewer() again, as the restored policies need',
+  $$ select bool_and(has_function_privilege(r, f, 'EXECUTE'))
+     from unnest(array['anon', 'authenticated', 'service_role']) r,
+          unnest(array['public.is_admin()', 'public.is_reviewer()']) f $$);
 select t.ok('[c14] after rollback: the five pre-tenancy tables are still there, with row level security',
   $$ select count(*) = 5 and bool_and(relrowsecurity) from pg_class
      where oid in ('public.profiles'::regclass, 'public.boreholes'::regclass, 'public.pipe_records'::regclass,

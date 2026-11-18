@@ -8,7 +8,7 @@
 -- other organization the owner belongs to does not. The founding organization
 -- is the one that exists before this file creates A and B; a small founding
 -- cast (f_*) is added to the usual fixture for it.
--- plan: 178
+-- plan: 182
 begin;
 \ir ../lib/helpers.sql
 
@@ -144,6 +144,13 @@ insert into t.read_cases values
   ('f_driller',  t.p('f_dual', 'old.jpg'),    false, 'c30 legacy path: a founding colleague'),
   ('f_gone',     t.p('f_gone', 'old.jpg'),    false, 'c18 legacy path: the owner, a deactivated founding member'),
   ('f_admin',    t.p('org_a', 'a_driller', 'p.jpg'), false, 'new path: the founding organization''s Administrator has no reach into A'),
+  -- Added in validation: the legacy path names no organization, and an
+  -- installed build signed in to an account of another company still uploads
+  -- there. Such a photo is not the founding organization's to read.
+  ('f_admin',    t.p('a_driller', 'old.jpg'), false, 'c12 c30 legacy path: the founding organization''s Administrator; the owner belongs to another organization only'),
+  ('f_admin',    t.p('dual', 'old.jpg'),      false, 'c12 c30 legacy path: the founding organization''s Administrator; the owner belongs to two other organizations'),
+  ('f_admin',    t.p('a_gone', 'old.jpg'),    false, 'c12 c30 legacy path: the founding organization''s Administrator; the owner was a member of another organization'),
+  ('f_admin',    t.p('stranger', 'old.jpg'),  false, 'c12 c30 legacy path: the founding organization''s Administrator; the owner belongs to no organization'),
   ('b_admin',    t.p('a_gone', 'old.jpg'),    false, 'legacy path: Administrator of another organization; the owner is deactivated'),
   ('a_super',    t.p('a_driller', 'old.jpg'), false, 'legacy path: a Supervisor'),
   ('a_driller2', t.p('a_driller', 'old.jpg'), false, 'legacy path: a colleague'),
