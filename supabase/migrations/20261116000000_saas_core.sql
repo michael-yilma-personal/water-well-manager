@@ -17,68 +17,77 @@
 -- Tables
 -- ---------------------------------------------------------------------------
 
-create table if not exists public.organizations (
-  id         uuid primary key default gen_random_uuid(),
-  name       text not null,
-  created_at timestamptz not null default now()
-);
+-- One DO block, which is one statement. A hosted Supabase project hands every
+-- new table in public to the API roles, in full, the moment it is created (a
+-- database built from migrations alone, the local image and CI, hands them
+-- nothing). If creating, enabling row level security and revoking were
+-- separate statements and this file were applied one statement at a time, a
+-- signed-out client could write to these tables in between, and the rows
+-- would stay. Inside one statement there is no in-between.
+do $$
+begin
+  create table if not exists public.organizations (
+    id         uuid primary key default gen_random_uuid(),
+    name       text not null,
+    created_at timestamptz not null default now()
+  );
 
-create table if not exists public.memberships (
-  -- No cascade: an organization that still has members is not deleted by
-  -- accident.
-  org_id       uuid not null references public.organizations (id),
-  -- Cascade: deleting an account removes its memberships, so an account stays
-  -- deletable.
-  user_id      uuid not null references auth.users (id) on delete cascade,
-  -- Free text here; the application constrains it to its own vocabulary.
-  role         text not null,
-  status       text not null default 'active'
-                 check (status in ('invited', 'active', 'deactivated')),
-  badge_number text,
-  created_at   timestamptz not null default now(),
-  primary key (org_id, user_id)
-);
+  create table if not exists public.memberships (
+    -- No cascade: an organization that still has members is not deleted by
+    -- accident.
+    org_id       uuid not null references public.organizations (id),
+    -- Cascade: deleting an account removes its memberships, so an account
+    -- stays deletable.
+    user_id      uuid not null references auth.users (id) on delete cascade,
+    -- Free text here; the application constrains it to its own vocabulary.
+    role         text not null,
+    status       text not null default 'active'
+                   check (status in ('invited', 'active', 'deactivated')),
+    badge_number text,
+    created_at   timestamptz not null default now(),
+    primary key (org_id, user_id)
+  );
+
+  create table if not exists public.platform_admins (
+    user_id uuid primary key references auth.users (id) on delete cascade
+  );
+
+  create table if not exists public.audit_log (
+    id       bigint generated always as identity primary key,
+    at       timestamptz not null default now(),
+    -- Deliberately not foreign keys: the log must outlive the account and the
+    -- organization it describes.
+    actor_id uuid,
+    org_id   uuid,
+    action   text not null,
+    target   text,
+    details  jsonb
+  );
+
+  alter table public.organizations   enable row level security;
+  alter table public.memberships     enable row level security;
+  alter table public.platform_admins enable row level security;
+  alter table public.audit_log       enable row level security;
+
+  -- Privileges are stated in full rather than inherited. Revoking everything
+  -- and granting exactly what is needed ends in the same place from either
+  -- start: signed-in users may SELECT (RLS decides which rows), the service
+  -- role does the writing, a signed-out client has nothing.
+  revoke all on public.organizations, public.memberships, public.platform_admins, public.audit_log
+    from anon, authenticated;
+  revoke all on sequence public.audit_log_id_seq from anon, authenticated;
+  grant select on public.organizations, public.memberships, public.platform_admins, public.audit_log
+    to authenticated;
+  grant all on public.organizations, public.memberships, public.platform_admins, public.audit_log
+    to service_role;
+  grant usage, select on sequence public.audit_log_id_seq to service_role;
+end
+$$;
 
 -- The primary key leads with org_id; "which organizations is this user in"
 -- needs the other direction.
 create index if not exists memberships_user_id_idx
   on public.memberships (user_id);
-
-create table if not exists public.platform_admins (
-  user_id uuid primary key references auth.users (id) on delete cascade
-);
-
-create table if not exists public.audit_log (
-  id       bigint generated always as identity primary key,
-  at       timestamptz not null default now(),
-  -- Deliberately not foreign keys: the log must outlive the account and the
-  -- organization it describes.
-  actor_id uuid,
-  org_id   uuid,
-  action   text not null,
-  target   text,
-  details  jsonb
-);
-
-alter table public.organizations   enable row level security;
-alter table public.memberships     enable row level security;
-alter table public.platform_admins enable row level security;
-alter table public.audit_log       enable row level security;
-
--- Privileges are stated in full rather than inherited. A hosted Supabase
--- project hands every new table to the API roles by default; a database built
--- from migrations alone (the local image, CI) hands them nothing. Revoking
--- everything and granting exactly what is needed ends in the same place from
--- either start: signed-in users may SELECT (RLS decides which rows), the
--- service role does the writing, a signed-out client has nothing.
-revoke all on public.organizations, public.memberships, public.platform_admins, public.audit_log
-  from anon, authenticated;
-revoke all on sequence public.audit_log_id_seq from anon, authenticated;
-grant select on public.organizations, public.memberships, public.platform_admins, public.audit_log
-  to authenticated;
-grant all on public.organizations, public.memberships, public.platform_admins, public.audit_log
-  to service_role;
-grant usage, select on sequence public.audit_log_id_seq to service_role;
 
 -- ---------------------------------------------------------------------------
 -- Helper functions

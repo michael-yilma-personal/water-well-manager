@@ -7,9 +7,18 @@
  * is the only thing that uses it.
  *
  * Every request is checked twice: the caller must present a valid session, and
- * that session's profile must have the Administrator role. The service-role
- * client bypasses Row Level Security by design, so the check is the only thing
+ * that account must hold an active Administrator membership in the founding
+ * organization (profiles.role is not consulted). The service-role client
+ * bypasses Row Level Security by design, so the check is the only thing
  * standing between a driller's token and everyone else's accounts.
+ *
+ * This is the crew function of the FOUNDING organization and of nothing else.
+ * It lists, re-roles, bans and deletes only accounts that are members of it,
+ * and refuses one that also belongs to another organization: a ban or a
+ * deletion acts on the whole account. The decisions are in ./policy.ts.
+ *
+ * Needs the tenancy migrations (memberships, founding_org_id()): deploy it
+ * after them, never before.
  *
  * Deletion is deliberately not always a delete. A driller who has logged pipe
  * records is deactivated rather than removed: their rows carry created_by, and
@@ -18,6 +27,7 @@
  */
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { callerMayAdminister, targetDecision, type Membership } from './policy.ts';
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -40,7 +50,48 @@ const SERVICE_KEY =
 const ANON_KEY =
   Deno.env.get('SUPABASE_ANON_KEY') ?? Deno.env.get('SUPABASE_PUBLISHABLE_KEY')!;
 
-/** Resolve the caller and confirm they are an administrator. */
+type Admin = ReturnType<typeof createClient>;
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** The founding organization's id, or null when there is none. Throws when it cannot be read. */
+async function foundingOrgId(admin: Admin): Promise<string | null> {
+  const { data, error } = await admin.rpc('founding_org_id');
+  if (error) throw new Error(error.message);
+  return typeof data === 'string' && data ? data : null;
+}
+
+/** Every membership of one account, in any organization. Throws when they cannot be read. */
+async function membershipsOf(admin: Admin, userId: string): Promise<Membership[]> {
+  const { data, error } = await admin
+    .from('memberships')
+    .select('org_id, role, status')
+    .eq('user_id', userId);
+  if (error) throw new Error(error.message);
+  return (data ?? []).map((m) => ({ orgId: m.org_id, role: m.role, status: m.status }));
+}
+
+/**
+ * Null when this function may act on the account; otherwise the refusal.
+ * An id that is no account, one that is not even an id, and an account of
+ * another organization all get the same 404.
+ */
+async function refuseTarget(admin: Admin, founding: string, id: unknown) {
+  const notFound = () => json({ error: 'No such account' }, 404);
+  if (typeof id !== 'string' || !UUID.test(id)) return notFound();
+
+  const decision = targetDecision(founding, await membershipsOf(admin, id));
+  if (decision === 'not-found') return notFound();
+  if (decision === 'other-organization') {
+    return json(
+      { error: 'This account also belongs to another organization and cannot be managed here' },
+      409,
+    );
+  }
+  return null;
+}
+
+/** Resolve the caller and confirm they administer the founding organization. */
 async function requireAdmin(req: Request) {
   const authHeader = req.headers.get('Authorization') ?? '';
   if (!authHeader.startsWith('Bearer ')) {
@@ -56,21 +107,27 @@ async function requireAdmin(req: Request) {
     return { error: json({ error: 'Session is not valid' }, 401) };
   }
 
+  // The token above only says who is calling. What they may do is read with
+  // the service role, from memberships.
   const admin = createClient(SUPABASE_URL, SERVICE_KEY);
-  const { data: profile } = await admin
-    .from('profiles')
-    .select('role')
-    .eq('id', userData.user.id)
-    .single();
-
-  if (profile?.role !== 'Administrator') {
+  let founding: string | null;
+  let allowed: boolean;
+  try {
+    founding = await foundingOrgId(admin);
+    allowed = callerMayAdminister(founding, await membershipsOf(admin, userData.user.id));
+  } catch (err) {
+    return { error: json({ error: err instanceof Error ? err.message : String(err) }, 500) };
+  }
+  // `allowed` is the decision; it is never true without a founding
+  // organization, and the second test only tells the compiler so.
+  if (!allowed || !founding) {
     return { error: json({ error: 'Administrators only' }, 403) };
   }
-  return { admin, callerId: userData.user.id };
+  return { admin, callerId: userData.user.id, founding };
 }
 
 /** How many drilling rows an account authored, across every table. */
-async function recordCounts(admin: ReturnType<typeof createClient>, userId: string) {
+async function recordCounts(admin: Admin, userId: string) {
   const tables = ['boreholes', 'pipe_records', 'drilling_events', 'shift_logs'];
   let total = 0;
   for (const t of tables) {
@@ -88,7 +145,7 @@ Deno.serve(async (req) => {
 
   const auth = await requireAdmin(req);
   if ('error' in auth) return auth.error;
-  const { admin, callerId } = auth;
+  const { admin, callerId, founding } = auth;
 
   try {
     // --- list the crew ----------------------------------------------------
@@ -96,27 +153,37 @@ Deno.serve(async (req) => {
       const { data: list, error } = await admin.auth.admin.listUsers({ perPage: 200 });
       if (error) return json({ error: error.message }, 500);
 
-      const { data: profiles } = await admin
-        .from('profiles')
-        .select('id, name, role, badge_number');
+      // The crew is the founding organization's members, whatever their
+      // status; role and badge are the membership's.
+      const { data: members, error: memErr } = await admin
+        .from('memberships')
+        .select('user_id, role, badge_number')
+        .eq('org_id', founding);
+      if (memErr) return json({ error: memErr.message }, 500);
+      const memberById = new Map((members ?? []).map((m) => [m.user_id, m]));
+
+      const { data: profiles } = await admin.from('profiles').select('id, name');
       const byId = new Map((profiles ?? []).map((p) => [p.id, p]));
 
       const users = await Promise.all(
-        list.users.map(async (u) => {
-          const p = byId.get(u.id);
-          return {
-            id: u.id,
-            email: u.email,
-            name: p?.name ?? u.email?.split('@')[0] ?? '',
-            role: p?.role ?? 'Driller',
-            badgeNumber: p?.badge_number ?? '',
-            createdAt: u.created_at,
-            lastSignInAt: u.last_sign_in_at,
-            deactivated: Boolean(u.banned_until && new Date(u.banned_until) > new Date()),
-            records: await recordCounts(admin, u.id),
-            isSelf: u.id === callerId,
-          };
-        })
+        list.users
+          .filter((u) => memberById.has(u.id))
+          .map(async (u) => {
+            const p = byId.get(u.id);
+            const m = memberById.get(u.id)!;
+            return {
+              id: u.id,
+              email: u.email,
+              name: p?.name ?? u.email?.split('@')[0] ?? '',
+              role: m.role,
+              badgeNumber: m.badge_number ?? '',
+              createdAt: u.created_at,
+              lastSignInAt: u.last_sign_in_at,
+              deactivated: Boolean(u.banned_until && new Date(u.banned_until) > new Date()),
+              records: await recordCounts(admin, u.id),
+              isSelf: u.id === callerId,
+            };
+          })
       );
       users.sort((a, b) => a.role.localeCompare(b.role) || a.name.localeCompare(b.name));
       return json({ users });
@@ -159,6 +226,8 @@ Deno.serve(async (req) => {
       const { id } = await req.json();
       if (!id) return json({ error: 'id is required' }, 400);
       if (id === callerId) return json({ error: 'You cannot remove your own account' }, 400);
+      const refused = await refuseTarget(admin, founding, id);
+      if (refused) return refused;
 
       const records = await recordCounts(admin, id);
 
@@ -190,6 +259,8 @@ Deno.serve(async (req) => {
         // Demoting yourself could leave the project with no administrator,
         // and nobody left who could undo it from the dashboard.
         if (id === callerId) return json({ error: 'You cannot change your own role' }, 400);
+        const refused = await refuseTarget(admin, founding, id);
+        if (refused) return refused;
 
         const { data, error } = await admin
           .from('profiles')
@@ -203,6 +274,8 @@ Deno.serve(async (req) => {
 
       // --- bring a deactivated account back ---------------------------------
       if (action !== 'reactivate') return json({ error: 'Unknown action' }, 400);
+      const refused = await refuseTarget(admin, founding, id);
+      if (refused) return refused;
 
       // Deactivation must be reversible: doing it by mistake should not cost
       // someone their account, and the alternative is recreating them, which

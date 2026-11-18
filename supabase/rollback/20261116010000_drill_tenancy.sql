@@ -6,8 +6,11 @@
 --
 -- What is lost: org_id on every record. With records in a single organization
 -- that loses nothing. Once a second organization holds records, dropping
--- org_id would MERGE the companies' records under the old global roles, so
--- the first statement below refuses to go on in that case.
+-- org_id would MERGE the companies' records under the old global roles; and
+-- once another organization has a member, that member would join the one
+-- pool (its Administrator as an Administrator of everything, wherever the
+-- legacy profile says so). The first statement below refuses to go on in
+-- either case.
 --
 -- profiles.role and badge_number were kept in step with the founding
 -- organization's memberships by the mirroring triggers, so the old policies
@@ -23,7 +26,7 @@
 -- and go with its rollback. No transaction statements: the caller wraps it.
 
 -- ---------------------------------------------------------------------------
--- Guard: never merge two companies' records
+-- Guard: never merge two companies
 -- ---------------------------------------------------------------------------
 
 -- First, and before anything is changed, so that it holds even when this
@@ -34,6 +37,8 @@ declare
   t text;
   parts text[] := '{}';
   holders bigint := 0;
+  flagged boolean := false;
+  others bigint := 0;
 begin
   foreach t in array array['boreholes', 'pipe_records', 'drilling_events', 'shift_logs']
   loop
@@ -51,6 +56,23 @@ begin
 
   if holders > 1 then
     raise exception 'Refusing to roll back: % organizations hold records. Dropping org_id would merge them into one pool that the pre-tenancy policies show to every reviewer.', holders;
+  end if;
+
+  -- Members of any organization but the founding one, whatever their status.
+  -- Once the founding flag is gone (a rollback run twice) there is nothing
+  -- left to tell by, and nothing left to protect: skipped. With the column
+  -- there and no organization flagged, more than one organization with
+  -- members is refused.
+  if to_regclass('public.memberships') is not null and exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'organizations' and column_name = 'is_founding'
+  ) then
+    execute 'select coalesce(bool_or(o.is_founding), false) from public.organizations o' into flagged;
+    execute 'select count(distinct m.org_id) from public.memberships m '
+            'join public.organizations o on o.id = m.org_id where not o.is_founding' into others;
+    if (flagged and others > 0) or others > 1 then
+      raise exception 'Refusing to roll back: % organization(s) other than the founding one have members. The pre-tenancy policies know no organizations and would treat those members as part of the one pool. Remove those memberships first.', others;
+    end if;
   end if;
 end
 $$;
@@ -121,6 +143,7 @@ drop trigger if exists boreholes_org_guard on public.boreholes;
 drop trigger if exists pipe_records_org_guard on public.pipe_records;
 drop trigger if exists drilling_events_org_guard on public.drilling_events;
 drop trigger if exists shift_logs_org_guard on public.shift_logs;
+drop trigger if exists memberships_ban_mark_guard on public.memberships;
 
 drop function if exists public.mirror_ban_to_membership();
 drop function if exists public.mirror_profile_to_membership();
@@ -128,6 +151,8 @@ drop function if exists public.boreholes_org_guard();
 drop function if exists public.borehole_child_org_guard();
 drop function if exists public.shares_org_as(uuid, text[]);
 drop function if exists public.reads_legacy_photos_of(uuid);
+drop function if exists public.is_founding_member();
+drop function if exists public.membership_ban_mark_guard();
 drop function if exists public.uuid_or_null(text);
 drop function if exists public.founding_org_id();
 

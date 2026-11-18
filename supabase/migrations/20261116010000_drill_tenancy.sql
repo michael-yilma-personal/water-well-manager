@@ -4,11 +4,11 @@
 --
 -- Installed builds (1.1.7), the current dashboard and the admin-users Edge
 -- Function know nothing about organizations and are not changed here:
---   - they send no org_id: triggers fill it in (section 4);
+--   - they send no org_id: triggers fill it in (section 6);
 --   - they read and write profiles.role and badge_number, and ban accounts:
 --     triggers mirror that into the membership in the FOUNDING organization,
---     and only there (section 5);
---   - they store photos under <user_id>/<file>: still accepted (section 8).
+--     and only there (section 3);
+--   - they store photos under <user_id>/<file>: still accepted (section 9).
 --
 -- Existing data moves into one founding organization. Nothing about an
 -- existing row changes except that it gains org_id; in particular
@@ -41,7 +41,7 @@ alter table public.memberships
   check (role in ('Driller', 'Data Logger', 'Supervisor', 'Administrator'));
 
 -- ---------------------------------------------------------------------------
--- 2. The founding organization and its members
+-- 2. The founding organization
 -- ---------------------------------------------------------------------------
 --
 -- The founding organization is the one the pre-tenancy data, accounts and
@@ -60,7 +60,38 @@ create unique index if not exists organizations_one_founding_idx
 alter table public.memberships
   add column if not exists deactivated_by_ban boolean not null default false;
 
--- Null when there is none (never the case after this migration). Used only
+-- The mark means "the deactivation in force is a ban's", so it cannot outlive
+-- that deactivation. Any change of status made directly (not by the ban
+-- mirror of section 3, which sets the mark in the same statement) clears it:
+-- a membership reactivated and then deactivated on purpose while the account
+-- was banned stays deactivated when the ban is lifted.
+create or replace function public.membership_ban_mark_guard()
+returns trigger
+language plpgsql
+set search_path = public
+as $$
+begin
+  if new.status <> 'deactivated' then
+    new.deactivated_by_ban := false;
+  elsif tg_op = 'UPDATE'
+        and new.status is distinct from old.status
+        and new.deactivated_by_ban is not distinct from old.deactivated_by_ban then
+    new.deactivated_by_ban := false;
+  end if;
+  return new;
+end;
+$$;
+
+do $$
+begin
+  drop trigger if exists memberships_ban_mark_guard on public.memberships;
+  create trigger memberships_ban_mark_guard
+    before insert or update on public.memberships
+    for each row execute function public.membership_ban_mark_guard();
+end
+$$;
+
+-- Null when there is none (never the case once section 4 has run). Used only
 -- inside other security definer functions, so no client role may call it.
 create or replace function public.founding_org_id()
 returns uuid
@@ -74,33 +105,195 @@ $$;
 revoke execute on function public.founding_org_id() from public, anon, authenticated;
 grant execute on function public.founding_org_id() to service_role;
 
--- First application only (no organization is flagged yet): flag the founding
--- organization, creating it when the database has none, and enrol every
--- existing account with the role and badge its profile holds. A banned
--- account is deactivated; a ban that has run out is not a ban.
+-- ---------------------------------------------------------------------------
+-- 3. Profiles and bans are mirrored into the founding membership
+-- ---------------------------------------------------------------------------
 --
--- Applying this file again skips the whole block, so a member who was removed
--- since is not enrolled a second time. An empty database gets the
--- organization too, so that a fresh install behaves like the migrated one.
+-- Until the apps manage memberships themselves, profiles.role, badge_number
+-- and the account ban remain where roles and deactivation are edited. The
+-- policies no longer read them, so each change is copied to the membership.
+--
+-- Only ever to the membership in the FOUNDING organization. The legacy
+-- tables are global and so is whoever edits them (admin-users acts for the
+-- founding organization's Administrator); copying into any other
+-- organization would let that person re-role, deactivate or reactivate
+-- another company's members. An account with no founding membership is left
+-- alone.
+--
+-- Created BEFORE the members are enrolled (section 4), so that an account
+-- created, re-roled or banned at any point of this migration is not missed:
+-- until an organization is flagged these do nothing, and the enrolment reads
+-- profiles and bans as they are at that moment; from then on these carry
+-- every change.
+
+create or replace function public.mirror_profile_to_membership()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  founding uuid := public.founding_org_id();
+begin
+  if founding is null then
+    return null;
+  end if;
+
+  if tg_op = 'INSERT' then
+    -- What account creation has always meant: a new member of the (founding)
+    -- organization, whether or not other organizations exist by now.
+    insert into public.memberships (org_id, user_id, role, badge_number)
+    values (founding, new.id, new.role, new.badge_number)
+    on conflict (org_id, user_id) do nothing;
+    return null;
+  end if;
+
+  -- Only the column that changed is copied. Anyone may edit their own badge;
+  -- if that also copied profiles.role, an account whose legacy role is
+  -- higher than its membership role would promote itself by doing so.
+  -- Status is never touched: a role change must not reactivate anyone.
+  if new.role is distinct from old.role then
+    update public.memberships m
+    set role = new.role
+    where m.org_id = founding and m.user_id = new.id;
+  end if;
+  if new.badge_number is distinct from old.badge_number then
+    update public.memberships m
+    set badge_number = new.badge_number
+    where m.org_id = founding and m.user_id = new.id;
+  end if;
+  return null;
+end;
+$$;
+
+do $$
+begin
+  drop trigger if exists profiles_mirror_membership on public.profiles;
+  create trigger profiles_mirror_membership
+    after insert or update on public.profiles
+    for each row execute function public.mirror_profile_to_membership();
+end
+$$;
+
+-- A ban deactivates the founding membership; lifting it reactivates that
+-- membership, and only if the ban is what deactivated it. Without this a
+-- token issued before the ban would keep reading until it expires. A ban
+-- whose date has passed counts as lifted. 'invited' is never touched.
+create or replace function public.mirror_ban_to_membership()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  founding uuid := public.founding_org_id();
+begin
+  if new.banned_until is not null and new.banned_until > now() then
+    update public.memberships m
+    set status = 'deactivated', deactivated_by_ban = true
+    where m.org_id = founding and m.user_id = new.id and m.status = 'active';
+  else
+    update public.memberships m
+    set status = 'active', deactivated_by_ban = false
+    where m.org_id = founding and m.user_id = new.id
+      and m.status = 'deactivated' and m.deactivated_by_ban;
+  end if;
+  return null;
+end;
+$$;
+
+-- No column list: the WHEN clause is what matters, and it holds however the
+-- auth server phrases its UPDATE. Sign-ins update auth.users too; for those
+-- the clause is false and the function is never called.
+do $$
+begin
+  drop trigger if exists on_auth_user_ban_changed on auth.users;
+  create trigger on_auth_user_ban_changed
+    after update on auth.users
+    for each row
+    when (old.banned_until is distinct from new.banned_until)
+    execute function public.mirror_ban_to_membership();
+end
+$$;
+
+-- ---------------------------------------------------------------------------
+-- 4. The founding organization is flagged and its members enrolled
+-- ---------------------------------------------------------------------------
+--
+-- One DO block, so one statement: the flag and the memberships appear
+-- together, and the triggers of section 3 take over from exactly there.
+--
+-- It does its work on a FIRST application, which is any of:
+--   - no organization is flagged yet (never applied, or applied again after
+--     this migration's rollback, which drops the flag): the founding
+--     organization is flagged, and created when the database has none, so
+--     that a fresh install behaves like the migrated one;
+--   - the record tables carry no org_id yet: this migration is not in force,
+--     however the flag came to be set;
+--   - the founding organization has no membership at all, however its flag
+--     came to be set (for instance by hand, as the error below asks).
+-- Then:
+--   - Every membership the founding organization already has is brought into
+--     line with the legacy tables, which were the only place roles, badges
+--     and bans were edited while this migration was not in force (after its
+--     rollback the memberships stay and the mirror is gone). Role and badge
+--     come from the profile. Status comes from the ban alone, because under
+--     the legacy model a ban is the only deactivation: banned is deactivated
+--     and marked as the ban's doing, not banned is active. 'invited' is left
+--     as it is. A ban that has run out is not a ban.
+--   - Every account with no founding membership is enrolled with the role
+--     and badge its profile holds; a banned one is deactivated.
+--
+-- A plain re-application (flagged, in force, has members) skips all of it:
+-- memberships are managed on their own by then, a direct deactivation must
+-- stay, and a member who was removed is not enrolled a second time.
 do $$
 declare
   orgs bigint;
-  founding uuid;
+  founding uuid := public.founding_org_id();
+  first_application boolean;
 begin
-  if public.founding_org_id() is not null then
+  first_application := founding is null
+    or not exists (
+      select 1 from information_schema.columns
+      where table_schema = 'public' and table_name = 'boreholes' and column_name = 'org_id')
+    or not exists (select 1 from public.memberships m where m.org_id = founding);
+  if not first_application then
     return;
   end if;
 
-  select count(*) into orgs from public.organizations;
-  if orgs = 0 then
-    insert into public.organizations (name, is_founding)
-    values ('Founding organization', true)
-    returning id into founding;
-  elsif orgs = 1 then
-    update public.organizations set is_founding = true returning id into founding;
-  else
-    raise exception 'Cannot tell which of % organizations is the founding one. Set organizations.is_founding on it, then apply this migration again.', orgs;
+  -- Waits for profile writes already under way (an account being created or
+  -- re-roled whose trigger saw no founding organization yet) and holds new
+  -- ones until this statement is through, so none falls between the two.
+  lock table public.profiles in share row exclusive mode;
+
+  if founding is null then
+    select count(*) into orgs from public.organizations;
+    if orgs = 0 then
+      insert into public.organizations (name, is_founding)
+      values ('Founding organization', true)
+      returning id into founding;
+    elsif orgs = 1 then
+      update public.organizations set is_founding = true returning id into founding;
+    else
+      -- A failed application takes the flag column away again when the file
+      -- is applied as one transaction, so the instructions add it too.
+      raise exception 'Cannot tell which of % organizations is the founding one (the one the existing accounts, records and photos belong to). Mark it by hand, then apply this migration again: ALTER TABLE public.organizations ADD COLUMN IF NOT EXISTS is_founding boolean NOT NULL DEFAULT false; UPDATE public.organizations SET is_founding = true WHERE id = ''<id of the founding organization>'';', orgs;
+    end if;
   end if;
+
+  update public.memberships m
+  set role = p.role,
+      badge_number = p.badge_number,
+      status = case
+                 when m.status = 'invited' then m.status
+                 when u.banned_until > now() then 'deactivated'
+                 else 'active'
+               end,
+      deactivated_by_ban = m.status <> 'invited' and coalesce(u.banned_until > now(), false)
+  from public.profiles p
+  join auth.users u on u.id = p.id
+  where m.org_id = founding and m.user_id = p.id;
 
   insert into public.memberships (org_id, user_id, role, status, deactivated_by_ban, badge_number)
   select founding, p.id, p.role,
@@ -114,7 +307,7 @@ end
 $$;
 
 -- ---------------------------------------------------------------------------
--- 3. org_id on the four record tables
+-- 5. org_id on the four record tables
 -- ---------------------------------------------------------------------------
 --
 -- The column is added WITH the founding organization as a constant default.
@@ -122,8 +315,8 @@ $$;
 -- so no trigger fires and modified_at stays where it was. SET NOT NULL then
 -- fails the migration rather than leave a row without an organization.
 --
--- The default stays until the triggers of section 4 exist and is dropped
--- only then (end of section 4). Dropped any earlier, an installed build's
+-- The default stays until the triggers of section 6 exist and is dropped
+-- only then (end of section 6). Dropped any earlier, an installed build's
 -- insert would fail on a null org_id (23502), which the app treats as
 -- permanent and drops from its outbox.
 
@@ -153,7 +346,7 @@ end
 $$;
 
 -- ---------------------------------------------------------------------------
--- 4. The organization of a row is decided here, not by the client
+-- 6. The organization of a row is decided here, not by the client
 -- ---------------------------------------------------------------------------
 --
 -- These run for every role, the service role included. They are security
@@ -269,7 +462,7 @@ begin
 end
 $$;
 
--- The triggers now fill org_id, so the temporary default of section 3 goes:
+-- The triggers now fill org_id, so the temporary default of section 5 goes:
 -- from here a borehole sent without an organization is decided by the
 -- author's membership, not by a constant.
 alter table public.boreholes       alter column org_id drop default;
@@ -278,112 +471,7 @@ alter table public.drilling_events alter column org_id drop default;
 alter table public.shift_logs      alter column org_id drop default;
 
 -- ---------------------------------------------------------------------------
--- 5. Profiles and bans are mirrored into the founding membership
--- ---------------------------------------------------------------------------
---
--- Until the apps manage memberships themselves, profiles.role, badge_number
--- and the account ban remain where roles and deactivation are edited. The
--- policies no longer read them, so each change is copied to the membership.
---
--- Only ever to the membership in the FOUNDING organization. The legacy
--- tables are global and so is whoever edits them (admin-users acts for the
--- founding organization's Administrator); copying into any other
--- organization would let that person re-role, deactivate or reactivate
--- another company's members. An account with no founding membership is left
--- alone.
-
-create or replace function public.mirror_profile_to_membership()
-returns trigger
-language plpgsql
-security definer
-set search_path = public
-as $$
-declare
-  founding uuid := public.founding_org_id();
-begin
-  if founding is null then
-    return null;
-  end if;
-
-  if tg_op = 'INSERT' then
-    -- What account creation has always meant: a new member of the (founding)
-    -- organization, whether or not other organizations exist by now.
-    insert into public.memberships (org_id, user_id, role, badge_number)
-    values (founding, new.id, new.role, new.badge_number)
-    on conflict (org_id, user_id) do nothing;
-    return null;
-  end if;
-
-  -- Only the column that changed is copied. Anyone may edit their own badge;
-  -- if that also copied profiles.role, an account whose legacy role is
-  -- higher than its membership role would promote itself by doing so.
-  -- Status is never touched: a role change must not reactivate anyone.
-  if new.role is distinct from old.role then
-    update public.memberships m
-    set role = new.role
-    where m.org_id = founding and m.user_id = new.id;
-  end if;
-  if new.badge_number is distinct from old.badge_number then
-    update public.memberships m
-    set badge_number = new.badge_number
-    where m.org_id = founding and m.user_id = new.id;
-  end if;
-  return null;
-end;
-$$;
-
-do $$
-begin
-  drop trigger if exists profiles_mirror_membership on public.profiles;
-  create trigger profiles_mirror_membership
-    after insert or update on public.profiles
-    for each row execute function public.mirror_profile_to_membership();
-end
-$$;
-
--- A ban deactivates the founding membership; lifting it reactivates that
--- membership, and only if the ban is what deactivated it. Without this a
--- token issued before the ban would keep reading until it expires. A ban
--- whose date has passed counts as lifted. 'invited' is never touched.
-create or replace function public.mirror_ban_to_membership()
-returns trigger
-language plpgsql
-security definer
-set search_path = public
-as $$
-declare
-  founding uuid := public.founding_org_id();
-begin
-  if new.banned_until is not null and new.banned_until > now() then
-    update public.memberships m
-    set status = 'deactivated', deactivated_by_ban = true
-    where m.org_id = founding and m.user_id = new.id and m.status = 'active';
-  else
-    update public.memberships m
-    set status = 'active', deactivated_by_ban = false
-    where m.org_id = founding and m.user_id = new.id
-      and m.status = 'deactivated' and m.deactivated_by_ban;
-  end if;
-  return null;
-end;
-$$;
-
--- No column list: the WHEN clause is what matters, and it holds however the
--- auth server phrases its UPDATE. Sign-ins update auth.users too; for those
--- the clause is false and the function is never called.
-do $$
-begin
-  drop trigger if exists on_auth_user_ban_changed on auth.users;
-  create trigger on_auth_user_ban_changed
-    after update on auth.users
-    for each row
-    when (old.banned_until is distinct from new.banned_until)
-    execute function public.mirror_ban_to_membership();
-end
-$$;
-
--- ---------------------------------------------------------------------------
--- 6. Helpers for the policies below
+-- 7. Helpers for the policies below
 -- ---------------------------------------------------------------------------
 
 -- True when the caller holds one of `roles`, actively, in an organization the
@@ -427,10 +515,26 @@ as $$
   from (select public.founding_org_id() as id) f;
 $$;
 
+-- The owner's side of the same rule: the legacy path is the founding
+-- organization's, so uploading there and reading one's own there need an
+-- ACTIVE membership in it. A membership anywhere else gives nothing here, and
+-- neither does having none.
+create or replace function public.is_founding_member()
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select public.is_org_member(public.founding_org_id());
+$$;
+
 -- As in saas_core: signed-in users and the service role, nobody else.
-grant execute on function public.shares_org_as(uuid, text[]), public.reads_legacy_photos_of(uuid)
+grant execute on function public.shares_org_as(uuid, text[]), public.reads_legacy_photos_of(uuid),
+  public.is_founding_member()
   to authenticated, service_role;
-revoke execute on function public.shares_org_as(uuid, text[]), public.reads_legacy_photos_of(uuid)
+revoke execute on function public.shares_org_as(uuid, text[]), public.reads_legacy_photos_of(uuid),
+  public.is_founding_member()
   from public, anon;
 
 -- A path segment as a uuid, or null when it is not one. A bare cast inside a
@@ -450,7 +554,7 @@ as $$
 $$;
 
 -- ---------------------------------------------------------------------------
--- 7. Policies: records and profiles
+-- 8. Policies: records and profiles
 -- ---------------------------------------------------------------------------
 --
 -- Same rules as before, each now asked of the row's organization:
@@ -533,7 +637,7 @@ end
 $$;
 
 -- ---------------------------------------------------------------------------
--- 8. Policies: photos
+-- 9. Policies: photos
 -- ---------------------------------------------------------------------------
 --
 -- Two path forms in the drilling-photos bucket:
@@ -546,8 +650,8 @@ $$;
 do $$
 begin
   -- Upload: into one's own folder, by an active member. Under an
-  -- organization, of that organization; on the legacy path, of any (the
-  -- path names none), so a deactivated account can no longer upload.
+  -- organization, of that organization; on the legacy path, of the founding
+  -- organization, which is the one that path belongs to.
   drop policy if exists drilling_photos_insert on storage.objects;
   create policy drilling_photos_insert on storage.objects
     for insert to authenticated
@@ -556,8 +660,7 @@ begin
       and (
         (array_length(storage.foldername(name), 1) = 1
            and (storage.foldername(name))[1] = (select auth.uid())::text
-           and (select coalesce(bool_or(o.status = 'active'), false)
-                from public.my_organizations() o))
+           and (select public.is_founding_member()))
         or
         (array_length(storage.foldername(name), 1) = 2
            and (storage.foldername(name))[2] = (select auth.uid())::text
@@ -580,13 +683,10 @@ begin
               and public.is_org_member(public.uuid_or_null((storage.foldername(name))[1])))
         or (array_length(storage.foldername(name), 1) = 1
               and (
-                -- Legacy path: the owner. The path names no organization, so
-                -- "a deactivated member reads nothing" is applied as: not when
-                -- the caller has memberships and none of them is active. An
-                -- account with no membership at all still reads its own.
+                -- Legacy path: the owner, while an active member of the
+                -- founding organization.
                 ((storage.foldername(name))[1] = (select auth.uid())::text
-                   and (select count(*) = 0 or bool_or(o.status = 'active')
-                        from public.my_organizations() o))
+                   and (select public.is_founding_member()))
                 -- ... or the founding organization's Administrator.
                 or public.reads_legacy_photos_of(
                      public.uuid_or_null((storage.foldername(name))[1]))
@@ -597,7 +697,7 @@ end
 $$;
 
 -- ---------------------------------------------------------------------------
--- 9. Privileges, stated in full
+-- 10. Privileges, stated in full
 -- ---------------------------------------------------------------------------
 --
 -- The earlier migrations only subtracted from whatever the API roles held by
@@ -640,6 +740,6 @@ $$;
 -- The pre-tenancy helpers. No policy calls them any more (the rollback's
 -- policies would), but they run with the owner's rights and report on
 -- profiles.role, so a signed-out client loses them like the others. Done
--- last: until section 7 the old policies still called them for every role.
+-- last: until section 8 the old policies still called them for every role.
 grant execute on function public.is_admin(), public.is_reviewer() to authenticated, service_role;
 revoke execute on function public.is_admin(), public.is_reviewer() from public, anon;
