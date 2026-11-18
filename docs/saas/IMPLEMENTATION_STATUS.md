@@ -6,8 +6,8 @@ Requirements: `docs/SAAS_ARCHITECTURE_PROPOSAL.md`. How the work is run: `docs/s
 
 - **Phase:** Phase 0 — Preparation (approved). Phase 1 is approved to start after Phase 0, on staging only; its production migration is not approved.
 - **Branch:** `saas/phase-1-tenancy`, branched from `saas/phase-0-preparation` at `8d07755`. Pull requests 3 (workflow tooling) and 4 (Phase 0) are open with green CI, awaiting the owner's merge, in that order.
-- **In progress:** Phase 1. Criteria 52 and 53 are implemented (`34b163c`) and green locally (TEST_RESULTS 59); the thirteenth review, of that diff, and the validation are running. The twelfth review found the migrations safe to apply to staging.
-- **Next step:** triage the thirteenth review; apply to staging, deploy `admin-users` there, and run P1-3, P1-5, P1-6. **Do not check out `main` or any branch that predates the tooling until the pull requests are merged (RF-059).**
+- **In progress:** Phase 1. **The thirteenth security review passes** (TEST_RESULTS 60): no open Critical, High or Medium in P1-1, P1-2 or P1-4; `admin-users` (P1-7) is reviewed by reading and still to be proved as deployed. The migrations are being applied to staging.
+- **Next step:** apply the two migrations to staging; deploy `admin-users` there; P1-5 (the 21 suites unchanged), P1-3 (tenant-isolation suite, including `admin-users` with a second organization), P1-6 (rehearsal, check query, rollback proof). **Do not check out `main` or any branch that predates the tooling until the pull requests are merged (RF-059).**
 - **For the owner to look at:** `.claude/settings.json` was edited on 2026-11-17 at 20:38 (the guard hook commented out, which also makes the file invalid JSON). Not made by the Lead or an agent as far as can be told; left as found and not committed.
 - **Waiting on the owner:** the action recorded for RF-050 (deferred by the owner; does not block development); approval to delete the `probe` function from production (RF-049); confirmation of the staging rule (RF-054); branch protection on `main`; merging the workflow and Phase 0 pull requests so `main` stops carrying the production link files (RF-059).
 
@@ -45,8 +45,8 @@ Defaults taken where the proposal left a decision open (each can be changed befo
 
 | Id | Task | Status | Evidence |
 |---|---|---|---|
-| P1-1 | Reusable foundation migration `saas_core`: organizations, memberships, platform administrators, audit log, helper functions | Implemented; green locally and in CI; fixes for RF-097, RF-098 committed, **thirteenth review running** | TEST_RESULTS 40 to 59 |
-| P1-2 | Drill migration `drill_tenancy`: founding organization, memberships from profiles, `org_id` on the four record tables, compatibility triggers for installed builds, organization-scoped policies for tables and photos | Implemented; green locally and in CI; fixes for RF-097, RF-098 committed, **thirteenth review running**; not yet on staging | TEST_RESULTS 40 to 59 |
+| P1-1 | Reusable foundation migration `saas_core`: organizations, memberships, platform administrators, audit log, helper functions | Implemented; green locally and in CI; **passed the thirteenth review** | TEST_RESULTS 40 to 60 |
+| P1-2 | Drill migration `drill_tenancy`: founding organization, memberships from profiles, `org_id` on the four record tables, compatibility triggers for installed builds, organization-scoped policies for tables and photos | Implemented; green locally and in CI; **passed the thirteenth review**; not yet on staging | TEST_RESULTS 40 to 60 |
 | P1-3 | Tenant-isolation suite `e2e/saas/tenant_isolation_e2e.py` and a fixture that creates a second organization on staging | Not started | — |
 | P1-4 | Schema check: every table in `public` has RLS and is organization-scoped or allowlisted; run in CI's database job | Done; runs in CI | TEST_RESULTS 44 |
 | P1-5 | Compatibility proof: the 21 existing suites, unchanged, pass against the migrated staging database (the current app sends no `org_id`, so it stands in for the installed 1.1.7 build) | Not started | — |
