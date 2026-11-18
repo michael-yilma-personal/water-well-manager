@@ -6,8 +6,8 @@ Requirements: `docs/SAAS_ARCHITECTURE_PROPOSAL.md`. How the work is run: `docs/s
 
 - **Phase:** Phase 0 — Preparation (approved). Phase 1 is approved to start after Phase 0, on staging only; its production migration is not approved.
 - **Branch:** `saas/phase-1-tenancy`, branched from `saas/phase-0-preparation` at `8d07755`. Pull requests 3 (workflow tooling) and 4 (Phase 0) are open with green CI, awaiting the owner's merge, in that order.
-- **In progress:** Phase 1 on staging. The migrations are applied there (TEST_RESULTS 61: counts and `modified_at` unchanged, every row in the founding organization); the 21 existing suites pass unchanged (TEST_RESULTS 62); the new `admin-users` is deployed there and the crew suites pass through it (TEST_RESULTS 63). P1-3, the tenant-isolation suite with a second organization, is being written and run.
-- **Next step:** P1-3; then the final validation of Phase 1 against its criteria, the pull request, and the summary for the owner. The rollback is proved on local databases only: running it on staging needs the owner's approval. **Do not check out `main` or any branch that predates the tooling until the pull requests are merged (RF-059).**
+- **In progress:** nothing. **Phase 1's tasks are done on staging**: P1-1, P1-2 and P1-4 passed the thirteenth security review; the migrations are applied to staging (TEST_RESULTS 61); the 21 existing suites pass unchanged (62); `admin-users` is deployed there (63); the tenant-isolation suite passes 1,273 of 1,273 (64). No open Critical, High or Medium finding in Phase 1. Pull request 5 holds the work.
+- **Next step:** the owner reviews pull request 5 (after 3 and 4) and decides on the production migration, which is **not approved**. Phase 2 is not approved. **Do not check out `main` or any branch that predates the tooling until the pull requests are merged (RF-059).**
 - **For the owner to look at:** `.claude/settings.json` was edited on 2026-11-17 at 20:38 (the guard hook commented out, which also makes the file invalid JSON). Not made by the Lead or an agent as far as can be told; left as found and not committed.
 - **Waiting on the owner:** the action recorded for RF-050 (deferred by the owner; does not block development); approval to delete the `probe` function from production (RF-049); confirmation of the staging rule (RF-054); branch protection on `main`; merging the workflow and Phase 0 pull requests so `main` stops carrying the production link files (RF-059).
 
@@ -17,7 +17,7 @@ Requirements: `docs/SAAS_ARCHITECTURE_PROPOSAL.md`. How the work is run: `docs/s
 |---|---|---|---|
 | Workflow setup | `chore/agent-workflow` | Done; CI green; awaiting the owner's merge | https://github.com/michael-yilma-personal/water-well-manager/pull/3 |
 | 0 Preparation | `saas/phase-0-preparation` | Done; CI green; awaiting the owner's merge (after pull request 3) | https://github.com/michael-yilma-personal/water-well-manager/pull/4 |
-| 1 Tenancy in the database | `saas/phase-1-tenancy` | Approved to start after Phase 0; production migration not approved | — |
+| 1 Tenancy in the database | `saas/phase-1-tenancy` | Done on staging; awaiting the owner's review. **Production migration not approved** | https://github.com/michael-yilma-personal/water-well-manager/pull/5 |
 | 2 Organization-aware apps | — | Not approved | — |
 | 3 Subscriptions and entitlements | — | Not approved | — |
 | 4 Platform console and audit | — | Not approved | — |
@@ -47,11 +47,11 @@ Defaults taken where the proposal left a decision open (each can be changed befo
 |---|---|---|---|
 | P1-1 | Reusable foundation migration `saas_core`: organizations, memberships, platform administrators, audit log, helper functions | Implemented; green locally and in CI; **Done**: passed the thirteenth review; applied to staging | TEST_RESULTS 40 to 61 |
 | P1-2 | Drill migration `drill_tenancy`: founding organization, memberships from profiles, `org_id` on the four record tables, compatibility triggers for installed builds, organization-scoped policies for tables and photos | Implemented; green locally and in CI; **Done**: passed the thirteenth review; applied to staging | TEST_RESULTS 40 to 62 |
-| P1-3 | Tenant-isolation suite `e2e/saas/tenant_isolation_e2e.py` and a fixture that creates a second organization on staging | In progress | — |
+| P1-3 | Tenant-isolation suite `e2e/saas/tenant_isolation_e2e.py` and a fixture that creates a second organization on staging | **Done**: 1,273 of 1,273 on staging, three runs. Not in CI: it needs two more secrets (the owner's) | TEST_RESULTS 64 |
 | P1-4 | Schema check: every table in `public` has RLS and is organization-scoped or allowlisted; run in CI's database job | Done; runs in CI | TEST_RESULTS 44 |
 | P1-5 | Compatibility proof: the 21 existing suites, unchanged, pass against the migrated staging database (the current app sends no `org_id`, so it stands in for the installed 1.1.7 build) | **Done**: 21 of 21 on migrated staging | TEST_RESULTS 62 |
 | P1-6 | Migration rehearsal on staging data: row counts before and after match; every row carries the founding `org_id`; a written rollback script | Done on staging for the forward migration (counts, digests, founding `org_id`); rollback script written and tested locally (criterion 14); **not run on staging** (needs the owner) | TEST_RESULTS 61 |
-| P1-7 | `admin-users` authorises on membership, not on the global `profiles.role`: the caller needs an active Administrator membership in the founding organization, and may list, create, re-role, ban, unban and delete only accounts that are members of it (criterion 27, RF-072) | Implemented; handler-tested (108 tests); deployed to staging, crew suites pass; refusals with a second organization pending P1-3 | TEST_RESULTS 49 to 63 |
+| P1-7 | `admin-users` authorises on membership, not on the global `profiles.role`: the caller needs an active Administrator membership in the founding organization, and may list, create, re-role, ban, unban and delete only accounts that are members of it (criterion 27, RF-072) | Implemented; handler-tested (108 tests); **Done**: deployed to staging; crew suites and the refusals with a second organization pass | TEST_RESULTS 49 to 64 |
 
 #### Phase 1 acceptance criteria
 
@@ -310,7 +310,14 @@ Harden the enforcement after the security review (RF-010 to RF-024).
 
 ## Needs the owner
 
-- Review Phase 0's results and approve Phase 1 (Phase 0 itself is approved).
+- **Phase 1, before production** (nothing below has been done; each is the owner's decision):
+  - Approve, or not, applying the two migrations to production and deploying `admin-users` after them. Order: `saas_core`, `drill_tenancy`, then the function. Apply in a quiet window, each file as one transaction; on `deadlock detected`, apply again. Create, ban or re-role no account while it runs. Afterwards run the consistency queries recorded in TEST_RESULTS 61; they must return nothing.
+  - First check on production: accounts with no profile and accounts banned today (they end with no active membership); objects in `drilling-photos` shaped `<uuid>/<uuid>/…` (any would make a rollback refuse); that public signup is disabled (every new account becomes an active Driller of the founding organization).
+  - Rollback: both scripts together; it needs the migration history repaired by hand and the previous `admin-users` redeployed. It has been proved on local databases only. Running it once on staging needs the owner's go-ahead.
+  - Rename "Founding organization" (Decision 8). Create no second organization before Phase 2's member management.
+  - To run the tenant-isolation suite in CI: two more repository secrets for staging (a database URL and the service-role key), and a `test:tenant-isolation` line in `package.json`.
+  - The decisions the Lead took where the criteria were silent (18 to 53) can each be changed before production.
+- `.claude/settings.json`: confirm the edit of 2026-11-17 20:38 (see "For the owner to look at").
 - **Branch protection on `main`** (require a pull request and passing CI; no force-push; no deletion). `main` is unprotected today. This is the only real control behind "agents never push to or merge into main". It also changes how the owner pushes, so it is the owner's call.
 - **The repository is public.** Consider making it private before Phase 1: it will hold the source of a commercial product and a record of its security findings.
 - Decisions 1–12 in section 14 of the proposal; Decisions 2, 3, 4 and 8 are needed before Phase 1 can finish.
