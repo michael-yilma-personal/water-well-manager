@@ -177,10 +177,22 @@ $$;
 -- token issued before the ban would keep reading until it expires. A ban
 -- whose date has passed counts as lifted. 'invited' is never touched.
 --
--- Both branches write public.memberships whether or not a founding
--- organization exists yet, and must keep doing so (no early return): the
--- write holds a lock on that table until the ban's transaction ends, and
--- that lock is what the enrolment of section 4 waits for.
+-- The order of the first two statements is what keeps a ban from being lost
+-- while section 4 enrols the members, and must stay:
+--   1. Wait. The enrolment holds a lock on public.memberships for as long as
+--      its statement runs; taking a lock here that conflicts with it means a
+--      ban or unban that starts meanwhile stands still until the enrolment
+--      has committed. Held until the ban's own transaction ends, it is also
+--      the lock the enrolment waits for when the ban came first. Taken
+--      whether or not a founding organization exists yet (no early return).
+--   2. Only then read which organization is the founding one. Read before
+--      the wait (in the declarations, say) it would still be "none" while
+--      the enrolment is under way, and the update below would change
+--      nothing: the enrolment did not see this ban (not committed yet), and
+--      this would not see the enrolment's memberships.
+-- Each statement of this function sees what was committed before it began
+-- (READ COMMITTED, which is what the auth server uses), so after the wait
+-- both the flag and the memberships are visible.
 create or replace function public.mirror_ban_to_membership()
 returns trigger
 language plpgsql
@@ -188,8 +200,11 @@ security definer
 set search_path = public
 as $$
 declare
-  founding uuid := public.founding_org_id();
+  founding uuid;
 begin
+  lock table public.memberships in row exclusive mode;
+  founding := public.founding_org_id();
+
   if new.banned_until is not null and new.banned_until > now() then
     update public.memberships m
     set status = 'deactivated', deactivated_by_ban = true
@@ -271,13 +286,15 @@ begin
   -- ones until this statement is through, so none falls between the two.
   --
   -- The same for bans and unbans, through public.memberships: the ban mirror
-  -- writes that table in every case, so a ban whose transaction is still open
-  -- holds a lock on it, and this waits until that transaction has ended; the
-  -- statements below then read the ban it committed. A ban that starts later
-  -- waits in its trigger until the memberships are there. auth.users itself
-  -- is not locked: that needs a privilege the role applying this may not
-  -- hold on a hosted project. (A ban that began before the trigger existed
-  -- was waited for by CREATE TRIGGER in section 3.)
+  -- locks that table before anything else, in every case. So a ban whose
+  -- transaction is still open holds a lock on it, and this waits until that
+  -- transaction has ended; the statements below then read the ban it
+  -- committed. A ban that starts later waits at that lock, at the top of its
+  -- trigger, until this statement has committed, and only then reads which
+  -- organization is the founding one: it finds the flag and the memberships
+  -- there. auth.users itself is not locked: that needs a privilege the role
+  -- applying this may not hold on a hosted project. (A ban that began before
+  -- the trigger existed was waited for by CREATE TRIGGER in section 3.)
   lock table public.profiles, public.memberships in share row exclusive mode;
 
   if founding is null then

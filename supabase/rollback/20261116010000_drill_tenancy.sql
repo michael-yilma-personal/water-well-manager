@@ -44,9 +44,12 @@
 -- file is not run as one transaction.
 --
 -- Looks at everything that belongs to an organization: every row of the four
--- record tables, every membership, and every photo stored under an
--- organization's folder (drilling-photos/<org_id>/...). Each is asked on its
--- own; that a child row follows its borehole is not relied on.
+-- record tables, every membership, every photo stored under an
+-- organization's folder (drilling-photos/<org_id>/...), and every photo whose
+-- path has the shape of the new one (<uuid>/<uuid>/...), which belongs to the
+-- organization its first segment names even when that organization's row is
+-- gone. Each is asked on its own; that a child row follows its borehole is
+-- not relied on.
 --   - With a founding organization marked: refuses when any of it belongs to
 --     another organization, whether or not that one still has members.
 --   - With none marked (the mark was lost, or a rollback is run twice and the
@@ -81,6 +84,22 @@ begin
       'select o.id as org_id from public.organizations o where exists ('
       'select 1 from storage.objects f where f.bucket_id = ''drilling-photos'' '
       'and f.name like ''%/%'' and lower(split_part(f.name, ''/'', 1)) = o.id::text)')::text;
+  end if;
+
+  -- A photo at <uuid>/<uuid>/... is a photo of the organization its first
+  -- segment names, whether or not a row with that id exists (any more): after
+  -- the rollback any Administrator of the one pool would read it. A legacy
+  -- path (<user id>/<file>) has no third segment and is not looked at here.
+  -- The cast is inside a CASE so that it is only ever reached for text that
+  -- has the shape of a uuid, wherever the planner puts the conditions.
+  if to_regclass('storage.objects') is not null then
+    parts := parts || (
+      'select case when f.name ~* ''^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/'
+      '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/.'' '
+      'then lower(split_part(f.name, ''/'', 1))::uuid end as org_id '
+      'from storage.objects f where f.bucket_id = ''drilling-photos'' '
+      'and f.name ~* ''^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/'
+      '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/.''')::text;
   end if;
 
   if array_length(parts, 1) is null then
