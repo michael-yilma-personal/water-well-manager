@@ -57,6 +57,13 @@
 #             a first application of the Drill migration with two
 #             organizations: the error's instructions are followed on the
 #             database the failed application leaves (decision 44).
+#   in flight (hosted)
+#             the Drill migration on legacy data while accounts are being
+#             created, re-roled, banned and unbanned in transactions that are
+#             still OPEN when a statement runs and commit after it
+#             (lib/in_flight.py): once statement by statement, once as one
+#             transaction. Every such account must end with the founding
+#             membership the legacy tables describe (decision 39).
 #
 # Output and exit status are as for run.sh: one line per check, a total,
 # non-zero when anything failed.
@@ -825,11 +832,57 @@ SQL
   fi
 }
 
+# --- in flight: decision 39 -----------------------------------------------------
+#
+# The window probe above acts BETWEEN statements: each of its writes is
+# committed before the next statement starts. A dashboard request that is
+# under way while a statement runs is a transaction the statement cannot see
+# yet. lib/in_flight.py holds such transactions open across every statement
+# and commits them only when the migration waits for them, or after it.
+
+phase_in_flight() {
+  local mode="$1" db="inflight_$1" f ok=1 line n=0
+  PHASE="hosted, in flight ($mode)"
+  new_db "$db"
+  load_stub "$db" hosted || { fail "[harness] the Supabase stand-in loads :: $(first_error)"; ok=0; }
+  while IFS= read -r f; do
+    apply "$db" "$f" || { fail "[harness] $(basename "$f") applies :: $(first_error)"; ok=0; }
+  done < <(pre_tenancy_migrations)
+  apply "$db" "$HERE/upgrade/seed_legacy.sql" || { fail "[harness] the legacy data loads :: $(first_error)"; ok=0; }
+  [ -f "$MIG_CORE" ] && [ -f "$MIG_DRILL" ] || ok=0
+  [ "$ok" -eq 1 ] && { apply "$db" "$MIG_CORE" || { fail "[harness] saas_core applies :: $(first_error)"; ok=0; }; }
+
+  if [ "$ok" -ne 1 ]; then
+    fail "[c39] in flight ($mode): accounts being created, re-roled, banned and unbanned while the migration runs :: not checked, the database could not be prepared or a migration is missing"
+    return
+  fi
+
+  python3 "$HERE/lib/in_flight.py" "$db" "$MIG_DRILL" "$mode" >"$WORK/inflight.out" 2>"$WORK/inflight.err"
+  while IFS= read -r line; do
+    case "$line" in
+      "ok	"*)   n=$((n + 1)); pass "${line#ok	}" ;;
+      "FAIL	"*) n=$((n + 1)); fail "${line#FAIL	}" ;;
+      "")       ;;
+      *)        echo "$line" ;;
+    esac
+  done <"$WORK/inflight.out"
+  # Five outcomes and the harness's own check, or the tool did not run to its end.
+  if [ "$n" -ne 6 ] || [ -s "$WORK/inflight.err" ]; then
+    fail "[harness] in flight ($mode): lib/in_flight.py ran to its end :: $n of 6 lines; $(head -n 1 "$WORK/inflight.err" | cut -c 1-200)"
+  fi
+
+  # Whatever was in flight, the result is the same working database.
+  psql -X -q -d "$db" -c "delete from auth.users where email ~ '^fly-(new|role|ban|unban)-[0-9]+@db-test[.]invalid\$'" >/dev/null 2>&1
+  suite "$db" "$HERE/upgrade/after_migration.sql"
+}
+
 phase_statement_by_statement
 phase_rollback_guard
 phase_rollback_guard_members
 phase_core_statement_by_statement
 phase_undecidable_founding
+phase_in_flight stepwise
+phase_in_flight single
 
 # --- core: the foundation alone, twice ----------------------------------------
 

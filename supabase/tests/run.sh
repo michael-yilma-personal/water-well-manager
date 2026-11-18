@@ -317,6 +317,53 @@ rollback_refuses_members() {
   fi
 }
 
+# Decision 41 with no organization marked founding (added in the validation
+# of f1aabbe). Two organizations with members: the rollback raises. One
+# organization with members and a second, empty one: it runs (the Developer's
+# reading where the decision is silent).
+rollback_unflagged() {
+  local out="$TMP/guard41u.out" rc what
+  local intact="select (to_regclass('public.organizations') is not null and exists (select 1 from pg_attribute where attrelid = 'public.boreholes'::regclass and attname = 'org_id' and not attisdropped) and (select count(*) from public.organizations where is_founding) = 1 and not exists (select 1 from public.organizations where name like 'Second company (no mark%'))::int"
+
+  what="[c41] the Drill rollback refuses when no organization is marked founding and two organizations have members"
+  psql -X -q -At -v ON_ERROR_STOP=1 -v rollback_drill="$RB_DRILL" \
+    -f "$HERE/guards/rollback_unflagged_two.sql" >"$out" 2>"$TMP/guard41u.err"
+  rc=$?
+  if ! grep -q '^FIXTURE-READY$' "$out"; then
+    fail "$what :: not checked, the fixture did not load: $(head -n 1 "$TMP/guard41u.err")"
+  elif grep -q '^REACHED-END$' "$out" || [ "$rc" -eq 0 ]; then
+    fail "$what :: the script ran to its end without raising"
+  elif ! grep -q -i 'refusing to roll back' "$TMP/guard41u.err"; then
+    fail "$what :: it stopped, but on something else: $(grep -m 1 -E 'ERROR|FATAL' "$TMP/guard41u.err" | cut -c 1-200)"
+  else
+    pass "$what"
+  fi
+  if [ "$(psql -X -q -At -c "$intact" 2>/dev/null)" = "1" ]; then
+    pass "[c41] ... and the database is as it was"
+  else
+    fail "[c41] ... and the database is as it was :: tenancy objects or the mark are missing, or the test's rows were left behind"
+  fi
+
+  what="[c41] (Developer's reading) with no organization marked founding and members in one organization only, the Drill rollback runs"
+  psql -X -q -At -v ON_ERROR_STOP=1 -v rollback_drill="$RB_DRILL" \
+    -f "$HERE/guards/rollback_unflagged_one.sql" >"$out" 2>"$TMP/guard41u.err"
+  rc=$?
+  if ! grep -q '^FIXTURE-READY$' "$out"; then
+    fail "$what :: not checked, the fixture did not load: $(head -n 1 "$TMP/guard41u.err")"
+  elif [ "$rc" -ne 0 ] || ! grep -q '^REACHED-END$' "$out"; then
+    fail "$what :: $(grep -m 1 -E 'ERROR|FATAL' "$TMP/guard41u.err" | cut -c 1-200)"
+  elif ! grep -q '^ROLLED-BACK$' "$out"; then
+    fail "$what :: it ran to its end but boreholes still has org_id"
+  else
+    pass "$what"
+  fi
+  if [ "$(psql -X -q -At -c "$intact" 2>/dev/null)" = "1" ]; then
+    pass "[c41] ... and, undone, the database is as it was"
+  else
+    fail "[c41] ... and, undone, the database is as it was :: tenancy objects or the mark are missing, or the test's rows were left behind"
+  fi
+}
+
 # Decision 44: what the "cannot tell which organization is the founding one"
 # error tells the operator. $1 is psql's error output, $2 the check's name.
 # Everything the server sent counts (message, detail, hint); only the wording
@@ -386,10 +433,14 @@ for f in "$HERE"/sql/[0-9]*.sql; do
     86_reapply_after_drill_rollback.sql)
       if [ "$ready" -eq 1 ]; then run_file "$f"; else fail "[c39] re-application after the Drill rollback alone not tried :: see the transaction-control checks above"; fi
       ;;
+    87_reapply_first_application.sql)
+      if [ "$ready" -eq 1 ]; then run_file "$f"; else fail "[c39][c45][c46] first and plain re-applications not tried :: see the transaction-control checks above"; fi
+      ;;
     90_rollback_in_transaction.sql)
       if [ "$ready" -eq 1 ]; then
         rollback_refuses
         rollback_refuses_members
+        rollback_unflagged
         run_file "$f"
       else
         fail "[c31] rollback refusal not tried :: see the transaction-control checks above"
