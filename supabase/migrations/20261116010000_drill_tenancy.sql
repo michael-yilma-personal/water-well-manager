@@ -61,10 +61,11 @@ alter table public.memberships
   add column if not exists deactivated_by_ban boolean not null default false;
 
 -- The mark means "the deactivation in force is a ban's", so it cannot outlive
--- that deactivation. Any change of status made directly (not by the ban
--- mirror of section 3, which sets the mark in the same statement) clears it:
--- a membership reactivated and then deactivated on purpose while the account
--- was banned stays deactivated when the ban is lifted.
+-- that deactivation: a membership that is not deactivated never carries it.
+-- So a membership reactivated and then deactivated on purpose while the
+-- account was banned stays deactivated when the ban is lifted: reactivating
+-- cleared the mark, and only the ban mirror of section 3 sets it again (in
+-- the same statement that deactivates).
 create or replace function public.membership_ban_mark_guard()
 returns trigger
 language plpgsql
@@ -72,10 +73,6 @@ set search_path = public
 as $$
 begin
   if new.status <> 'deactivated' then
-    new.deactivated_by_ban := false;
-  elsif tg_op = 'UPDATE'
-        and new.status is distinct from old.status
-        and new.deactivated_by_ban is not distinct from old.deactivated_by_ban then
     new.deactivated_by_ban := false;
   end if;
   return new;
@@ -179,6 +176,11 @@ $$;
 -- membership, and only if the ban is what deactivated it. Without this a
 -- token issued before the ban would keep reading until it expires. A ban
 -- whose date has passed counts as lifted. 'invited' is never touched.
+--
+-- Both branches write public.memberships whether or not a founding
+-- organization exists yet, and must keep doing so (no early return): the
+-- write holds a lock on that table until the ban's transaction ends, and
+-- that lock is what the enrolment of section 4 waits for.
 create or replace function public.mirror_ban_to_membership()
 returns trigger
 language plpgsql
@@ -241,8 +243,10 @@ $$;
 --     the legacy model a ban is the only deactivation: banned is deactivated
 --     and marked as the ban's doing, not banned is active. 'invited' is left
 --     as it is. A ban that has run out is not a ban.
---   - Every account with no founding membership is enrolled with the role
---     and badge its profile holds; a banned one is deactivated.
+--   - Every account that has no membership in ANY organization is enrolled
+--     with the role and badge its profile holds; a banned one is deactivated.
+--     An account that belongs to another organization is never added to the
+--     founding one here, whatever its status there.
 --
 -- A plain re-application (flagged, in force, has members) skips all of it:
 -- memberships are managed on their own by then, a direct deactivation must
@@ -265,7 +269,16 @@ begin
   -- Waits for profile writes already under way (an account being created or
   -- re-roled whose trigger saw no founding organization yet) and holds new
   -- ones until this statement is through, so none falls between the two.
-  lock table public.profiles in share row exclusive mode;
+  --
+  -- The same for bans and unbans, through public.memberships: the ban mirror
+  -- writes that table in every case, so a ban whose transaction is still open
+  -- holds a lock on it, and this waits until that transaction has ended; the
+  -- statements below then read the ban it committed. A ban that starts later
+  -- waits in its trigger until the memberships are there. auth.users itself
+  -- is not locked: that needs a privilege the role applying this may not
+  -- hold on a hosted project. (A ban that began before the trigger existed
+  -- was waited for by CREATE TRIGGER in section 3.)
+  lock table public.profiles, public.memberships in share row exclusive mode;
 
   if founding is null then
     select count(*) into orgs from public.organizations;
@@ -302,6 +315,7 @@ begin
          p.badge_number
   from public.profiles p
   join auth.users u on u.id = p.id
+  where not exists (select 1 from public.memberships x where x.user_id = p.id)
   on conflict (org_id, user_id) do nothing;
 end
 $$;

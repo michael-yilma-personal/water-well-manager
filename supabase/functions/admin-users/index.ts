@@ -24,6 +24,13 @@
  * records is deactivated rather than removed: their rows carry created_by, and
  * erasing the account would destroy the record of who drilled. Only an account
  * that has never logged anything is deleted outright.
+ *
+ * A read that fails (the founding organization, memberships, the account
+ * listing, profiles, record counts) always ends the request with 500 and one
+ * fixed message, before anything is written. What the database or the auth
+ * server said goes to the function's log and never to the caller: it names
+ * tables and rows, and the first of these reads happen before the caller is
+ * authorised.
  */
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
@@ -54,10 +61,32 @@ type Admin = ReturnType<typeof createClient>;
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/**
+ * An id as this function compares it. PostgreSQL takes a uuid in any case for
+ * the same id, so two spellings of one id must not look like two accounts.
+ */
+const normalId = (id: string) => id.toLowerCase();
+
+const LOOKUP_FAILED = 'Something went wrong on the server. Please try again.';
+
+/** A read that failed. Carries what failed for the log; the caller gets LOOKUP_FAILED. */
+class LookupError extends Error {
+  constructor(what: string, cause: unknown) {
+    const said = (cause as { message?: unknown } | null)?.message;
+    super(`${what}: ${typeof said === 'string' ? said : String(cause)}`);
+  }
+}
+
+/** 500 with the fixed message; the cause is logged, never sent. */
+function lookupFailed(err: unknown) {
+  console.error('admin-users:', err instanceof Error ? err.message : String(err));
+  return json({ error: LOOKUP_FAILED }, 500);
+}
+
 /** The founding organization's id, or null when there is none. Throws when it cannot be read. */
 async function foundingOrgId(admin: Admin): Promise<string | null> {
   const { data, error } = await admin.rpc('founding_org_id');
-  if (error) throw new Error(error.message);
+  if (error) throw new LookupError('founding organization', error);
   return typeof data === 'string' && data ? data : null;
 }
 
@@ -67,7 +96,7 @@ async function membershipsOf(admin: Admin, userId: string): Promise<Membership[]
     .from('memberships')
     .select('org_id, role, status')
     .eq('user_id', userId);
-  if (error) throw new Error(error.message);
+  if (error) throw new LookupError('memberships of an account', error);
   return (data ?? []).map((m) => ({ orgId: m.org_id, role: m.role, status: m.status }));
 }
 
@@ -80,7 +109,7 @@ async function refuseTarget(admin: Admin, founding: string, id: unknown) {
   const notFound = () => json({ error: 'No such account' }, 404);
   if (typeof id !== 'string' || !UUID.test(id)) return notFound();
 
-  const decision = targetDecision(founding, await membershipsOf(admin, id));
+  const decision = targetDecision(founding, await membershipsOf(admin, normalId(id)));
   if (decision === 'not-found') return notFound();
   if (decision === 'other-organization') {
     return json(
@@ -89,6 +118,11 @@ async function refuseTarget(admin: Admin, founding: string, id: unknown) {
     );
   }
   return null;
+}
+
+/** True when the id a request sent is the caller's own, in any spelling. */
+function isCaller(sent: unknown, callerId: string) {
+  return typeof sent === 'string' && normalId(sent) === callerId;
 }
 
 /** Resolve the caller and confirm they administer the founding organization. */
@@ -110,34 +144,74 @@ async function requireAdmin(req: Request) {
   // The token above only says who is calling. What they may do is read with
   // the service role, from memberships.
   const admin = createClient(SUPABASE_URL, SERVICE_KEY);
+  const callerId = normalId(userData.user.id);
   let founding: string | null;
   let allowed: boolean;
   try {
     founding = await foundingOrgId(admin);
-    allowed = callerMayAdminister(founding, await membershipsOf(admin, userData.user.id));
+    allowed = callerMayAdminister(founding, await membershipsOf(admin, callerId));
   } catch (err) {
-    return { error: json({ error: err instanceof Error ? err.message : String(err) }, 500) };
+    return { error: lookupFailed(err) };
   }
   // `allowed` is the decision; it is never true without a founding
   // organization, and the second test only tells the compiler so.
   if (!allowed || !founding) {
     return { error: json({ error: 'Administrators only' }, 403) };
   }
-  return { admin, callerId: userData.user.id, founding };
+  return { admin, callerId, founding };
 }
 
-/** How many drilling rows an account authored, across every table. */
-async function recordCounts(admin: Admin, userId: string) {
+/**
+ * How many drilling rows an account authored, across every table: in one
+ * organization, or everywhere when none is given. Throws when a table cannot
+ * be counted, so that an unknown count is never taken for "no records".
+ */
+async function recordCounts(admin: Admin, userId: string, orgId?: string) {
   const tables = ['boreholes', 'pipe_records', 'drilling_events', 'shift_logs'];
   let total = 0;
   for (const t of tables) {
-    const { count } = await admin
-      .from(t)
-      .select('id', { count: 'exact', head: true })
-      .eq('created_by', userId);
-    total += count ?? 0;
+    let query = admin.from(t).select('id', { count: 'exact', head: true }).eq('created_by', userId);
+    if (orgId) query = query.eq('org_id', orgId);
+    const { count, error } = await query;
+    if (error || typeof count !== 'number') throw new LookupError(`record count of ${t}`, error ?? 'no count');
+    total += count;
   }
   return total;
+}
+
+// The auth server gives the accounts a page at a time and caps the page size
+// itself, so the listing is read until a page comes back empty.
+const ACCOUNTS_PER_PAGE = 1000;
+const ACCOUNT_PAGES_AT_MOST = 400;
+
+/** Every account of the project for which `wanted` is true. Throws when a page cannot be read. */
+async function listAccounts(admin: Admin, wanted: (id: string) => boolean) {
+  const found = [];
+  for (let page = 1; ; page += 1) {
+    if (page > ACCOUNT_PAGES_AT_MOST) throw new LookupError('account listing', 'it does not end');
+    const { data, error } = await admin.auth.admin.listUsers({ page, perPage: ACCOUNTS_PER_PAGE });
+    if (error) throw new LookupError('account listing', error);
+    const users = data?.users ?? [];
+    if (users.length === 0) return found;
+    for (const u of users) if (wanted(normalId(u.id))) found.push(u);
+  }
+}
+
+// Ids travel in the query string; a longer list would not fit a URL.
+const IDS_PER_QUERY = 100;
+
+/** Display names by (normalised) account id. Throws when they cannot be read. */
+async function namesOf(admin: Admin, ids: string[]) {
+  const names = new Map<string, string>();
+  for (let at = 0; at < ids.length; at += IDS_PER_QUERY) {
+    const { data, error } = await admin
+      .from('profiles')
+      .select('id, name')
+      .in('id', ids.slice(at, at + IDS_PER_QUERY));
+    if (error) throw new LookupError('profiles', error);
+    for (const p of data ?? []) names.set(normalId(p.id), p.name);
+  }
+  return names;
 }
 
 Deno.serve(async (req) => {
@@ -150,40 +224,35 @@ Deno.serve(async (req) => {
   try {
     // --- list the crew ----------------------------------------------------
     if (req.method === 'GET') {
-      const { data: list, error } = await admin.auth.admin.listUsers({ perPage: 200 });
-      if (error) return json({ error: error.message }, 500);
-
       // The crew is the founding organization's members, whatever their
       // status; role and badge are the membership's.
       const { data: members, error: memErr } = await admin
         .from('memberships')
         .select('user_id, role, badge_number')
         .eq('org_id', founding);
-      if (memErr) return json({ error: memErr.message }, 500);
-      const memberById = new Map((members ?? []).map((m) => [m.user_id, m]));
+      if (memErr) throw new LookupError('memberships of the founding organization', memErr);
+      const memberById = new Map((members ?? []).map((m) => [normalId(m.user_id), m]));
 
-      const { data: profiles } = await admin.from('profiles').select('id, name');
-      const byId = new Map((profiles ?? []).map((p) => [p.id, p]));
+      const names = await namesOf(admin, [...memberById.keys()]);
+      const accounts = await listAccounts(admin, (id) => memberById.has(id));
 
       const users = await Promise.all(
-        list.users
-          .filter((u) => memberById.has(u.id))
-          .map(async (u) => {
-            const p = byId.get(u.id);
-            const m = memberById.get(u.id)!;
-            return {
-              id: u.id,
-              email: u.email,
-              name: p?.name ?? u.email?.split('@')[0] ?? '',
-              role: m.role,
-              badgeNumber: m.badge_number ?? '',
-              createdAt: u.created_at,
-              lastSignInAt: u.last_sign_in_at,
-              deactivated: Boolean(u.banned_until && new Date(u.banned_until) > new Date()),
-              records: await recordCounts(admin, u.id),
-              isSelf: u.id === callerId,
-            };
-          })
+        accounts.map(async (u) => {
+          const m = memberById.get(normalId(u.id))!;
+          return {
+            id: u.id,
+            email: u.email,
+            name: names.get(normalId(u.id)) ?? u.email?.split('@')[0] ?? '',
+            role: m.role,
+            badgeNumber: m.badge_number ?? '',
+            createdAt: u.created_at,
+            lastSignInAt: u.last_sign_in_at,
+            deactivated: Boolean(u.banned_until && new Date(u.banned_until) > new Date()),
+            // What they logged for this organization, and nothing of any other.
+            records: await recordCounts(admin, u.id, founding),
+            isSelf: normalId(u.id) === callerId,
+          };
+        })
       );
       users.sort((a, b) => a.role.localeCompare(b.role) || a.name.localeCompare(b.name));
       return json({ users });
@@ -223,12 +292,15 @@ Deno.serve(async (req) => {
 
     // --- remove or deactivate --------------------------------------------
     if (req.method === 'DELETE') {
-      const { id } = await req.json();
-      if (!id) return json({ error: 'id is required' }, 400);
-      if (id === callerId) return json({ error: 'You cannot remove your own account' }, 400);
-      const refused = await refuseTarget(admin, founding, id);
+      const { id: sent } = await req.json();
+      if (!sent) return json({ error: 'id is required' }, 400);
+      if (isCaller(sent, callerId)) return json({ error: 'You cannot remove your own account' }, 400);
+      const refused = await refuseTarget(admin, founding, sent);
       if (refused) return refused;
+      const id = normalId(sent);
 
+      // Everywhere, not only here: the account's rows in any organization
+      // would lose their author.
       const records = await recordCounts(admin, id);
 
       if (records > 0) {
@@ -248,8 +320,8 @@ Deno.serve(async (req) => {
     }
 
     if (req.method === 'PATCH') {
-      const { id, action, role } = await req.json();
-      if (!id) return json({ error: 'id is required' }, 400);
+      const { id: sent, action, role } = await req.json();
+      if (!sent) return json({ error: 'id is required' }, 400);
 
       // --- change someone's role -------------------------------------------
       if (action === 'setRole') {
@@ -258,9 +330,10 @@ Deno.serve(async (req) => {
         }
         // Demoting yourself could leave the project with no administrator,
         // and nobody left who could undo it from the dashboard.
-        if (id === callerId) return json({ error: 'You cannot change your own role' }, 400);
-        const refused = await refuseTarget(admin, founding, id);
+        if (isCaller(sent, callerId)) return json({ error: 'You cannot change your own role' }, 400);
+        const refused = await refuseTarget(admin, founding, sent);
         if (refused) return refused;
+        const id = normalId(sent);
 
         const { data, error } = await admin
           .from('profiles')
@@ -274,8 +347,9 @@ Deno.serve(async (req) => {
 
       // --- bring a deactivated account back ---------------------------------
       if (action !== 'reactivate') return json({ error: 'Unknown action' }, 400);
-      const refused = await refuseTarget(admin, founding, id);
+      const refused = await refuseTarget(admin, founding, sent);
       if (refused) return refused;
+      const id = normalId(sent);
 
       // Deactivation must be reversible: doing it by mistake should not cost
       // someone their account, and the alternative is recreating them, which
@@ -287,6 +361,6 @@ Deno.serve(async (req) => {
 
     return json({ error: 'Unsupported method' }, 405);
   } catch (err) {
-    return json({ error: err instanceof Error ? err.message : String(err) }, 500);
+    return lookupFailed(err);
   }
 });
