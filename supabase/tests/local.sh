@@ -64,14 +64,21 @@
 #             (lib/in_flight.py): once statement by statement, once as one
 #             transaction. Every such account must end with the founding
 #             membership the legacy tables describe (decision 39).
+#   in flight, re-application and marked by hand (hosted)
+#             the same with the two other kinds of first application: the
+#             migration applied again after the Drill rollback alone (every
+#             account still has its membership), and applied for the first
+#             time with the founding organization marked by hand.
 #   rollback, statement by statement (hosted)
 #             the Drill ROLLBACK applied one statement per transaction on a
 #             migrated database with legacy data. Before the first statement
 #             and after every one (upgrade/rollback_window_probe.sql): a
 #             signed-in user tries to change their own profiles.role, and an
 #             installed build's inserts, upserts, reads and photo upload are
-#             tried; none may fail with an error it fails with neither before
-#             the rollback nor after it (criterion 47). Then the result must
+#             tried, also as an account created at that moment and as a
+#             banned one reactivated at that moment; none may fail with an
+#             error it fails with neither before the rollback nor after it
+#             (criterion 47). Then the result must
 #             be the pre-tenancy database, as after a rollback in one piece.
 #   rollback guard, no members (hosted)
 #             the Drill rollback against a second organization that has NO
@@ -897,6 +904,86 @@ phase_in_flight() {
   suite "$db" "$HERE/upgrade/after_migration.sql"
 }
 
+# --- in flight, on the other two kinds of first application ---------------------
+#
+# Added in the validation of b548412 (criteria 39 and 51). phase_in_flight
+# starts from legacy data with no organization and no membership. The Drill
+# migration also does its enrolment in two other states, and in each of them
+# a part of it mattered that the run above cannot see:
+#
+#   reapply  the Drill rollback alone was applied and the migration is
+#            applied again: every account still HAS its founding membership,
+#            the mark is gone. The memberships are brought into line with the
+#            legacy tables by an UPDATE; with the lock taken only after that
+#            UPDATE, a ban or a re-role in flight was read too early and
+#            missed, and nothing failed.
+#   byhand   the founding organization was marked by hand before the first
+#            application (the procedure of decision 44). The mirrors then
+#            find a founding organization but no membership; with the lock
+#            taken only when no organization is marked, a ban or a re-role in
+#            flight was missed, and nothing failed.
+#
+# The same tool, the same six lines, the same expectations.
+
+phase_in_flight_other() {
+  local kind="$1" mode="$2" db="inflight_$1_$2" f ok=1 line n=0 got
+  PHASE="hosted, in flight, $kind ($mode)"
+  new_db "$db"
+  load_stub "$db" hosted || { fail "[harness] the Supabase stand-in loads :: $(first_error)"; ok=0; }
+  while IFS= read -r f; do
+    apply "$db" "$f" || { fail "[harness] $(basename "$f") applies :: $(first_error)"; ok=0; }
+  done < <(pre_tenancy_migrations)
+  apply "$db" "$HERE/upgrade/seed_legacy.sql" || { fail "[harness] the legacy data loads :: $(first_error)"; ok=0; }
+  [ -f "$MIG_CORE" ] && [ -f "$MIG_DRILL" ] && [ -f "$RB_DRILL" ] || ok=0
+  [ "$ok" -eq 1 ] && { apply "$db" "$MIG_CORE" || { fail "[harness] saas_core applies :: $(first_error)"; ok=0; }; }
+
+  if [ "$ok" -eq 1 ] && [ "$kind" = "reapply" ]; then
+    apply "$db" "$MIG_DRILL" || { fail "[harness] drill_tenancy applies :: $(first_error)"; ok=0; }
+    python3 "$HERE/lib/in_flight.py" "$db" "$MIG_DRILL" "$mode" prepare >/dev/null 2>"$WORK/inflight.err" \
+      || { fail "[harness] the accounts to act on are created while the migration is in force :: $(head -n 1 "$WORK/inflight.err" | cut -c 1-200)"; ok=0; }
+    [ "$ok" -eq 1 ] && { apply "$db" "$RB_DRILL" || { fail "[harness] the Drill rollback alone applies :: $(first_error)"; ok=0; }; }
+    # What the run is about: the accounts are members already, and no organization is marked.
+    got="$(psql -X -q -At -d "$db" -c "select (count(*) >= 3 and count(*) = count(m.user_id) and not exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'organizations' and column_name = 'is_founding'))::int from auth.users u left join public.memberships m on m.user_id = u.id where u.email ~ '^fly-(role|ban|unban)-[0-9]+@db-test[.]invalid\$'" 2>/dev/null)"
+    if [ "$ok" -eq 1 ] && [ "$got" = "1" ]; then
+      pass "[harness] in flight, re-application ($mode): every account to re-role, ban or unban has its membership from before the rollback, and no organization is marked"
+    else
+      fail "[harness] in flight, re-application ($mode): every account to re-role, ban or unban has its membership from before the rollback, and no organization is marked"
+      ok=0
+    fi
+  elif [ "$ok" -eq 1 ]; then
+    psql -X -q -v ON_ERROR_STOP=1 -d "$db" >/dev/null 2>"$WORK/apply.err" <<'SQL' || { fail "[harness] one organization, marked founding by hand :: $(first_error)"; ok=0; }
+insert into public.organizations (id, name) values ('7e57da7a-0000-4000-8000-000000000511', 'Marked by hand');
+alter table public.organizations add column is_founding boolean not null default false;
+update public.organizations set is_founding = true;
+SQL
+    got="$(psql -X -q -At -d "$db" -c "select ((select count(*) from public.organizations where is_founding) = 1 and not exists (select 1 from public.memberships))::int" 2>/dev/null)"
+    if [ "$ok" -eq 1 ] && [ "$got" = "1" ]; then
+      pass "[harness] in flight, marked by hand ($mode): one organization is marked founding and nobody is a member of anything"
+    else
+      fail "[harness] in flight, marked by hand ($mode): one organization is marked founding and nobody is a member of anything"
+      ok=0
+    fi
+  fi
+
+  if [ "$ok" -ne 1 ]; then
+    fail "[c39][c51] in flight, $kind ($mode): accounts being created, re-roled, banned and unbanned while the migration runs :: not checked, the database could not be prepared or a file is missing"
+    return
+  fi
+
+  python3 "$HERE/lib/in_flight.py" "$db" "$MIG_DRILL" "$mode" >"$WORK/inflight.out" 2>"$WORK/inflight.err"
+  while IFS= read -r line; do
+    case "$line" in
+      "ok	"*)   n=$((n + 1)); pass "${line#ok	}" ;;
+      "FAIL	"*) n=$((n + 1)); fail "${line#FAIL	}" ;;
+      "")       ;;
+      *)        echo "$line" ;;
+    esac
+  done <"$WORK/inflight.out"
+  if [ "$n" -ne 6 ] || [ -s "$WORK/inflight.err" ]; then
+    fail "[harness] in flight, $kind ($mode): lib/in_flight.py ran to its end :: $n of 6 lines; $(head -n 1 "$WORK/inflight.err" | cut -c 1-200)"
+  fi
+}
+
 # --- rollback, statement by statement: criterion 47 -----------------------------
 #
 # RF-088: the Drill rollback, run without one wrapping transaction, passed
@@ -907,7 +994,7 @@ phase_in_flight() {
 # and after every statement.
 
 RB_OPS_ROLE="own role: driller, update|own role: driller, update with name|own role: driller, upsert|own role: supervisor, update"
-RB_OPS_BUILD="insert boreholes|insert pipe_records|insert drilling_events|insert shift_logs|upsert boreholes|upsert pipe_records|upsert drilling_events|upsert shift_logs|photo upload|read own boreholes|read own pipe_records|read own drilling_events|read own shift_logs|read own profile|read own photo"
+RB_OPS_BUILD="insert boreholes|insert pipe_records|insert drilling_events|insert shift_logs|upsert boreholes|upsert pipe_records|upsert drilling_events|upsert shift_logs|photo upload|read own boreholes|read own pipe_records|read own drilling_events|read own shift_logs|read own profile|read own photo|new account: insert boreholes|unbanned account: insert boreholes"
 
 rb_role_name()  { echo "[c47] $1: after every statement of the Drill rollback a signed-in user still cannot make themselves Administrator"; }
 rb_build_name() { echo "[c47] $1: after every statement of the Drill rollback an installed build gets nothing worse than before the rollback or after it"; }
@@ -982,8 +1069,8 @@ from t_probe.results where stmt = :'at' and state <> '00000' having count(*) > 0
 SQL
 )"
     seen="$(psql -X -q -At -d "$db" -c "select count(*) from t_probe.results where stmt = \$\$${s##*|}\$\$" 2>/dev/null)"
-    if [ "${seen:-0}" -ne 23 ]; then
-      fail "$what :: the probe recorded ${seen:-0} of 23 results there"
+    if [ "${seen:-0}" -ne 25 ]; then
+      fail "$what :: the probe recorded ${seen:-0} of 25 results there"
     elif [ -n "$bad" ]; then
       fail "$what :: $bad"
     else
@@ -1282,6 +1369,10 @@ phase_core_statement_by_statement
 phase_undecidable_founding
 phase_in_flight stepwise
 phase_in_flight single
+phase_in_flight_other reapply stepwise
+phase_in_flight_other reapply single
+phase_in_flight_other byhand stepwise
+phase_in_flight_other byhand single
 
 # --- core: the foundation alone, twice ----------------------------------------
 

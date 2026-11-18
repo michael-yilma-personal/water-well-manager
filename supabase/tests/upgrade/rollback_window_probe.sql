@@ -34,6 +34,8 @@
 --       read own profile
 --       photo upload        to <user_id>/<file>
 --       read own photo      <user_id>/old.jpg
+--       new account: insert boreholes       an account created at that moment sends a borehole
+--       unbanned account: insert boreholes  the banned driller, reactivated at that moment, sends one
 --     state is 00000 when it worked, EMPTY when a read (or an upsert) ran and
 --     touched no row, the SQLSTATE otherwise. local.sh requires of every
 --     state that it is 00000, or what the same operation gave before the
@@ -42,6 +44,8 @@ do $probe$
 declare
   who uuid := md5('drill-db-test:l_driller')::uuid;
   super uuid := md5('drill-db-test:l_super')::uuid;
+  banned uuid := md5('drill-db-test:l_banned')::uuid;
+  fresh uuid := md5('drill-db-test:rb-probe-new')::uuid;
   hole uuid := md5('drill-db-test:boreholes:l_driller')::uuid;
   stmt text := current_setting('drill.stmt');
   op text;
@@ -198,5 +202,41 @@ begin
         insert into t_probe.results values (stmt, op, sqlstate, sqlerrm);
     end;
   end loop;
+
+  -- (c) accounts that change while the rollback is half done ---------------------
+  -- Added in the validation of b548412: with the mirror triggers dropped
+  -- BEFORE org_id and its triggers, every check above still passed.
+  --
+  -- new account: an account is created now (the dashboard's "add user") and
+  -- its installed build sends a borehole. unbanned account: the legacy banned
+  -- driller is reactivated now and sends one. While the org_id triggers are
+  -- there, both need a founding membership that only the mirrors give them.
+  begin
+    insert into auth.users (id, email) values (fresh, 'rb-probe-new@db-test.invalid');
+    perform set_config('request.jwt.claims', json_build_object('sub', fresh, 'role', 'authenticated')::text, true);
+    perform set_config('role', 'authenticated', true);
+    insert into public.boreholes (id, name, created_by, recorded_at)
+      values (gen_random_uuid(), 'probe', fresh, now());
+    raise exception using errcode = 'TR001', message = 'undo';
+  exception
+    when sqlstate 'TR001' then
+      insert into t_probe.results values (stmt, 'new account: insert boreholes', '00000', null);
+    when others then
+      insert into t_probe.results values (stmt, 'new account: insert boreholes', sqlstate, sqlerrm);
+  end;
+
+  begin
+    update auth.users set banned_until = null where id = banned;
+    perform set_config('request.jwt.claims', json_build_object('sub', banned, 'role', 'authenticated')::text, true);
+    perform set_config('role', 'authenticated', true);
+    insert into public.boreholes (id, name, created_by, recorded_at)
+      values (gen_random_uuid(), 'probe', banned, now());
+    raise exception using errcode = 'TR001', message = 'undo';
+  exception
+    when sqlstate 'TR001' then
+      insert into t_probe.results values (stmt, 'unbanned account: insert boreholes', '00000', null);
+    when others then
+      insert into t_probe.results values (stmt, 'unbanned account: insert boreholes', sqlstate, sqlerrm);
+  end;
 end
 $probe$;

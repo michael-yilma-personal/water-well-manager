@@ -2,6 +2,11 @@
 """Writes that are IN FLIGHT while the Drill migration runs. Test tooling only.
 
   in_flight.py DB MIGRATION stepwise|single
+  in_flight.py DB MIGRATION stepwise|single prepare
+      only creates the accounts the run will re-role, ban and unban, and
+      stops. For a run on a database where those accounts must already be
+      members before the migration is applied again (local.sh, "in flight,
+      re-application"); the run itself then finds them there.
 
 Decision 39 says an account created, re-roled or banned at any point of the
 migration is not missed. upgrade/window_probe.sql covers writes that were
@@ -15,8 +20,14 @@ applied as one transaction (single):
 
   session P   opens a transaction that creates an account and re-roles an
               existing one (both write public.profiles) and leaves it open
-  session B   opens a transaction that bans one existing account and unbans
-              another, and leaves it open
+  session B   opens a transaction that bans one existing account, and
+              leaves it open
+  session U   opens a transaction that unbans another, and leaves it open
+              (its own transaction, so that neither of the two can be what
+              makes the migration wait for the other: with a ban mirror that
+              skipped ONE of its two writes while no founding organization
+              exists, a single transaction doing both still held the lock;
+              found in the validation of b548412)
   session M   runs the statement (or the file)
 
 M either finishes or waits for a lock. Whenever it waits, the session it is
@@ -55,7 +66,7 @@ class Harness:
         self.db = db
         self.marker = 0
         self.problems = []
-        self.waited_for = {"P": 0, "B": 0}
+        self.waited_for = {"P": 0, "B": 0, "U": 0}
 
     def q(self, sql):
         out = subprocess.run(
@@ -126,16 +137,18 @@ def email(kind, nnn):
     return "fly-%s-%s@db-test.invalid" % (kind, nnn)
 
 
-def drive(h, p, b, nnn, m_args):
-    """Open the two in-flight transactions, run M, commit what M waits for. Returns M's exit status."""
+def drive(h, p, b, u, nnn, m_args):
+    """Open the three in-flight transactions, run M, commit what M waits for. Returns M's exit status."""
     p.begin(
         "insert into auth.users (id, email) values (%s, %s);\n" % (uid("new", nnn), lit(email("new", nnn)))
         + "update public.profiles set role = 'Supervisor', badge_number = %s where id = %s;" % (lit("F-" + nnn), uid("role", nnn)),
         "statement " + nnn + ", account creation and re-role")
     b.begin(
-        "update auth.users set banned_until = now() + interval '876000 hours' where id = %s;\n" % uid("ban", nnn)
-        + "update auth.users set banned_until = null where id = %s;" % uid("unban", nnn),
-        "statement " + nnn + ", ban and unban")
+        "update auth.users set banned_until = now() + interval '876000 hours' where id = %s;" % uid("ban", nnn),
+        "statement " + nnn + ", ban")
+    u.begin(
+        "update auth.users set banned_until = null where id = %s;" % uid("unban", nnn),
+        "statement " + nnn + ", unban")
 
     env = dict(os.environ, PGAPPNAME="drill-fly-m")
     m = subprocess.Popen(["psql", "-X", "-q", "-v", "ON_ERROR_STOP=1", "-d", h.db] + m_args,
@@ -153,6 +166,9 @@ def drive(h, p, b, nnn, m_args):
             elif b.open and b.pid in blockers:
                 h.waited_for["B"] += 1
                 b.commit()
+            elif u.open and u.pid in blockers:
+                h.waited_for["U"] += 1
+                u.commit()
             elif time.monotonic() > end:
                 m.kill()
                 h.problems.append("statement %s: the migration neither finished nor waited for an in-flight write" % nnn)
@@ -164,6 +180,8 @@ def drive(h, p, b, nnn, m_args):
             p.commit()
         if b.open:
             b.commit()
+        if u.open:
+            u.commit()
     err = m.stderr.read() if m.stderr else ""
     m.wait()
     if m.returncode != 0:
@@ -173,10 +191,11 @@ def drive(h, p, b, nnn, m_args):
 
 
 def main(argv):
-    if len(argv) != 4 or argv[3] not in ("stepwise", "single"):
+    if len(argv) not in (4, 5) or argv[3] not in ("stepwise", "single") or (len(argv) == 5 and argv[4] != "prepare"):
         sys.stderr.write(__doc__)
         return 2
     db, migration, mode = argv[1], argv[2], argv[3]
+    prepare_only = len(argv) == 5
     h = Harness(db)
     how = "one statement at a time" if mode == "stepwise" else "applied as one transaction"
 
@@ -189,25 +208,31 @@ def main(argv):
     h.q("insert into auth.users (id, email, banned_until) "
         "select md5('drill-db-test:fly-' || kind || ':' || nnn)::uuid, 'fly-' || kind || '-' || nnn || '@db-test.invalid', "
         "case when kind = 'unban' then now() + interval '876000 hours' end "
-        "from unnest(array[%s]) nnn, unnest(array['role', 'ban', 'unban']) kind" % ", ".join(lit(x) for x in labels))
+        "from unnest(array[%s]) nnn, unnest(array['role', 'ban', 'unban']) kind "
+        "on conflict (id) do nothing" % ", ".join(lit(x) for x in labels))
+    if prepare_only:
+        print("prepared\t%d" % (3 * len(labels)))
+        return 0
 
     p = Session(h, "p")
     b = Session(h, "b")
+    u = Session(h, "u")
     applied = True
     try:
         if mode == "stepwise":
             for nnn, text in zip(labels, statements):
-                if drive(h, p, b, nnn, ["-c", text]) != 0:
+                if drive(h, p, b, u, nnn, ["-c", text]) != 0:
                     applied = False
                     break
         else:
-            applied = drive(h, p, b, "000", ["-1", "-f", migration]) == 0
+            applied = drive(h, p, b, u, "000", ["-1", "-f", migration]) == 0
     except RuntimeError as err:
         h.problems.append(str(err))
         applied = False
     finally:
         p.close()
         b.close()
+        u.close()
 
     def line(ok, name, detail=""):
         print(("ok\t" + name) if ok else ("FAIL\t" + name + " :: " + detail))
@@ -250,10 +275,10 @@ def main(argv):
     # The run had something to find: at least once the migration had to wait
     # for an open transaction. (CREATE TRIGGER alone guarantees that.)
     name = "[harness] in flight (%s): the migration had to wait for an open transaction at least once" % how
-    line(h.waited_for["P"] + h.waited_for["B"] > 0, name,
+    line(h.waited_for["P"] + h.waited_for["B"] + h.waited_for["U"] > 0, name,
          "it never waited: the in-flight transactions did not overlap with it")
-    print("# in flight (%s): the migration waited %d time(s) for the profile writes and %d time(s) for the ban writes"
-          % (how, h.waited_for["P"], h.waited_for["B"]))
+    print("# in flight (%s): the migration waited %d time(s) for the profile writes, %d time(s) for the bans and %d time(s) for the unbans"
+          % (how, h.waited_for["P"], h.waited_for["B"], h.waited_for["U"]))
     return 0
 
 

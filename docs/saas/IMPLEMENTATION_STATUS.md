@@ -6,8 +6,8 @@ Requirements: `docs/SAAS_ARCHITECTURE_PROPOSAL.md`. How the work is run: `docs/s
 
 - **Phase:** Phase 0 — Preparation (approved). Phase 1 is approved to start after Phase 0, on staging only; its production migration is not approved.
 - **Branch:** `saas/phase-1-tenancy`, branched from `saas/phase-0-preparation` at `8d07755`. Pull requests 3 (workflow tooling) and 4 (Phase 0) are open with green CI, awaiting the owner's merge, in that order.
-- **In progress:** Phase 1. Criteria 47 to 51 are implemented (`b548412`) and green locally (TEST_RESULTS 55); the twelfth security review is running. Staging is not touched until it passes.
-- **Next step:** triage the twelfth review; then apply to staging, deploy `admin-users` there, and run P1-3, P1-5, P1-6. **Do not check out `main` or any branch that predates the tooling until the pull requests are merged (RF-059).**
+- **In progress:** Phase 1. The twelfth review (TEST_RESULTS 56) says the migrations are safe to apply to staging and leaves one Medium and one Low (RF-097, RF-098), both outside single-transaction application. The validation found no defect (TEST_RESULTS 57). A last small fix round, tests first, for criteria 52 and 53.
+- **Next step:** Test Engineer (write mode) and Developer for criteria 52 and 53; gates; a review of that diff; apply to staging, deploy `admin-users` there, and run P1-3, P1-5, P1-6. **Do not check out `main` or any branch that predates the tooling until the pull requests are merged (RF-059).**
 - **For the owner to look at:** `.claude/settings.json` was edited on 2026-11-17 at 20:38 (the guard hook commented out, which also makes the file invalid JSON). Not made by the Lead or an agent as far as can be told; left as found and not committed.
 - **Waiting on the owner:** the action recorded for RF-050 (deferred by the owner; does not block development); approval to delete the `probe` function from production (RF-049); confirmation of the staging rule (RF-054); branch protection on `main`; merging the workflow and Phase 0 pull requests so `main` stops carrying the production link files (RF-059).
 
@@ -45,13 +45,13 @@ Defaults taken where the proposal left a decision open (each can be changed befo
 
 | Id | Task | Status | Evidence |
 |---|---|---|---|
-| P1-1 | Reusable foundation migration `saas_core`: organizations, memberships, platform administrators, audit log, helper functions | Implemented; green locally and in CI; fixes for RF-088 to RF-095 committed, **twelfth review running** | TEST_RESULTS 40 to 55 |
-| P1-2 | Drill migration `drill_tenancy`: founding organization, memberships from profiles, `org_id` on the four record tables, compatibility triggers for installed builds, organization-scoped policies for tables and photos | Implemented; green locally and in CI; fixes for RF-088 to RF-095 committed, **twelfth review running**; not yet on staging | TEST_RESULTS 40 to 55 |
+| P1-1 | Reusable foundation migration `saas_core`: organizations, memberships, platform administrators, audit log, helper functions | Implemented; green locally and in CI; twelfth review: safe for staging; RF-097, RF-098 **under way** | TEST_RESULTS 40 to 57 |
+| P1-2 | Drill migration `drill_tenancy`: founding organization, memberships from profiles, `org_id` on the four record tables, compatibility triggers for installed builds, organization-scoped policies for tables and photos | Implemented; green locally and in CI; twelfth review: safe for staging; RF-097, RF-098 **under way**; not yet on staging | TEST_RESULTS 40 to 57 |
 | P1-3 | Tenant-isolation suite `e2e/saas/tenant_isolation_e2e.py` and a fixture that creates a second organization on staging | Not started | — |
 | P1-4 | Schema check: every table in `public` has RLS and is organization-scoped or allowlisted; run in CI's database job | Done; runs in CI | TEST_RESULTS 44 |
 | P1-5 | Compatibility proof: the 21 existing suites, unchanged, pass against the migrated staging database (the current app sends no `org_id`, so it stands in for the installed 1.1.7 build) | Not started | — |
 | P1-6 | Migration rehearsal on staging data: row counts before and after match; every row carries the founding `org_id`; a written rollback script | Not started | — |
-| P1-7 | `admin-users` authorises on membership, not on the global `profiles.role`: the caller needs an active Administrator membership in the founding organization, and may list, create, re-role, ban, unban and delete only accounts that are members of it (criterion 27, RF-072) | Implemented; handler-tested; twelfth review running; not yet deployed to staging | TEST_RESULTS 49 to 55 |
+| P1-7 | `admin-users` authorises on membership, not on the global `profiles.role`: the caller needs an active Administrator membership in the founding organization, and may list, create, re-role, ban, unban and delete only accounts that are members of it (criterion 27, RF-072) | Implemented; handler-tested (108 tests); verified by the twelfth review by reading; not yet deployed to staging | TEST_RESULTS 49 to 57 |
 
 #### Phase 1 acceptance criteria
 
@@ -137,6 +137,11 @@ Defaults taken where the proposal left a decision open (each can be changed befo
 49. A first application or a reconciliation enrols only profiles that have **no membership in any organization**; an account that belongs to another organization is never added to the founding one by the migration. (New accounts created through the legacy path are still enrolled in the founding organization, criterion 27.) Replaces the wider reading of criteria 39 and 45 (RF-093).
 50. `admin-users` lists every member of the founding organization however many accounts the project holds, and the record count it shows for a member counts records of the founding organization only. The decision between deleting and deactivating still looks at the account's records everywhere. An id is compared after normalising its case, so the rules against changing or removing oneself hold for any spelling of one's own id (RF-089). Every failed lookup (the founding organization, memberships, the account listing, profiles, record counts, also on delete) answers 500 with a fixed message, not the database's, and nothing is written (RF-094, RF-095).
 51. A ban or unban whose transaction is open while any statement of the migration runs is not missed, also when the file is applied statement by statement (RF-090). Accepted and recorded, not changed: RF-096.
+
+**G. Decisions after the twelfth review (2026-11-17)**
+
+52. Criterion 51 also holds for a ban or unban that **starts** while a statement of the migration is running, not only for one already open before it (RF-097).
+53. The Drill rollback also refuses when a stored photo has the shape of the new path (`<uuid>/<uuid>/…`) and its first segment is not the founding organization's id, whether or not an organization with that id still exists. A legacy path (`<user id>/<file>`) never stops it (RF-098).
 
 #### P1-7 acceptance criteria — `admin-users` authorises on membership (criterion 27, RF-072)
 

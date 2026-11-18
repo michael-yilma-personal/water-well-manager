@@ -36,6 +36,18 @@
 //     can be made to fail, like the reads of memberships and of the founding
 //     organization already could, and the error then carries a message,
 //     details, a hint and a code, as a PostgREST error does.
+//
+// Validation of b548412 (criterion 50 after its implementation). Again the
+// stand-in was only brought closer to the real services:
+//   - it takes two spellings for the same uuid exactly where PostgreSQL does
+//     (case, a pair of braces, hyphens left out), and a filter on a uuid
+//     column with text that is no uuid fails with 22P02, as PostgREST's does;
+//   - it remembers, as written, every id the function hands to it
+//     (`world.sent`);
+//   - the listing's own page cap can be lowered (`world.pageCap`) and the
+//     listing can be made never to end (`world.endless`);
+//   - a record count can come back missing with no error (`fail.noCount`);
+//   - a `.in()` list too long for a URL is refused (URL_BUDGET).
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -82,11 +94,19 @@ type World = {
   events: string[];
   fail: {
     founding?: boolean; memberships?: boolean; profiles?: boolean; records?: boolean; listUsers?: boolean;
+    /** A record count comes back with neither a count nor an error. */
+    noCount?: boolean;
     /** What a failing read answers with, in place of the short default message. */
     error?: Row;
   };
   /** Calls of auth.admin.listUsers, as [page, perPage asked for]. */
   listCalls: Array<[number, number]>;
+  /** Every id the function handed to a lookup or a write, exactly as it wrote it. */
+  sent: string[];
+  /** The most accounts the listing puts in one answer, whatever `perPage` asks for. */
+  pageCap: number;
+  /** The listing never ends: every page, however far, holds accounts. */
+  endless?: boolean;
 };
 
 /** The most accounts the stand-in's listing puts in one answer, whatever `perPage` asks for. */
@@ -94,8 +114,20 @@ const PAGE_CAP = 1000;
 const failure = (fallback: string): Row => world.fail.error ?? { message: fallback };
 
 const UUID_COLUMNS = new Set(['id', 'user_id', 'org_id', 'created_by']);
+/**
+ * A uuid as PostgreSQL reads it: any case, optionally in one pair of braces,
+ * with the hyphens or without them. Null for text PostgreSQL refuses (22P02).
+ */
+function canonicalUuid(value: unknown): string | null {
+  let text = String(value).toLowerCase();
+  if (text.startsWith('{') && text.endsWith('}')) text = text.slice(1, -1);
+  const plain = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(text) ? text.replace(/-/g, '') : text;
+  return /^[0-9a-f]{32}$/.test(plain) ? plain : null;
+}
 const same = (column: string, a: unknown, b: unknown) =>
-  UUID_COLUMNS.has(column) ? String(a).toLowerCase() === String(b).toLowerCase() : a === b;
+  UUID_COLUMNS.has(column) ? canonicalUuid(a) !== null && canonicalUuid(a) === canonicalUuid(b) : a === b;
+/** A gateway refuses a request whose URL is too long; the ids of a `.in()` list travel in it. */
+const URL_BUDGET = 8000;
 
 function newWorld(): World {
   const account = (uid: string, name: string, profileRole: string, banned = false) => ({
@@ -161,6 +193,8 @@ function newWorld(): World {
     events: [],
     fail: {},
     listCalls: [],
+    sent: [],
+    pageCap: PAGE_CAP,
   };
 }
 
@@ -190,6 +224,18 @@ function fromTable(table: string) {
       : how === 'neq' ? r[c] != null && !same(c, r[c], v)
         : same(c, r[c], v));
   const run = () => {
+    const given = q.filters.filter(([c]) => UUID_COLUMNS.has(c)).flatMap(([, v]) => (Array.isArray(v) ? v : [v]));
+    world.sent.push(...given.map(String));
+    // PostgREST casts the text to uuid before anything is read or written.
+    const notUuid = given.find((v) => canonicalUuid(v) === null);
+    if (notUuid !== undefined) {
+      world.events.push(`refused:${q.op}:${table}:${describe()}`);
+      return { data: null, count: null, error: { message: `invalid input syntax for type uuid: "${String(notUuid)}"`, code: '22P02', details: null, hint: null } };
+    }
+    if (q.filters.some(([, v, how]) => how === 'in' && (v as unknown[]).join(',').length > URL_BUDGET)) {
+      world.events.push(`refused:${q.op}:${table}:a list too long for a URL`);
+      return { data: null, count: null, error: { message: 'URI too long' } };
+    }
     const rows = tableRows(table).filter(matches);
     if (q.op === 'select') {
       world.events.push(`read:${table}:${q.columns}:${describe()}`);
@@ -201,6 +247,9 @@ function fromTable(table: string) {
       }
       if (table in world.records && world.fail.records) {
         return { data: null, count: null, error: failure(`${table} could not be read`) };
+      }
+      if (table in world.records && world.fail.noCount) {
+        return { data: q.options?.head ? null : [], count: null, error: null };
       }
       const names = q.columns.split(',').map((c) => c.trim());
       const data = rows.map((r) => (names.includes('*') ? { ...r } : Object.fromEntries(names.map((n) => [n, r[n]]))));
@@ -284,9 +333,13 @@ function createClient(url: string, key: string, options?: Row) {
           if (world.fail.listUsers) {
             return { data: { users: [] }, error: failure('the accounts could not be listed') };
           }
-          const perPage = Math.min(asked, PAGE_CAP);
+          const perPage = Math.min(asked, world.pageCap);
           const total = world.users.length;
           const lastPage = Math.max(1, Math.ceil(total / perPage));
+          if (world.endless) {
+            const users = world.users.slice(0, perPage).map((u) => ({ ...u }));
+            return { data: { users, aud: 'authenticated', nextPage: page + 1, lastPage: page + 1, total }, error: null };
+          }
           const users = world.users.slice((page - 1) * perPage, page * perPage).map((u) => ({ ...u }));
           return { data: { users, aud: 'authenticated', nextPage: page < lastPage ? page + 1 : null, lastPage, total }, error: null };
         },
@@ -306,6 +359,7 @@ function createClient(url: string, key: string, options?: Row) {
           return { data: { user: { ...user } }, error: null };
         },
         async updateUserById(uid: string, attrs: Row) {
+          world.sent.push(String(uid));
           world.events.push(`write:auth.updateUserById:${String(uid).toLowerCase()}:${JSON.stringify(attrs)}`);
           const user = world.users.find((u) => same('id', u.id, uid));
           if (!user) return { data: { user: null }, error: { message: 'User not found' } };
@@ -313,6 +367,7 @@ function createClient(url: string, key: string, options?: Row) {
           return { data: { user: { ...user } }, error: null };
         },
         async deleteUser(uid: string) {
+          world.sent.push(String(uid));
           world.events.push(`write:auth.deleteUser:${String(uid).toLowerCase()}`);
           if (!world.users.some((u) => same('id', u.id, uid))) return { data: null, error: { message: 'User not found' } };
           world.users = world.users.filter((u) => !same('id', u.id, uid));
@@ -1135,4 +1190,234 @@ test('the list marks the caller as themselves whatever case the session spells t
   const a = await call('GET', 'token-admin', undefined, (w) => { w.tokens['token-admin'] = ADMIN.toUpperCase(); });
   assert.equal(a.status, 200);
   assert.deepEqual(a.body.users.filter((u: Row) => u.isSelf).map((u: Row) => String(u.id).toLowerCase()), [ADMIN]);
+});
+
+// ---------------------------------------------------------------------------
+// Criterion 50, added in the validation of b548412. Each of these fails with
+// one line of index.ts changed and nothing else in this file failing.
+// ---------------------------------------------------------------------------
+
+const FIXED_500 = async () => (await call('GET', 'token-admin', undefined, (w) => { w.fail.listUsers = true; })).body;
+
+// --- the listing: pages of any size, and one that never ends -----------------
+
+test('the list holds every founding member when the auth server gives 50 accounts a page whatever is asked', async () => {
+  const foundingAt = [0, 49, 50, 51, 99, 100, 224, 225, 449];
+  let expected: string[] = [];
+  const a = await call('GET', 'token-admin', undefined, (w) => {
+    w.pageCap = 50;
+    expected = [...CAST_IN_LIST, ...crowd(w, 450, foundingAt)];
+  });
+  assert.equal(a.status, 200);
+  const listed: string[] = a.body.users.map((u: Row) => u.id);
+  assert.deepEqual([...listed].sort(), [...expected].sort(), `listUsers calls: ${JSON.stringify(world.listCalls)}`);
+});
+
+test('... and when it gives 7 a page, so that the last page is a short one and the one before it is not', async () => {
+  let expected: string[] = [];
+  const a = await call('GET', 'token-admin', undefined, (w) => {
+    w.pageCap = 7;
+    expected = [...CAST_IN_LIST, ...crowd(w, 45, [0, 6, 7, 13, 44])]; // 56 accounts: eight full pages
+  });
+  assert.equal(a.status, 200);
+  assert.deepEqual([...a.body.users.map((u: Row) => u.id)].sort(), [...expected].sort());
+});
+
+test('a listing that never ends is given up: 500 with the fixed message, no partial list, after a bounded number of pages', async () => {
+  const fixed = await FIXED_500();
+  const a = await call('GET', 'token-admin', undefined, (w) => { w.endless = true; });
+  // 500 calls is where the stand-in itself refuses; the function must have stopped on its own before that.
+  assert.ok(world.listCalls.length < 500, `listUsers was called ${world.listCalls.length} times`);
+  assert.equal(a.status, 500);
+  assert.equal(a.body.users, undefined, 'a list cut off somewhere was answered as if it were the whole crew');
+  assert.deepEqual(a.body, fixed);
+  assert.deepEqual(a.writes, []);
+});
+
+// --- names, for a crew larger than one query's worth of ids -------------------
+
+test('every one of 250 founding members is listed under the name in their profile, not under a name made up from the email', async () => {
+  const foundingAt = Array.from({ length: 250 }, (_, i) => i * 2);
+  const a = await call('GET', 'token-admin', undefined, (w) => {
+    crowd(w, 600, foundingAt);
+    for (const p of w.profiles) p.name = `Named ${p.name}`;
+  });
+  assert.equal(a.status, 200, JSON.stringify(a.body).slice(0, 200));
+  assert.equal(a.body.users.length, CAST_IN_LIST.length + 250);
+  const wrong = a.body.users.filter((u: Row) => !String(u.name).startsWith('Named ')).map((u: Row) => u.name);
+  assert.deepEqual(wrong, [], `${wrong.length} member(s) are listed under a name that is not their profile's`);
+  const by = new Map<string, Row>(a.body.users.map((u: Row) => [u.id, u]));
+  for (const i of [0, 198, 200, 398, 498]) assert.equal(by.get(id(100000 + i))!.name, `Named crowd-${i}`);
+  assert.equal(by.get(ADMIN)!.name, 'Named admin');
+});
+
+test('the stand-in refuses a list of ids too long for a URL, as a gateway does', async () => {
+  world = newWorld();
+  const many = Array.from({ length: 250 }, (_, i) => id(100000 + i));
+  const refused = await createClient(URL_, SERVICE_KEY).from('profiles').select('id, name').in('id', many);
+  assert.ok(refused.error);
+  const taken = await createClient(URL_, SERVICE_KEY).from('profiles').select('id, name').in('id', many.slice(0, 100));
+  assert.equal(taken.error, null);
+});
+
+// --- a record count that is not there -----------------------------------------
+
+test('a record count that comes back missing, with no error, is not taken for "no records": the list answers 500', async () => {
+  const fixed = await FIXED_500();
+  const a = await call('GET', 'token-admin', undefined, (w) => { w.fail.noCount = true; });
+  assert.equal(a.status, 500);
+  assert.equal(a.body.users, undefined);
+  assert.deepEqual(a.body, fixed);
+});
+
+test('... and a delete neither deletes nor bans: 500, nothing written, whether or not the account has records', async () => {
+  for (const target of [FRESH, DRILLER]) {
+    const a = await call('DELETE', 'token-admin', { id: target }, (w) => { w.fail.noCount = true; });
+    assert.equal(a.status, 500, target);
+    assert.deepEqual(a.writes, [], target);
+    assert.ok(world.users.some((u) => u.id === target && u.banned_until === null), 'the account is gone or banned');
+  }
+});
+
+// --- ids: what the function sends, and what the services send back ------------
+
+test('(Developer\'s choice) whatever case a request spells an id in, every lookup and every write is sent the lower-case id', async () => {
+  const cases: Array<[string, string, string, unknown, number]> = [
+    ['setRole', 'PATCH', DRILLER, { id: DRILLER.toUpperCase(), action: 'setRole', role: 'Supervisor' }, 200],
+    ['reactivate', 'PATCH', OFF, { id: mixed(OFF), action: 'reactivate' }, 200],
+    ['delete (no records)', 'DELETE', FRESH, { id: FRESH.toUpperCase(), }, 200],
+    ['delete (records)', 'DELETE', DRILLER, { id: mixed(DRILLER) }, 200],
+  ];
+  for (const [name, method, target, body, status] of cases) {
+    assert.notEqual((body as Row).id, target, `${name}: the request must spell the id differently`);
+    const a = await call(method, 'token-admin', body);
+    assert.equal(a.status, status, name);
+    assert.equal(a.writes.length, 1, name);
+    assert.ok(world.sent.includes(target), `${name}: the target was never looked up`);
+    assert.deepEqual(world.sent.filter((v) => v !== v.toLowerCase()), [], `${name}: an id was sent as the request spelled it`);
+  }
+});
+
+test('(Developer\'s choice) ... and a session that spells the caller\'s id in upper case is looked up in lower case', async () => {
+  const a = await call('GET', 'token-admin', undefined, (w) => { w.tokens['token-admin'] = ADMIN.toUpperCase(); });
+  assert.equal(a.status, 200);
+  assert.ok(world.sent.includes(ADMIN));
+  assert.ok(!world.sent.includes(ADMIN.toUpperCase()));
+});
+
+/** The whole list as it must be for the usual cast, whatever case any service spells an id in. */
+function assertUsualList(a: Answer, label: string) {
+  assert.equal(a.status, 200, label);
+  const by = new Map<string, Row>(a.body.users.map((u: Row) => [String(u.id).toLowerCase(), u]));
+  assert.deepEqual([...by.keys()].sort(), [...CAST_IN_LIST].sort(), `${label}: who is listed`);
+  assert.equal(a.body.users.length, CAST_IN_LIST.length, `${label}: someone is listed twice`);
+  assert.equal(by.get(ADMIN)!.name, 'Named admin', `${label}: name`);
+  assert.equal(by.get(DRILLER)!.name, 'Named driller', `${label}: name`);
+  assert.equal(by.get(INVITED)!.name, 'Named invited', `${label}: name`);
+  assert.equal(by.get(ADMIN)!.role, 'Administrator', `${label}: role`);
+  assert.equal(by.get(LEGACY_ADMIN)!.role, 'Driller', `${label}: role`);
+  assert.equal(by.get(DRILLER)!.badgeNumber, 'M-driller', `${label}: badge`);
+  assert.equal(by.get(DRILLER)!.records, 1, `${label}: records`);
+  assert.deepEqual(a.body.users.filter((u: Row) => u.isSelf).map((u: Row) => String(u.id).toLowerCase()), [ADMIN], `${label}: isSelf`);
+}
+
+const UPPER_FROM: Array<[string, (w: World) => void]> = [
+  ['the account listing', (w) => { for (const u of w.users) u.id = u.id.toUpperCase(); }],
+  ['the memberships', (w) => { for (const m of w.memberships) m.user_id = m.user_id.toUpperCase(); }],
+  ['the profiles', (w) => { for (const p of w.profiles) p.id = p.id.toUpperCase(); }],
+  ['the listing, the memberships and the profiles', (w) => {
+    for (const u of w.users) u.id = u.id.toUpperCase();
+    for (const m of w.memberships) m.user_id = m.user_id.toUpperCase();
+    for (const p of w.profiles) p.id = p.id.toUpperCase();
+  }],
+  ['the listing and the session', (w) => {
+    for (const u of w.users) u.id = u.id.toUpperCase();
+    w.tokens['token-admin'] = ADMIN.toUpperCase();
+  }],
+];
+
+for (const [what, upper] of UPPER_FROM) {
+  test(`the list is the same list (who, names, roles, badges, counts, isSelf) when ids come back in upper case from ${what}`, async () => {
+    const a = await call('GET', 'token-admin', undefined, (w) => {
+      for (const p of w.profiles) p.name = `Named ${p.name}`;
+      upper(w);
+    });
+    assertUsualList(a, what);
+  });
+}
+
+test('... and the self rules still hold when the account listing and the memberships spell ids in upper case', async () => {
+  for (const [name, method, body] of SELF(ADMIN)) {
+    const a = await call(method, 'token-admin', body, (w) => {
+      for (const u of w.users) u.id = u.id.toUpperCase();
+      for (const m of w.memberships) m.user_id = m.user_id.toUpperCase();
+    });
+    assert.equal(a.status, 400, name);
+    assert.deepEqual(a.writes, [], name);
+  }
+});
+
+// Spellings PostgreSQL takes for the same uuid and that are not a change of case.
+const braces = (uid: string) => `{${uid}}`;
+const bare = (uid: string) => uid.replace(/-/g, '');
+const ODD_SPELLINGS: Array<[string, (uid: string) => string]> = [
+  ['in braces', braces],
+  ['without hyphens', bare],
+  ['in braces, upper case', (uid) => braces(uid.toUpperCase())],
+  ['without hyphens, upper case', (uid) => bare(uid).toUpperCase()],
+];
+
+test('precondition: the stand-in takes those spellings for the same account, as PostgreSQL does', async () => {
+  world = newWorld();
+  for (const [how, spell] of ODD_SPELLINGS) {
+    const found = await createClient(URL_, SERVICE_KEY).from('memberships').select('org_id').eq('user_id', spell(ADMIN));
+    assert.equal(found.error, null, how);
+    assert.equal(found.data.length, 1, how);
+  }
+  const refused = await createClient(URL_, SERVICE_KEY).from('memberships').select('org_id').eq('user_id', 'not-an-id');
+  assert.equal(refused.error.code, '22P02');
+});
+
+for (const [how, spell] of ODD_SPELLINGS) {
+  test(`an Administrator cannot demote or remove themselves by sending their own id ${how}: nothing is written`, async () => {
+    for (const [name, method, body] of SELF(spell(ADMIN))) {
+      const a = await call(method, 'token-admin', body);
+      assert.deepEqual(a.writes, [], `${name}: wrote ${a.writes.join(' | ')}`);
+      assert.ok(a.status >= 400 && a.status < 500, `${name}: ${a.status}`);
+      assert.equal(world.memberships.find((m) => m.user_id === ADMIN && m.org_id === F)!.role, 'Administrator', name);
+      assert.ok(world.users.some((u) => u.id === ADMIN && u.banned_until === null), `${name}: the account is gone or banned`);
+    }
+  });
+
+  test(`a member of another organization is not reached by sending their id ${how}: 404, nothing written`, async () => {
+    for (const target of [OTHER_ADMIN, DUAL]) {
+      for (const [name, method, body] of TARGETED(spell(target))) {
+        const a = await call(method, 'token-admin', body);
+        assert.deepEqual(a.writes, [], `${name} on ${target}`);
+        assert.ok(a.status === 404 || a.status === 409, `${name} on ${target}: ${a.status}`);
+      }
+    }
+  });
+}
+
+// --- a body that is not what the function expects -----------------------------
+
+test('a body that is not JSON, or is JSON but no object, is refused and writes nothing, on every method that reads one', async () => {
+  const fixed = await FIXED_500();
+  for (const method of ['POST', 'PATCH', 'DELETE']) {
+    for (const raw of ['{"id": ', 'not json', '', 'null', '42', '"text"']) {
+      world = newWorld();
+      const res = await handler(new Request(`${URL_}/functions/v1/admin-users`, {
+        method,
+        headers: { Authorization: 'Bearer token-admin', 'Content-Type': 'application/json' },
+        body: raw,
+      }));
+      const text = await res.text();
+      const label = `${method} ${JSON.stringify(raw)}`;
+      assert.ok(res.status >= 400, `${label}: ${res.status}`);
+      assert.deepEqual(world.events.filter((e) => e.startsWith('write:')), [], label);
+      // Nothing of the runtime's own error text either.
+      if (res.status === 500) assert.deepEqual(JSON.parse(text), fixed, label);
+    }
+  }
 });
