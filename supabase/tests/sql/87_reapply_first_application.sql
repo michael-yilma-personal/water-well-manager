@@ -15,19 +15,34 @@
 --      flag came to be set.
 --   3  decision 45: a founding organization with no membership at all is a
 --      first application even while the migration is in force: every profile
---      is enrolled. Decision 27: no membership of another organization is
---      touched by it.
+--      THAT HAS NO MEMBERSHIP IN ANY ORGANIZATION is enrolled (criterion 49,
+--      which replaces "every profile"; see the note below). Decision 27: no
+--      membership of another organization is touched by it.
 --   4  decision 31: a plain re-application (in force, flagged, has members)
 --      touches nothing, whatever the memberships say compared to the profiles
 --   5  criterion 14: the Drill rollback run twice in a row, then the
 --      migration, ends with tenancy in force
+--   6  criterion 49, the reconciliation: after the Drill rollback alone, with
+--      a second organization present, an account whose only membership is in
+--      the second organization gets no founding membership; one with no
+--      membership anywhere is enrolled
+--
+-- Criterion 49 (RF-093), written before its implementation. Scenario 3 used
+-- to require that EVERY profile is enrolled in the founding organization,
+-- the member of the other company included (what criteria 39 and 45 said
+-- literally). Criterion 49 replaces that reading, so ONE check was changed:
+--   was  "[c45] applied with a founding organization that has no membership:
+--         every profile is enrolled there, with its role and badge"
+--   is   "[c45][c49] ... every profile that has no membership in another
+--         organization is enrolled there, with its role and badge"
+-- and the checks marked [c49] were added. Nothing else was loosened.
 --
 -- One transaction that is rolled back; each scenario is undone at a
 -- savepoint, so none sees another's rows. run.sh passes the file paths and
 -- refuses to run this file when a migration or rollback file is missing or
 -- contains transaction control. Scenario 2 names organizations.is_founding:
 -- the instructions under test do.
--- plan: 35
+-- plan: 50
 begin;
 \ir ../lib/helpers.sql
 
@@ -177,8 +192,11 @@ savepoint scenario;
 insert into auth.users (id, email, raw_user_meta_data) values
   (t.uid('e_super'),  'e_super@db-test.invalid',  '{"badge_number": "E-1"}'),
   (t.uid('e_banned'), 'e_banned@db-test.invalid', null),
-  (t.uid('o_other'),  'o_other@db-test.invalid',  null);
+  (t.uid('o_other'),  'o_other@db-test.invalid',  null),
+  (t.uid('o_invited'), 'o_invited@db-test.invalid', '{"badge_number": "E-8"}'),
+  (t.uid('o_active'),  'o_active@db-test.invalid',  null);
 update public.profiles set role = 'Supervisor' where id = t.uid('e_super');
+update public.profiles set role = 'Administrator' where id = t.uid('o_active');
 select t.ban('e_banned');
 
 -- Another company with one member, whose membership there says something
@@ -187,6 +205,13 @@ insert into public.organizations (id, name, created_at)
   values (t.uid('org_other'), 'Other company', timestamptz '2000-01-01 00:00:00+00');
 insert into public.memberships (org_id, user_id, role, status, badge_number)
   values (t.uid('org_other'), t.uid('o_other'), 'Supervisor', 'deactivated', 'O-7');
+-- Criterion 49: two more who belong to the other company and to nothing
+-- else. One was only invited there; the other is an active Driller there
+-- whose legacy profile says Administrator (enrolled in the founding
+-- organization, they would administer it).
+insert into public.memberships (org_id, user_id, role, status, badge_number) values
+  (t.uid('org_other'), t.uid('o_invited'), 'Data Logger', 'invited', null),
+  (t.uid('org_other'), t.uid('o_active'),  'Driller',     'active',  null);
 
 -- The founding organization loses every membership (emptied by hand, or its
 -- flag was moved to an organization nobody was enrolled in yet).
@@ -199,16 +224,40 @@ select t.ok('[c45] setup: the founding organization is flagged, tenancy is in fo
 
 \i :mig_drill
 
-select t.ok('[c45] applied with a founding organization that has no membership: every profile is enrolled there, with its role and badge (missing or differing: '
+select t.ok('[c45][c49] applied with a founding organization that has no membership: every profile that has no membership in another organization is enrolled there, with its role and badge (missing or differing: '
             || coalesce((select string_agg(u.email, ', ' order by u.email)
                          from public.profiles p join auth.users u on u.id = p.id
-                         where not exists (select 1 from public.memberships m
+                         where not exists (select 1 from public.memberships o where o.user_id = p.id and o.org_id <> t.f())
+                           and not exists (select 1 from public.memberships m
                                            where m.org_id = t.f() and m.user_id = p.id
                                              and m.role = p.role and m.badge_number is not distinct from p.badge_number)), 'none') || ')',
   $$ select not exists (select 1 from public.profiles p
-                        where not exists (select 1 from public.memberships m
+                        where not exists (select 1 from public.memberships o where o.user_id = p.id and o.org_id <> t.f())
+                          and not exists (select 1 from public.memberships m
                                           where m.org_id = t.f() and m.user_id = p.id
-                                            and m.role = p.role and m.badge_number is not distinct from p.badge_number)) $$);
+                                            and m.role = p.role and m.badge_number is not distinct from p.badge_number))
+        and (select count(*) from public.memberships where org_id = t.f()) >= 2 $$);
+select t.ok(format('[c49] ... %s gets NO founding membership (found there: %s)', what, t.mo(actor, t.f())),
+  format($$ select t.mo(%L, t.f()) = 'no membership' $$, actor))
+from (values
+  (1, 'o_other',   'the account whose only membership is a deactivated one in the other company'),
+  (2, 'o_invited', 'the account whose only membership is an invitation to the other company'),
+  (3, 'o_active',  'the active member of the other company whose legacy profile says Administrator')
+) v(i, actor, what)
+order by i;
+select t.ok('[c49] ... nobody who belongs to another organization was added to the founding one (added: '
+            || coalesce((select string_agg(u.email, ', ' order by u.email)
+                         from public.memberships m join auth.users u on u.id = m.user_id
+                         where m.org_id = t.f()
+                           and exists (select 1 from public.memberships o where o.user_id = m.user_id and o.org_id <> t.f())), 'none') || ')',
+  $$ select not exists (select 1 from public.memberships m
+                        where m.org_id = t.f()
+                          and exists (select 1 from public.memberships o where o.user_id = m.user_id and o.org_id <> t.f())) $$);
+select t.none('[c49] ... so the other company''s member whose legacy profile says Administrator administers nothing in the founding organization', 'o_active',
+  format('select 1 where public.is_org_admin(%L) or public.is_org_member(%L)', t.f(), t.f()));
+select t.ok('[c49] ... the other two memberships in the other company are exactly as they were',
+  $$ select t.mo('o_invited', t.uid('org_other')) = 'Data Logger/invited/-'
+        and t.mo('o_active', t.uid('org_other')) = 'Driller/active/-' $$);
 select t.ok('[c45] ... a Supervisor with a badge is enrolled as that',
   $$ select t.mo('e_super', t.f()) = 'Supervisor/active/E-1' $$);
 select t.ok('[c45][c6] ... a banned account is enrolled deactivated',
@@ -216,7 +265,7 @@ select t.ok('[c45][c6] ... a banned account is enrolled deactivated',
 select t.ok('[c45][c27] ... the other company''s membership is exactly as it was: not re-roled, not reactivated, badge kept (found: ' || t.mo('o_other', t.uid('org_other')) || ')',
   $$ select t.mo('o_other', t.uid('org_other')) = 'Supervisor/deactivated/O-7' $$);
 select t.ok('[c45][c27] ... and nobody was added to the other company',
-  $$ select count(*) = 1 from public.memberships where org_id = t.uid('org_other') $$);
+  $$ select count(*) = 3 from public.memberships where org_id = t.uid('org_other') $$);
 select t.unban('e_banned');
 select t.ok('[c45][c28] ... lifting the ban reactivates the membership enrolled deactivated',
   $$ select t.mo('e_banned', t.f()) = 'Driller/active/-' $$);
@@ -292,6 +341,77 @@ select t.ok('[c14][c39] ... and the migration applied after it is in force again
   $$ select t.m('w_twice') = 'Driller/active/-'
         and exists (select 1 from pg_attribute where attrelid = 'public.boreholes'::regclass and attname = 'org_id' and not attisdropped)
         and (select count(*) from public.organizations where is_founding) = 1 $$);
+
+rollback to savepoint scenario;
+
+-- ---------------------------------------------------------------------------
+-- 6. Criterion 49: the reconciliation, with a second organization present
+-- ---------------------------------------------------------------------------
+-- After the Drill rollback alone the foundation's tables are still there and
+-- the mirror is not. A second company is given its first members then (the
+-- rollback itself refuses while it has any, decision 41), and an account is
+-- created. The migration is applied again; with two organizations the mark is
+-- set by hand first, as its own error says to (decision 44).
+savepoint scenario;
+
+insert into auth.users (id, email, raw_user_meta_data) values
+  (t.uid('q_stays'), 'q_stays@db-test.invalid', '{"badge_number": "Q-1"}'),
+  (t.uid('q_moved'), 'q_moved@db-test.invalid', null),
+  (t.uid('q_moved_banned'), 'q_moved_banned@db-test.invalid', null);
+update public.profiles set role = 'Administrator' where id = t.uid('q_moved');
+insert into public.organizations (id, name, created_at)
+  values (t.uid('org_second'), 'Second company', timestamptz '2000-01-01 00:00:00+00');
+
+select t.ok('[c49] setup: three founding members, one an Administrator; a second organization with nobody in it',
+  $$ select t.m('q_stays') = 'Driller/active/Q-1' and t.m('q_moved') = 'Administrator/active/-'
+        and t.m('q_moved_banned') = 'Driller/active/-'
+        and (select count(*) from public.memberships where org_id = t.uid('org_second')) = 0 $$);
+
+\i :rollback_drill
+
+-- While rolled back. Two accounts leave the founding company for the second
+-- one (there a Driller and a Supervisor); one of them is banned meanwhile,
+-- and their legacy profiles say something else than their new memberships.
+delete from public.memberships where user_id in (t.uid('q_moved'), t.uid('q_moved_banned'));
+insert into public.memberships (org_id, user_id, role, status, badge_number) values
+  (t.uid('org_second'), t.uid('q_moved'),        'Driller',    'active', 'S-5'),
+  (t.uid('org_second'), t.uid('q_moved_banned'), 'Supervisor', 'active', null);
+select t.ban('q_moved_banned');
+update public.profiles set badge_number = 'Q-9' where id = t.uid('q_moved_banned');
+-- Created while rolled back: no mirror, so no membership anywhere.
+insert into auth.users (id, email, raw_user_meta_data)
+  values (t.uid('q_new'), 'q_new@db-test.invalid', '{"badge_number": "Q-4"}');
+update public.profiles set role = 'Supervisor' where id = t.uid('q_new');
+
+select t.ok('[c49] setup: rolled back; two accounts belong to the second organization only, one account has no membership anywhere',
+  $$ select not exists (select 1 from pg_attribute where attrelid = 'public.boreholes'::regclass and attname = 'org_id' and not attisdropped)
+        and t.m('q_moved') = 'Driller/active/S-5' and t.m('q_moved_banned') = 'Supervisor/active/-'
+        and t.m('q_new') = 'no membership' and t.m('q_stays') = 'Driller/active/Q-1' $$);
+
+alter table public.organizations add column if not exists is_founding boolean not null default false;
+update public.organizations set is_founding = true where id = t.f();
+
+\i :mig_drill
+
+select t.ok(format('[c49] re-applied after the Drill rollback alone, a second organization present: %s (found in the founding organization: %s)', what, t.mo(actor, t.f())),
+  format($$ select t.mo(%L, t.f()) = %L $$, actor, expected))
+from (values
+  (1, 'q_moved',        'the account that now belongs to the second organization only gets no founding membership', 'no membership'),
+  (2, 'q_moved_banned', 'nor does the one that was banned meanwhile',                                               'no membership'),
+  (3, 'q_new',          'the account with no membership anywhere is enrolled, with its profile''s role and badge',   'Supervisor/active/Q-4'),
+  (4, 'q_stays',        'the founding member nothing happened to is as before',                                     'Driller/active/Q-1')
+) v(i, actor, what, expected)
+order by i;
+select t.ok('[c49][c27] ... the memberships in the second organization are exactly as they were: not re-roled, not deactivated by the ban, badges kept (found: '
+            || t.mo('q_moved', t.uid('org_second')) || ' and ' || t.mo('q_moved_banned', t.uid('org_second')) || ')',
+  $$ select t.mo('q_moved', t.uid('org_second')) = 'Driller/active/S-5'
+        and t.mo('q_moved_banned', t.uid('org_second')) = 'Supervisor/active/-'
+        and (select count(*) from public.memberships where org_id = t.uid('org_second')) = 2 $$);
+select t.none('[c49] ... the legacy Administrator who moved to the second organization does not administer the founding one', 'q_moved',
+  format('select 1 where public.is_org_admin(%L) or public.is_org_member(%L)', t.f(), t.f()));
+select t.ok('[c49][c8] ... and their borehole sent without org_id lands in the second organization, their only one', 'q_moved',
+  format('with i as (%s returning org_id) select org_id = %L from i',
+         t.ins('boreholes', t.uid('new'), null, t.uid('q_moved')), t.uid('org_second')));
 
 rollback to savepoint scenario;
 

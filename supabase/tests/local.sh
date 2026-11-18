@@ -64,6 +64,27 @@
 #             (lib/in_flight.py): once statement by statement, once as one
 #             transaction. Every such account must end with the founding
 #             membership the legacy tables describe (decision 39).
+#   rollback, statement by statement (hosted)
+#             the Drill ROLLBACK applied one statement per transaction on a
+#             migrated database with legacy data. Before the first statement
+#             and after every one (upgrade/rollback_window_probe.sql): a
+#             signed-in user tries to change their own profiles.role, and an
+#             installed build's inserts, upserts, reads and photo upload are
+#             tried; none may fail with an error it fails with neither before
+#             the rollback nor after it (criterion 47). Then the result must
+#             be the pre-tenancy database, as after a rollback in one piece.
+#   rollback guard, no members (hosted)
+#             the Drill rollback against a second organization that has NO
+#             members but still holds one record row (each of the four
+#             tables, with and without records in the founding organization)
+#             or a photo under its folder: it must raise and change nothing.
+#             With everything in the founding organization it runs
+#             (criterion 48).
+#   first application, second organization (hosted)
+#             a first application of the Drill migration when two legacy
+#             accounts already belong to a second organization only: they get
+#             no founding membership; the accounts with no membership
+#             anywhere are enrolled (criterion 49).
 #
 # Output and exit status are as for run.sh: one line per check, a total,
 # non-zero when anything failed.
@@ -876,9 +897,387 @@ phase_in_flight() {
   suite "$db" "$HERE/upgrade/after_migration.sql"
 }
 
+# --- rollback, statement by statement: criterion 47 -----------------------------
+#
+# RF-088: the Drill rollback, run without one wrapping transaction, passed
+# through states in which a signed-in user could set their own profiles.role
+# and an installed build's upsert or upload was refused with an error the app
+# drops for good. The same look the forward migration gets, for the rollback:
+# upgrade/rollback_window_probe.sql before the first statement (label 000)
+# and after every statement.
+
+RB_OPS_ROLE="own role: driller, update|own role: driller, update with name|own role: driller, upsert|own role: supervisor, update"
+RB_OPS_BUILD="insert boreholes|insert pipe_records|insert drilling_events|insert shift_logs|upsert boreholes|upsert pipe_records|upsert drilling_events|upsert shift_logs|photo upload|read own boreholes|read own pipe_records|read own drilling_events|read own shift_logs|read own profile|read own photo"
+
+rb_role_name()  { echo "[c47] $1: after every statement of the Drill rollback a signed-in user still cannot make themselves Administrator"; }
+rb_build_name() { echo "[c47] $1: after every statement of the Drill rollback an installed build gets nothing worse than before the rollback or after it"; }
+
+phase_rollback_statement_by_statement() {
+  local db="rbstep" f s d rc op what n stmts first last bad seen ok=1 ran=0
+  PHASE="hosted, rollback statement by statement"
+  new_db "$db"
+  load_stub "$db" hosted || { fail "[harness] the Supabase stand-in loads :: $(first_error)"; ok=0; }
+  while IFS= read -r f; do
+    apply "$db" "$f" || { fail "[harness] $(basename "$f") applies :: $(first_error)"; ok=0; }
+  done < <(pre_tenancy_migrations)
+  apply "$db" "$HERE/upgrade/seed_legacy.sql" || { fail "[harness] the legacy data loads :: $(first_error)"; ok=0; }
+  rm -f "$WORK"/rb.snap.before "$WORK"/rb.snap.after "$WORK"/rb.digest.before "$WORK"/rb.digest.after
+  snapshot "$db" "$WORK/rb.snap.before" || ok=0
+  digest "$db" "$WORK/rb.digest.before" || ok=0
+  [ -f "$MIG_CORE" ] && [ -f "$MIG_DRILL" ] && [ -f "$RB_DRILL" ] && [ -f "$RB_CORE" ] || ok=0
+  if [ "$ok" -eq 1 ]; then
+    apply "$db" "$MIG_CORE"  || { fail "[harness] saas_core applies :: $(first_error)"; ok=0; }
+    apply "$db" "$MIG_DRILL" || { fail "[harness] drill_tenancy applies :: $(first_error)"; ok=0; }
+  fi
+
+  if [ "$ok" -eq 1 ]; then
+    psql -X -q -v ON_ERROR_STOP=1 -d "$db" >/dev/null 2>&1 <<'SQL'
+create schema t_probe;
+create table t_probe.results (stmt text, tbl text, state text, msg text);
+SQL
+    {
+      echo "select set_config('drill.stmt', '000 before the rollback', false) \\gset drill_ignore_"
+      echo "\\i '$HERE/upgrade/rollback_window_probe.sql'"
+      python3 "$HERE/lib/sql_statements.py" probe-script "$RB_DRILL" "$HERE/upgrade/rollback_window_probe.sql"
+    } >"$WORK/rbstep.sql"
+    stmts="$(grep -c "^select set_config('drill.stmt'" "$WORK/rbstep.sql")"
+    stmts=$((stmts - 1))
+    psql -X -q -v ON_ERROR_STOP=1 -d "$db" -f "$WORK/rbstep.sql" >/dev/null 2>"$WORK/apply.err"
+    rc=$?
+    if [ "$rc" -eq 0 ]; then
+      pass "[c47] the Drill rollback applies one statement at a time ($stmts statements)"
+      ran=1
+    else
+      fail "[c47] the Drill rollback applies one statement at a time :: $(first_error)"
+    fi
+  else
+    fail "[c47] the Drill rollback applies one statement at a time :: not checked, the migrated database could not be prepared or a file is missing"
+  fi
+
+  n="$(psql -X -q -At -d "$db" -c "select count(distinct stmt) from t_probe.results" 2>/dev/null)"
+  first="$(psql -X -q -At -d "$db" -c "select min(stmt) from t_probe.results" 2>/dev/null)"
+  last="$(psql -X -q -At -d "$db" -c "select max(stmt) from t_probe.results" 2>/dev/null)"
+  what="[c47] the states in between were looked at: before the first statement and after every one"
+  if [ "$ran" -eq 1 ] && [ "${stmts:-0}" -ge 3 ] && [ "${n:-0}" -eq $((stmts + 1)) ] && [ "${first%% *}" = "000" ]; then
+    pass "$what (${n} states)"
+  else
+    fail "$what :: ${n:-0} state(s) seen for ${stmts:-0} statement(s)"
+    ran=0
+  fi
+
+  # The probe has something to say: before the rollback and after it, every
+  # operation of an installed build works, a user cannot change their own
+  # role, and each attempt at the role is a statement that DOES change it
+  # when the role applying the rollback runs it.
+  for s in "before the first statement|$first" "after the last statement|$last"; do
+    what="[harness] ${s%%|*} of the Drill rollback: every operation of the probe works, nobody can change their own role, and the attempts are valid statements"
+    if [ "$ran" -ne 1 ]; then
+      fail "$what :: not checked, the rollback did not run to its end"
+      continue
+    fi
+    bad="$(psql -X -q -At -v at="${s##*|}" -d "$db" 2>/dev/null <<'SQL'
+select count(*) || ' of ' || (select count(*) from t_probe.results where stmt = :'at') || ' are not as expected: '
+       || string_agg(tbl || ' -> ' || state || ' ' || left(coalesce(msg, ''), 60), '; ' order by tbl)
+from t_probe.results where stmt = :'at' and state <> '00000' having count(*) > 0;
+SQL
+)"
+    seen="$(psql -X -q -At -d "$db" -c "select count(*) from t_probe.results where stmt = \$\$${s##*|}\$\$" 2>/dev/null)"
+    if [ "${seen:-0}" -ne 23 ]; then
+      fail "$what :: the probe recorded ${seen:-0} of 23 results there"
+    elif [ -n "$bad" ]; then
+      fail "$what :: $bad"
+    else
+      pass "$what"
+    fi
+  done
+
+  # (a) nobody can change their own role, in any state.
+  while IFS= read -r op; do
+    what="$(rb_role_name "$op")"
+    if [ "$ran" -ne 1 ]; then
+      fail "$what :: not checked, the rollback did not run to its end"
+      continue
+    fi
+    seen="$(psql -X -q -At -v op="$op" -d "$db" 2>/dev/null <<'SQL'
+select count(distinct stmt) from t_probe.results where tbl = :'op';
+SQL
+)"
+    bad="$(psql -X -q -At -v op="$op" -d "$db" 2>/dev/null <<'SQL'
+select count(*) || ' state(s) let it through: ' || string_agg('after statement ' || left(stmt, 64) || ' -> ' || state || ' ' || left(coalesce(msg, ''), 50), '; ' order by stmt)
+from (select * from t_probe.results where tbl = :'op' and state <> '00000' order by stmt limit 40) x having count(*) > 0;
+SQL
+)"
+    if [ "${seen:-0}" -ne "${n:-0}" ]; then
+      fail "$what :: not checked, tried in ${seen:-0} of ${n:-0} states"
+    elif [ -n "$bad" ]; then
+      fail "$what :: $bad"
+    else
+      pass "$what (${seen} states)"
+    fi
+  done < <(printf '%s\n' "$RB_OPS_ROLE" | tr '|' '\n')
+
+  # (b) the installed build: never worse than before or after.
+  while IFS= read -r op; do
+    what="$(rb_build_name "$op")"
+    if [ "$ran" -ne 1 ]; then
+      fail "$what :: not checked, the rollback did not run to its end"
+      continue
+    fi
+    seen="$(psql -X -q -At -v op="$op" -d "$db" 2>/dev/null <<'SQL'
+select count(distinct stmt) from t_probe.results where tbl = :'op';
+SQL
+)"
+    bad="$(psql -X -q -At -v op="$op" -v first="$first" -v last="$last" -d "$db" 2>/dev/null <<'SQL'
+select count(*) || ' state(s) are worse (before the rollback: ' || (select state from t_probe.results where tbl = :'op' and stmt = :'first')
+       || ', after it: ' || (select state from t_probe.results where tbl = :'op' and stmt = :'last') || '): '
+       || string_agg('after statement ' || left(stmt, 64) || ' -> ' || state || ' ' || left(coalesce(msg, ''), 60), '; ' order by stmt)
+from (select * from t_probe.results r
+      where tbl = :'op' and state <> '00000'
+        and state is distinct from (select state from t_probe.results where tbl = :'op' and stmt = :'first')
+        and state is distinct from (select state from t_probe.results where tbl = :'op' and stmt = :'last')
+      order by stmt limit 40) x having count(*) > 0;
+SQL
+)"
+    if [ "${seen:-0}" -ne "${n:-0}" ]; then
+      fail "$what :: not checked, tried in ${seen:-0} of ${n:-0} states"
+    elif [ -n "$bad" ]; then
+      fail "$what :: $bad"
+    else
+      pass "$what (${seen} states)"
+    fi
+  done < <(printf '%s\n' "$RB_OPS_BUILD" | tr '|' '\n')
+
+  # Applied this way the result must be what a rollback in one piece gives:
+  # with the saas_core rollback after it, the database from before the
+  # migrations, and the installed build's behaviour with it.
+  psql -X -q -d "$db" -c "drop schema if exists t_probe cascade" >/dev/null 2>&1
+  if [ "$ran" -eq 1 ] && apply "$db" "$RB_CORE"; then
+    pass "[c47][c14] the saas_core rollback runs after the Drill rollback applied one statement at a time"
+    what="[c47][c14] ... and every row, account and photo is as before the migrations"
+    if digest "$db" "$WORK/rb.digest.after"; then
+      d="$(diff "$WORK/rb.digest.before" "$WORK/rb.digest.after")"
+      if [ -z "$d" ]; then pass "$what"; else fail "$what :: $(printf '%s' "$d" | grep '^[<>]' | tr '\n' ';')"; fi
+    else
+      fail "$what :: the digest could not be taken: $(head -n 1 "$WORK/digest.err")"
+    fi
+    snapshot "$db" "$WORK/rb.snap.after"
+    for s in $SECTIONS; do
+      same_section "$s" "$WORK/rb.snap.before" "$WORK/rb.snap.after" "[c47][c14] ... and the $s are exactly what they were before the migrations"
+    done
+    suite "$db" "$HERE/sql/05_legacy_client.sql"
+  else
+    fail "[c47][c14] the saas_core rollback runs after the Drill rollback applied one statement at a time :: $([ "$ran" -eq 1 ] && first_error || echo 'not checked, the Drill rollback did not run to its end')"
+    fail "[c47][c14] ... and every row, account and photo is as before the migrations :: not checked"
+    for s in $SECTIONS; do
+      fail "[c47][c14] ... and the $s are exactly what they were before the migrations :: not checked"
+    done
+    fail "[c47][c14] ... and the installed build's behaviour is back :: not checked"
+  fi
+}
+
+# --- rollback guard, no members: criterion 48 ------------------------------------
+#
+# RF-091: the guard counted organizations holding records and looked at
+# memberships, so a company whose members had been removed was merged into
+# the legacy pool with whatever it still held. Each case gets its own copy of
+# one prepared database (guards/c48_fixture.sql, committed), and the rollback
+# is applied one statement per transaction, so "changes nothing" does not
+# lean on a surrounding transaction.
+
+C48_ROWS="select coalesce(md5(string_agg(x, '|' order by x)), 'none') from (select 'o:' || to_jsonb(o)::text as x from public.organizations o union all select 'm:' || to_jsonb(m)::text from public.memberships m union all select 'b:' || to_jsonb(b)::text from public.boreholes b union all select 'p:' || to_jsonb(p)::text from public.pipe_records p union all select 'e:' || to_jsonb(e)::text from public.drilling_events e union all select 's:' || to_jsonb(l)::text from public.shift_logs l union all select 'f:' || bucket_id || ':' || name from storage.objects union all select 'u:' || id::text from auth.users) r"
+
+c48_label() {   # c48_label <what> <founding_empty>
+  local label
+  case "$1" in
+    photo) label="a photo is stored under the folder of a non-founding organization that has no members and no records" ;;
+    boreholes) label="a non-founding organization that has no members holds a borehole" ;;
+    *) case "$2" in
+         1) label="a non-founding organization that has no members holds a borehole and a row of $1" ;;
+         *) label="a non-founding organization that has no members holds a row of $1, under a borehole of the founding organization" ;;
+       esac ;;
+  esac
+  case "$2" in
+    1) echo "$label, and the founding organization holds no record at all" ;;
+    *) echo "$label (the founding organization holds records too)" ;;
+  esac
+}
+
+phase_rollback_guard_no_members() {
+  local tpl="g48_tpl" db f what empty label rc before after d what_check i=0 ok=1
+  PHASE="hosted, rollback guard (no members)"
+  new_db "$tpl"
+  load_stub "$tpl" hosted || { fail "[harness] the Supabase stand-in loads :: $(first_error)"; ok=0; }
+  while IFS= read -r f; do
+    apply "$tpl" "$f" || { fail "[harness] $(basename "$f") applies :: $(first_error)"; ok=0; }
+  done < <(all_migrations)
+  [ -f "$MIG_DRILL" ] && [ -f "$RB_DRILL" ] && [ -f "$RB_CORE" ] || ok=0
+
+  for what in boreholes pipe_records drilling_events shift_logs photo; do
+    for empty in 0 1; do
+      i=$((i + 1))
+      db="g48_$i"
+      label="$(c48_label "$what" "$empty")"
+      if [ "$ok" -ne 1 ]; then
+        fail "[c48] the Drill rollback raises, by refusing, when $label :: not checked, the database could not be prepared"
+        fail "[c48] ... and changed nothing in the catalog, though applied one statement at a time ($what, founding empty: $empty) :: not checked"
+        fail "[c48] ... and every organization, membership, record, photo and account is as it was ($what, founding empty: $empty) :: not checked"
+        continue
+      fi
+      psql -X -q -v ON_ERROR_STOP=1 -d postgres -c "create database \"$db\" template \"$tpl\"" >/dev/null 2>"$WORK/apply.err"
+      psql -X -q -At -v ON_ERROR_STOP=1 -v what="$what" -v founding_empty="$empty" -d "$db" \
+        -f "$HERE/guards/c48_fixture.sql" >"$WORK/c48.out" 2>"$WORK/apply.err"
+      if ! grep -q '^FIXTURE-READY$' "$WORK/c48.out"; then
+        fail "[c48] the Drill rollback raises, by refusing, when $label :: not checked, the fixture did not load: $(first_error)"
+        fail "[c48] ... and changed nothing in the catalog, though applied one statement at a time ($what, founding empty: $empty) :: not checked"
+        fail "[c48] ... and every organization, membership, record, photo and account is as it was ($what, founding empty: $empty) :: not checked"
+        continue
+      fi
+      rm -f "$WORK"/c48.snap.before "$WORK"/c48.snap.after
+      snapshot "$db" "$WORK/c48.snap.before"
+      before="$(psql -X -q -At -d "$db" -c "$C48_ROWS" 2>/dev/null)"
+
+      psql -X -q -v ON_ERROR_STOP=1 -d "$db" -f "$RB_DRILL" >/dev/null 2>"$WORK/apply.err"
+      rc=$?
+      what_check="[c48] the Drill rollback raises, by refusing, when $label"
+      if [ "$rc" -eq 0 ]; then
+        fail "$what_check :: it ran to its end"
+      elif ! grep -q -i 'refus' "$WORK/apply.err"; then
+        fail "$what_check :: it stopped, but not by refusing: $(first_error | cut -c 1-200)"
+      else
+        pass "$what_check"
+      fi
+
+      what_check="[c48] ... and changed nothing in the catalog, though applied one statement at a time ($what, founding empty: $empty)"
+      snapshot "$db" "$WORK/c48.snap.after"
+      if [ ! -s "$WORK/c48.snap.before" ] || [ ! -s "$WORK/c48.snap.after" ]; then
+        fail "$what_check :: not checked, a snapshot is missing or empty"
+      else
+        d="$(diff "$WORK/c48.snap.before" "$WORK/c48.snap.after")"
+        if [ -z "$d" ]; then
+          pass "$what_check"
+        else
+          fail "$what_check :: $(printf '%s' "$d" | grep -c '^[<>]') line(s) differ, for instance: $(printf '%s' "$d" | grep '^[<>]' | head -n 3 | cut -c 1-160 | tr '\n' ';')"
+        fi
+      fi
+
+      what_check="[c48] ... and every organization, membership, record, photo and account is as it was ($what, founding empty: $empty)"
+      after="$(psql -X -q -At -d "$db" -c "$C48_ROWS" 2>/dev/null)"
+      if [ -n "$before" ] && [ "$before" != "none" ] && [ "$before" = "$after" ]; then
+        pass "$what_check"
+      else
+        fail "$what_check :: the rows changed, or a column of theirs is gone"
+      fi
+      psql -X -q -d postgres -c "drop database if exists \"$db\"" >/dev/null 2>&1
+    done
+  done
+
+  # Nothing of another organization's is stored: the rollback runs, although a
+  # second organization exists and the founding one has a photo under its own
+  # folder.
+  db="g48_runs"
+  if [ "$ok" -eq 1 ]; then
+    psql -X -q -v ON_ERROR_STOP=1 -d postgres -c "create database \"$db\" template \"$tpl\"" >/dev/null 2>"$WORK/apply.err"
+    psql -X -q -At -v ON_ERROR_STOP=1 -v what="nothing" -v founding_empty="0" -d "$db" \
+      -f "$HERE/guards/c48_fixture.sql" >"$WORK/c48.out" 2>"$WORK/apply.err"
+    if grep -q '^FIXTURE-READY$' "$WORK/c48.out"; then
+      apply_checked "$db" "$RB_DRILL" "[c48] with a second, empty organization and everything stored in the founding one (records in all four tables, a photo under its folder, a legacy photo), the Drill rollback runs"
+      apply_checked "$db" "$RB_CORE"  "[c48] ... and the saas_core rollback after it"
+    else
+      fail "[c48] with a second, empty organization and everything stored in the founding one (records in all four tables, a photo under its folder, a legacy photo), the Drill rollback runs :: not checked, the fixture did not load: $(first_error)"
+      fail "[c48] ... and the saas_core rollback after it :: not checked"
+    fi
+  else
+    fail "[c48] with a second, empty organization and everything stored in the founding one (records in all four tables, a photo under its folder, a legacy photo), the Drill rollback runs :: not checked, the database could not be prepared"
+    fail "[c48] ... and the saas_core rollback after it :: not checked"
+  fi
+}
+
+# --- first application, second organization: criterion 49 -----------------------
+#
+# RF-093: a first application enrolled EVERY profile in the founding
+# organization, also the accounts that belong to another company only. Here
+# the foundation is in place, two organizations exist, and two legacy
+# accounts (one of them banned) already belong to the first of them and to
+# nothing else. The second is marked founding by hand, as the migration's
+# own error says to (decision 44), and the Drill migration is applied for
+# the first time.
+
+phase_first_application_second_org() {
+  local db="first49" f ok=1 what got
+  local other="7e57da7a-0000-4000-8000-000000000491" founding="7e57da7a-0000-4000-8000-000000000492"
+  local m="select coalesce(string_agg(format('%s/%s/%s', role, status, coalesce(badge_number, '-')), ' + ' order by org_id), 'no membership') from public.memberships"
+  PHASE="hosted, first application with a second organization"
+  new_db "$db"
+  load_stub "$db" hosted || { fail "[harness] the Supabase stand-in loads :: $(first_error)"; ok=0; }
+  while IFS= read -r f; do
+    apply "$db" "$f" || { fail "[harness] $(basename "$f") applies :: $(first_error)"; ok=0; }
+  done < <(pre_tenancy_migrations)
+  apply "$db" "$HERE/upgrade/seed_legacy.sql" || { fail "[harness] the legacy data loads :: $(first_error)"; ok=0; }
+  [ -f "$MIG_CORE" ] && [ -f "$MIG_DRILL" ] || ok=0
+  [ "$ok" -eq 1 ] && { apply "$db" "$MIG_CORE" || { fail "[harness] saas_core applies :: $(first_error)"; ok=0; }; }
+  if [ "$ok" -eq 1 ]; then
+    psql -X -q -v ON_ERROR_STOP=1 -d "$db" >/dev/null 2>"$WORK/apply.err" <<SQL || { fail "[harness] two organizations, two accounts in the other one, the flag set by hand :: $(first_error)"; ok=0; }
+insert into public.organizations (id, name, created_at) values
+  ('$other',    'Other company',    timestamptz '2000-01-01 00:00:00+00'),
+  ('$founding', 'Founding company', timestamptz '2020-01-01 00:00:00+00');
+insert into public.memberships (org_id, user_id, role, status, badge_number) values
+  ('$other', md5('drill-db-test:l_logger')::uuid, 'Supervisor', 'active', 'O-1'),
+  ('$other', md5('drill-db-test:l_banned')::uuid, 'Driller',    'active', null);
+alter table public.organizations add column is_founding boolean not null default false;
+update public.organizations set is_founding = true where id = '$founding';
+SQL
+  fi
+
+  if [ "$ok" -ne 1 ]; then
+    for what in "[c49] a first application applies when two accounts already belong to another organization only" \
+                "[c49] ... the account that belongs to the other organization only gets no founding membership" \
+                "[c49] ... nor does the banned account that belongs to the other organization only" \
+                "[c49] ... their memberships in the other organization are exactly as they were: role, status and badge" \
+                "[c49] ... the four accounts with no membership anywhere are enrolled in the founding organization with their profile's role and badge" \
+                "[c49] ... and nobody else is a member of anything: four memberships in the founding organization, two in the other"; do
+      fail "$what :: not checked, the database could not be prepared"
+    done
+    return
+  fi
+
+  if ! apply_checked "$db" "$MIG_DRILL" "[c49] a first application applies when two accounts already belong to another organization only"; then
+    for what in "[c49] ... the account that belongs to the other organization only gets no founding membership" \
+                "[c49] ... nor does the banned account that belongs to the other organization only" \
+                "[c49] ... their memberships in the other organization are exactly as they were: role, status and badge" \
+                "[c49] ... the four accounts with no membership anywhere are enrolled in the founding organization with their profile's role and badge" \
+                "[c49] ... and nobody else is a member of anything: four memberships in the founding organization, two in the other"; do
+      fail "$what :: not checked, the migration did not apply"
+    done
+    return
+  fi
+
+  what="[c49] ... the account that belongs to the other organization only gets no founding membership"
+  got="$(psql -X -q -At -d "$db" -c "$m where user_id = md5('drill-db-test:l_logger')::uuid and org_id = '$founding'" 2>&1 | head -n 1)"
+  if [ "$got" = "no membership" ]; then pass "$what"; else fail "$what :: found there: $got"; fi
+
+  what="[c49] ... nor does the banned account that belongs to the other organization only"
+  got="$(psql -X -q -At -d "$db" -c "$m where user_id = md5('drill-db-test:l_banned')::uuid and org_id = '$founding'" 2>&1 | head -n 1)"
+  if [ "$got" = "no membership" ]; then pass "$what"; else fail "$what :: found there: $got"; fi
+
+  what="[c49] ... their memberships in the other organization are exactly as they were: role, status and badge"
+  got="$(psql -X -q -At -d "$db" -c "select ($m where user_id = md5('drill-db-test:l_logger')::uuid and org_id = '$other') || ' and ' || ($m where user_id = md5('drill-db-test:l_banned')::uuid and org_id = '$other')" 2>&1 | head -n 1)"
+  if [ "$got" = "Supervisor/active/O-1 and Driller/active/-" ]; then pass "$what"; else fail "$what :: found: $got"; fi
+
+  what="[c49] ... the four accounts with no membership anywhere are enrolled in the founding organization with their profile's role and badge"
+  got="$(psql -X -q -At -d "$db" -c "select string_agg(a || ' ' || ($m where user_id = md5('drill-db-test:' || a)::uuid and org_id = '$founding'), ', ' order by a) from unnest(array['l_driller', 'l_super', 'l_admin', 'l_expired']) a" 2>&1 | head -n 1)"
+  if [ "$got" = "l_admin Administrator/active/-, l_driller Driller/active/D-1, l_expired Supervisor/active/-, l_super Supervisor/active/S-1" ]; then pass "$what"; else fail "$what :: found: $got"; fi
+
+  what="[c49] ... and nobody else is a member of anything: four memberships in the founding organization, two in the other"
+  got="$(psql -X -q -At -d "$db" -c "select (select count(*) from public.memberships where org_id = '$founding') || ' and ' || (select count(*) from public.memberships where org_id = '$other') || ' of ' || (select count(*) from public.memberships)" 2>&1 | head -n 1)"
+  if [ "$got" = "4 and 2 of 6" ]; then pass "$what"; else fail "$what :: found: $got"; fi
+}
+
 phase_statement_by_statement
+phase_rollback_statement_by_statement
 phase_rollback_guard
 phase_rollback_guard_members
+phase_rollback_guard_no_members
+phase_first_application_second_org
 phase_core_statement_by_statement
 phase_undecidable_founding
 phase_in_flight stepwise

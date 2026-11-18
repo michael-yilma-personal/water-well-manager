@@ -364,6 +364,68 @@ rollback_unflagged() {
   fi
 }
 
+# Criterion 48 (RF-091): the Drill rollback refuses when a non-founding
+# organization WITHOUT members still holds a record row (each of the four
+# tables on its own, also when the founding organization holds none) or a
+# photo under its folder; and it still runs when a second organization exists
+# and holds nothing. guards/c48_fixture.sql builds each state inside a
+# transaction that is never committed.
+rollback_refuses_c48() {
+  local out="$TMP/guard48.out" rc what empty label name
+  local intact="select (to_regclass('public.organizations') is not null and exists (select 1 from pg_attribute where attrelid = 'public.boreholes'::regclass and attname = 'org_id' and not attisdropped) and not exists (select 1 from public.organizations where name = 'Second company (no members)') and not exists (select 1 from auth.users where email like 'guard48-%@db-test.invalid') and not exists (select 1 from storage.objects where name like '%7e57da7a-0000-4000-8000-0000000000c_/%'))::int"
+
+  for what in boreholes pipe_records drilling_events shift_logs photo; do
+    for empty in 0 1; do
+      case "$what" in
+        photo) label="a photo is stored under the folder of a non-founding organization that has no members and no records" ;;
+        boreholes) label="a non-founding organization that has no members holds a borehole" ;;
+        *) case "$empty" in
+             1) label="a non-founding organization that has no members holds a borehole and a row of $what" ;;
+             *) label="a non-founding organization that has no members holds a row of $what, under a borehole of the founding organization" ;;
+           esac ;;
+      esac
+      case "$empty" in
+        1) label="$label, and the founding organization holds no record at all" ;;
+        *) label="$label (the founding organization holds records too)" ;;
+      esac
+      name="[c48] the Drill rollback refuses when $label"
+      psql -X -q -At -v ON_ERROR_STOP=1 -v rollback_drill="$RB_DRILL" -v what="$what" -v founding_empty="$empty" \
+        -f "$HERE/guards/rollback_refuses_c48.sql" >"$out" 2>"$TMP/guard48.err"
+      rc=$?
+      if ! grep -q '^FIXTURE-READY$' "$out"; then
+        fail "$name :: not checked, the fixture did not load: $(grep -m 1 -E 'ERROR|FATAL' "$TMP/guard48.err" | cut -c 1-200)"
+      elif grep -q '^REACHED-END$' "$out" || [ "$rc" -eq 0 ]; then
+        fail "$name :: the script ran to its end without raising"
+      elif ! grep -q -i 'refus' "$TMP/guard48.err"; then
+        fail "$name :: it stopped, but not by refusing: $(grep -m 1 -E 'ERROR|FATAL' "$TMP/guard48.err" | cut -c 1-200)"
+      else
+        pass "$name"
+      fi
+    done
+  done
+
+  name="[c48] the Drill rollback still runs when a second organization exists and everything stored belongs to the founding one (records in all four tables, a photo under its folder, a legacy photo)"
+  psql -X -q -At -v ON_ERROR_STOP=1 -v rollback_drill="$RB_DRILL" -v what="nothing" -v founding_empty="0" \
+    -f "$HERE/guards/rollback_refuses_c48.sql" >"$out" 2>"$TMP/guard48.err"
+  rc=$?
+  if ! grep -q '^FIXTURE-READY$' "$out"; then
+    fail "$name :: not checked, the fixture did not load: $(grep -m 1 -E 'ERROR|FATAL' "$TMP/guard48.err" | cut -c 1-200)"
+  elif [ "$rc" -ne 0 ] || ! grep -q '^REACHED-END$' "$out"; then
+    fail "$name :: $(grep -m 1 -E 'ERROR|FATAL' "$TMP/guard48.err" | cut -c 1-200)"
+  elif ! grep -q '^ROLLED-BACK$' "$out"; then
+    fail "$name :: it ran to its end but boreholes still has org_id"
+  else
+    pass "$name"
+  fi
+
+  # Every case ran inside a transaction that psql abandoned or rolled back.
+  if [ "$(psql -X -q -At -c "$intact" 2>/dev/null)" = "1" ]; then
+    pass "[c48] ... and after all eleven cases the database is as it was"
+  else
+    fail "[c48] ... and after all eleven cases the database is as it was :: tenancy objects are missing or the test's rows were left behind"
+  fi
+}
+
 # Decision 44: what the "cannot tell which organization is the founding one"
 # error tells the operator. $1 is psql's error output, $2 the check's name.
 # Everything the server sent counts (message, detail, hint); only the wording
@@ -441,9 +503,11 @@ for f in "$HERE"/sql/[0-9]*.sql; do
         rollback_refuses
         rollback_refuses_members
         rollback_unflagged
+        rollback_refuses_c48
         run_file "$f"
       else
         fail "[c31] rollback refusal not tried :: see the transaction-control checks above"
+        fail "[c48] rollback refusal for a memberless organization's records and photos not tried :: see the transaction-control checks above"
         fail "[c14] rollback rehearsal not run :: see the transaction-control checks above"
       fi
       ;;
