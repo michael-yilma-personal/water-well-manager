@@ -18,7 +18,7 @@
 import { after, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { closeSync, mkdirSync, mkdtempSync, openSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -127,6 +127,41 @@ function runCommand(command, projectDir = CONFIGS.none, extraEnv = {}) {
   const input = { tool_name: 'Bash', tool_input: { command } };
   if (projectDir !== null) input.cwd = projectDir;
   return runRaw(JSON.stringify(input), projectDir, extraEnv);
+}
+
+/**
+ * Run the hook for one Bash command line with a PATH that holds no program at
+ * all: no jq, no python3, no node.
+ *
+ * Changed for RF-078. Before: the hook JSON was handed over with spawnSync's
+ * `input`, which is a pipe the parent writes after the child has started.
+ * With nothing on PATH the hook exits 2 WITHOUT reading stdin; when it got
+ * there before the parent's write, the write failed with EPIPE, spawnSync
+ * reported that as `result.error` next to status 2, and decisionOf() below
+ * returned "error(... EPIPE)" instead of "exit 2". Which side won was a matter
+ * of scheduling, so the test failed now and then on a busy runner although
+ * the hook had done exactly what is asserted. Now stdin is a regular file
+ * holding the same JSON: nothing is written while the hook runs, so there is
+ * nothing to lose a race with, and a hook that does read its input still
+ * finds all of it. What is asserted is unchanged.
+ */
+function runWithEmptyPath(command) {
+  const emptyBin = mkdtempSync(join(tmpdir(), 'guard-bash-nopath-'));
+  const inputDir = mkdtempSync(join(tmpdir(), 'guard-bash-stdin-'));
+  TEMP_DIRS.push(emptyBin, inputDir);
+  const inputFile = join(inputDir, 'hook-input.json');
+  writeFileSync(inputFile, JSON.stringify({ tool_name: 'Bash', tool_input: { command } }));
+  const stdin = openSync(inputFile, 'r');
+  try {
+    return spawnSync('/bin/bash', [HOOK], {
+      stdio: [stdin, 'pipe', 'pipe'],
+      encoding: 'utf8',
+      timeout: 15000,
+      env: { PATH: emptyBin, CLAUDE_PROJECT_DIR: CONFIGS.none, HOME: emptyBin },
+    });
+  } finally {
+    closeSync(stdin);
+  }
 }
 
 /** 'allow' | 'ask' | 'deny', or a description of anything else the hook did. */
@@ -271,28 +306,12 @@ describe('rule 1: fail closed (exit 2 with a message on stderr)', () => {
     // An empty PATH: no jq, no python3, no node. The criterion is exit 2. If the
     // hook reaches its interpreter by absolute path it can still decide, and
     // then the only acceptable decision for this command is deny.
-    const emptyBin = mkdtempSync(join(tmpdir(), 'guard-bash-nopath-'));
-    TEMP_DIRS.push(emptyBin);
-    const result = spawnSync('/bin/bash', [HOOK], {
-      input: JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'git push origin main' } }),
-      encoding: 'utf8',
-      timeout: 15000,
-      env: { PATH: emptyBin, CLAUDE_PROJECT_DIR: CONFIGS.none, HOME: emptyBin },
-    });
-    const got = decisionOf(result);
+    const got = decisionOf(runWithEmptyPath('git push origin main'));
     assert.ok(got === 'exit 2' || got === DENY, `expected exit 2 (or deny), got: ${got}`);
   });
 
   it('with jq and every interpreter missing from PATH, a production-touching command is never allowed', () => {
-    const emptyBin = mkdtempSync(join(tmpdir(), 'guard-bash-nopath-'));
-    TEMP_DIRS.push(emptyBin);
-    const result = spawnSync('/bin/bash', [HOOK], {
-      input: JSON.stringify({ tool_name: 'Bash', tool_input: { command: `supabase link --project-ref ${PROD}` } }),
-      encoding: 'utf8',
-      timeout: 15000,
-      env: { PATH: emptyBin, CLAUDE_PROJECT_DIR: CONFIGS.none, HOME: emptyBin },
-    });
-    const got = decisionOf(result);
+    const got = decisionOf(runWithEmptyPath(`supabase link --project-ref ${PROD}`));
     assert.ok(got === 'exit 2' || got === ASK, `expected exit 2 (or ask), got: ${got}`);
   });
 });
