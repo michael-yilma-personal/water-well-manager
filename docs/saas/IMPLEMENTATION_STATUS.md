@@ -311,7 +311,7 @@ Harden the enforcement after the security review (RF-010 to RF-024).
 ## Needs the owner
 
 - **Phase 1, before production** (nothing below has been done; each is the owner's decision):
-  - Approve, or not, applying the two migrations to production and deploying `admin-users` after them. Order: `saas_core`, `drill_tenancy`, then the function. Apply in a quiet window, each file as one transaction; on `deadlock detected`, apply again. Create, ban or re-role no account while it runs. Afterwards run the consistency queries recorded in TEST_RESULTS 61; they must return nothing.
+  - Approve, or not, applying the two migrations to production and deploying `admin-users` after them. Order: `saas_core`, `drill_tenancy`, then the function. Apply in a quiet window, each file as one transaction; on `deadlock detected`, apply again. Create, ban or re-role no account while it runs. Afterwards run the consistency queries in the description of pull request 5; they must return nothing.
   - First check on production: accounts with no profile and accounts banned today (they end with no active membership); objects in `drilling-photos` shaped `<uuid>/<uuid>/…` (any would make a rollback refuse); that public signup is disabled (every new account becomes an active Driller of the founding organization).
   - Rollback: both scripts together; it needs the migration history repaired by hand and the previous `admin-users` redeployed. It has been proved on local databases only. Running it once on staging needs the owner's go-ahead.
   - Rename "Founding organization" (Decision 8). Create no second organization before Phase 2's member management.
