@@ -47,8 +47,8 @@ Not in this phase: plans, user limits and subscription state (Phase 3); the plat
 | Id | Task | Status | Evidence |
 |---|---|---|---|
 | P2-1 | Database support for member management: reusable migration `saas_members` and Drill migration `drill_members` | In progress: RF-102 fixed locally (criterion 22), gates green; waiting for the security review, which must cover the final code; then staging | TEST_RESULTS 66 to 70 |
-| P2-2 | Edge Function `saas-members` with `_shared/saas`; handler tests in the gate; deployed to staging; authorization suite on staging | Planned | — |
-| P2-3 | Client foundation `src/saas` (`api.ts`, `orgContext.ts`) and the boundary test | In progress: tests first (does not depend on P2-1 or P2-2 being deployed) | — |
+| P2-2 | Edge Function `saas-members` with `_shared/saas`; handler tests in the gate; deployed to staging; authorization suite on staging | In progress: handler tests first (deployment waits for the P2-1 review) | — |
+| P2-3 | Client foundation `src/saas` (`api.ts`, `orgContext.ts`) and the boundary test | Implemented (110 lines), unit tests and gate green; read by the Lead. Not yet used by an app: its validation and review happen with P2-4, its first use | TEST_RESULTS 71 |
 | P2-4 | Dashboard: organization switcher, records and photos of the active organization, Crew view on `saas-members`, accepting an invitation | Planned | — |
 | P2-5 | Field app: active organization, `org_id` on boreholes and queued work, new photo path, switching rules, role from the membership | Planned | — |
 | P2-6 | Phase suites on staging: the four phase acceptance points with real sign-ins; the existing suites; a legacy-client suite standing in for build 1.1.7 | Planned | — |
