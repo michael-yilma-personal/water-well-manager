@@ -20,7 +20,7 @@
 -- membership's role directly and requires the profile to keep its own, so a
 -- direct write cannot copy back; this file uses the same direct write to set
 -- up a membership and a profile that disagree.
--- plan: 76
+-- plan: 97
 begin;
 \ir ../lib/helpers.sql
 \ir inc/members.sql
@@ -305,6 +305,92 @@ select t.ban('k5');
 select t.unban('k5');
 select t.ok('[P2-1 c10][c31] ... and a later ban and its lifting do not enrol the removed member again',
   $$ select t.m('k5') = 'no membership' $$);
+
+-- ---------------------------------------------------------------------------
+-- Section C (criteria 14 and 17 to 20), added in validation
+-- ---------------------------------------------------------------------------
+
+-- Criterion 17: n_plain has no membership in the second organization.
+select t.refused(format('[P2-1 c17] %s: RAISES for a user with no membership in the organization', fn), 'service', q, fn, null)
+from (values ('badge',  t.set_badge(t.s(), t.uid('n_plain'), 'X-1', t.uid('f_admin'))),
+             ('status', t.set_status(t.s(), t.uid('n_plain'), 'deactivated', t.uid('f_admin'))),
+             ('remove', t.remove(t.s(), t.uid('n_plain'), t.uid('f_admin')))) v(fn, q);
+
+-- Criterion 18: the second organization is left with no active administrator.
+update public.memberships set status = 'deactivated' where org_id = t.s() and user_id = t.uid('n_marked');
+select t.did('[P2-1 c18] in an organization that already has no active administrator, another member can still be deactivated', 'service',
+  t.set_status(t.s(), t.uid('x2'), 'deactivated', t.uid('f_admin')), 1);
+
+-- The hook the copy-back hangs on writes profiles.role: not for clients.
+select t.ok('[P2-1 c11] anon and authenticated hold no EXECUTE on saas_member_changing',
+  $$ select count(*) = 1 and not bool_or(has_function_privilege('anon', oid, 'EXECUTE') or has_function_privilege('authenticated', oid, 'EXECUTE'))
+     from pg_proc where pronamespace = 'public'::regnamespace and proname = 'saas_member_changing' $$);
+
+-- Criterion 19: a ban deactivated the membership; then an Administrator does.
+insert into auth.users (id, email) select t.uid(a), a || '@db-test.invalid' from unnest(array['k6', 'k7']) a;
+select t.did('[P2-1 c19] setup: a founding member logs a borehole', 'k7',
+  t.ins('boreholes', t.uid('boreholes:k7'), null, t.uid('k7')), 1);
+select t.ban('k6');
+select t.ban('k7');
+select t.ok('[P2-1 c19] setup: a ban deactivated both founding memberships',
+  $$ select t.mo('k6', t.f()) = 'Driller/deactivated/-' and t.mo('k7', t.f()) = 'Driller/deactivated/-' $$);
+select t.did('[P2-1 c19] the first is deactivated through saas_set_member_status, the ban still in force', 'service',
+  t.set_status(t.f(), t.uid('k6'), 'deactivated', t.uid('f_admin')), 1);
+select t.did('[P2-1 c19] the second, who has records, is removed through saas_remove_member', 'service',
+  t.remove(t.f(), t.uid('k7'), t.uid('f_admin')), 1);
+select t.unban('k6');
+select t.unban('k7');
+select t.ok('[P2-1 c19] ... lifting the ban does NOT bring back the one deactivated on purpose',
+  $$ select t.mo('k6', t.f()) = 'Driller/deactivated/-' $$);
+select t.ok('[P2-1 c19] ... nor the one removed (kept, deactivated)',
+  $$ select t.mo('k7', t.f()) = 'Driller/deactivated/-' $$);
+
+-- Criterion 20: an invitation to the founding organization, for an account
+-- created for another company.
+insert into auth.users (id, email, raw_app_meta_data, raw_user_meta_data)
+  values (t.uid('i1'), 'i1@db-test.invalid', jsonb_build_object(:'marker_key', t.s()::text), '{"badge_number": "P-0"}');
+select t.did('[P2-1 c20] an account is INVITED to the founding organization as Supervisor with a badge', 'service',
+  t.add(t.f(), t.uid('i1'), 'Supervisor', 'I-1', 'invited', t.uid('f_admin')), 1);
+select t.did('[P2-1 c20] ... the invitation''s role is changed', 'service',
+  t.set_role(t.f(), t.uid('i1'), 'Administrator', t.uid('f_admin')), 1);
+select t.did('[P2-1 c20] ... and its badge', 'service',
+  t.set_badge(t.f(), t.uid('i1'), 'I-2', t.uid('f_admin')), 1);
+select t.ok('[P2-1 c20] ... none of the three wrote the profile',
+  $$ select t.mo('i1', t.f()) = 'Administrator/invited/I-2' and t.p('i1') = 'Driller/P-0' $$);
+select t.did('[P2-1 c20] the invited person accepts', 'i1',
+  format('select public.accept_membership(%L)', t.f()), 1);
+select t.ok('[P2-1 c20] ... the membership is active and accepting wrote nothing to the profile either',
+  $$ select t.mo('i1', t.f()) = 'Administrator/active/I-2' and t.p('i1') = 'Driller/P-0' $$);
+
+-- Criterion 8, in the order Supabase Auth really writes (admin createUser,
+-- internal/api/admin.go): the row is INSERTED with provider/providers only,
+-- and the app_metadata of the request is added by an UPDATE in the same
+-- transaction.
+insert into auth.users (id, email, raw_app_meta_data)
+  values (t.uid('n_seq'), 'n_seq@db-test.invalid', '{"provider": "email", "providers": ["email"]}');
+update auth.users set raw_app_meta_data = raw_app_meta_data || jsonb_build_object(:'marker_key', t.s()::text)
+  where id = t.uid('n_seq');
+select t.ok('[P2-1 c8] the marker written the way Supabase Auth writes it (insert, then update, one transaction): NO founding membership',
+  $$ select t.mo('n_seq', t.f()) = 'no membership' $$);
+
+-- Criterion 14: the key counts, whatever its value.
+insert into auth.users (id, email, raw_app_meta_data)
+  select t.uid(a), a || '@db-test.invalid', jsonb_build_object(:'marker_key', v)
+  from (values ('v_founding', t.f()::text), ('v_unknown', t.uid('no_such_org')::text), ('v_text', 'not an id')) x(a, v);
+select t.ok('[P2-1 c14] a marker naming the founding organization, an unknown id, or text that is no id: a profile each, and no membership anywhere',
+  $$ select (select count(*) from public.profiles where id in (t.uid('v_founding'), t.uid('v_unknown'), t.uid('v_text'))) = 3
+        and t.m('v_founding') = 'no membership' and t.m('v_unknown') = 'no membership' and t.m('v_text') = 'no membership' $$);
+
+-- Criterion 14: drill_tenancy applied again as a FIRST application (the
+-- founding organization emptied, Phase 1 criterion 45). Last in this file:
+-- the file puts the Phase 1 enrolment function back (criterion 21).
+delete from public.memberships where org_id = t.f();
+\i :mig_drill
+select t.ok('[P2-1 c14] control: that application enrolled the accounts with no marker again',
+  $$ select t.mo('n_plain', t.f()) = 'Driller/active/L-1' $$);
+select t.ok('[P2-1 c14] ... and no marked account: still no membership anywhere',
+  $$ select t.m('v_founding') = 'no membership' and t.m('v_unknown') = 'no membership' and t.m('v_text') = 'no membership'
+        and t.m('n_both') = 'no membership' $$);
 
 rollback;
 select 'done';

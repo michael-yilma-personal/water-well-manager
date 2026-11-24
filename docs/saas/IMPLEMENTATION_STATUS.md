@@ -6,7 +6,7 @@ Requirements: `docs/SAAS_ARCHITECTURE_PROPOSAL.md`. How the work is run: `docs/s
 
 - **Phase:** Phase 2 — Organization-aware apps (approved by the owner on 2026-11-23). Staging only; nothing in it may reach production without the owner approving that specific action.
 - **Branch:** `saas/phase-2-org-apps`, branched from `saas/phase-1-tenancy` at `3715f99`. Pull requests 3 (workflow tooling), 4 (Phase 0) and 5 (Phase 1) are open with green CI, awaiting the owner's merge, in that order.
-- **In progress:** P2-1 (database support for member management): implemented and green; independent validation and the security review are running.
+- **In progress:** P2-1 (database support for member management): validation found one defect (RF-102), being fixed; the security review is running.
 - **Next step:** P2-1 through the loop, then P2-2 (`saas-members`). Tasks and criteria are under "Phase 2" below.
 - **Phase 1** is done on staging; its production migration is **not approved**. **Do not check out `main` or any branch that predates the tooling until the pull requests are merged (RF-059).**
 - `.claude/settings.json`: the edit of 2026-11-17 (hooks commented out) was reverted by the owner on 2026-11-23; the file is as committed and the hooks are on.
@@ -46,7 +46,7 @@ Not in this phase: plans, user limits and subscription state (Phase 3); the plat
 
 | Id | Task | Status | Evidence |
 |---|---|---|---|
-| P2-1 | Database support for member management: reusable migration `saas_members` and Drill migration `drill_members` | In progress: implemented with criteria 19 and 20; gates green; validation and review running | TEST_RESULTS 66 to 68 |
+| P2-1 | Database support for member management: reusable migration `saas_members` and Drill migration `drill_members` | In progress: validation found RF-102 (the marker is missed the way the real auth server writes it); fix with the Developer; review running | TEST_RESULTS 66 to 69 |
 | P2-2 | Edge Function `saas-members` with `_shared/saas`; handler tests in the gate; deployed to staging; authorization suite on staging | Planned | — |
 | P2-3 | Client foundation `src/saas` (`api.ts`, `orgContext.ts`) and the boundary test | Planned | — |
 | P2-4 | Dashboard: organization switcher, records and photos of the active organization, Crew view on `saas-members`, accepting an invitation | Planned | — |
@@ -104,7 +104,9 @@ Two new migrations, later than `20261116010000`, each safe to apply twice, each 
 20. Nothing is copied to `profiles` for a membership that is `invited`, whichever change it is (add, role or badge), and nothing is copied when it is accepted: the invited account may belong to another company.
 21. Accepted as they are, and to be listed in the production checklist: the member functions rely on the default isolation level (READ COMMITTED), which is what the API uses; the rollback scripts assume the documented order (members before tenancy); re-applying the `drill_tenancy` file on its own after `drill_members` puts the Phase 1 enrolment function back, so `drill_members` must be applied again after it (RF-101).
 
-#### P2-2 acceptance criteria — Edge Function `saas-members` (drafted 2026-11-23; final when P2-1 is done)
+22. (Replaces the last sentence of criterion 8; RF-102.) The auth server creates an account in two steps inside one transaction: the row is inserted with the request's `user_metadata` and without its `app_metadata`, which is added by an update afterwards. So the enrolment, which runs at the insert, must see the marker there: an account created with `saas_org` in its `user_metadata` **or** its `app_metadata` at the insert is not enrolled in the founding organization. This is safe in the direction that matters: at that moment the key can only withhold a membership, never grant one, and after the insert `user_metadata` has no influence on anything. A reconciliation (criterion 14) still looks at `app_metadata` only, which a user cannot edit. `saas-members` sets the key in both. Proved with the real auth server on staging (P2-2 criterion 9).
+
+#### P2-2 acceptance criteria — Edge Function `saas-members` (drafted 2026-11-23; final when P2-1 is done). Owner's instruction applies: the smallest function and the smallest set of tests that cover each criterion once
 
 `supabase/functions/saas-members/` (`index.ts`, pure `policy.ts`) with shared code in `supabase/functions/_shared/saas/`. Reusable: neither names a Drill table, column, role or bucket (`profiles` and the record tables included); a test checks it. `admin-users` is not changed.
 
@@ -119,6 +121,7 @@ Two new migrations, later than `20261116010000`, each safe to apply twice, each 
 6. Every membership write goes through the functions of P2-1 criterion 3, so each has its audit row; the function never writes `memberships` directly.
 7. The authorization decisions are pure functions in `policy.ts` (no imports, nothing of the runtime) and unit-tested in the gate; the handler is tested in the gate against a stand-in client, as `admin-users` is, including: a refusal writes nothing; the target is checked before the first write on every branch; ids are compared after normalising case.
 8. A failed read ends the request with 500 and one fixed message before anything is written; the cause goes to the log only. Unknown methods are 405; CORS as `admin-users`.
+10. The refusals of the P2-1 functions are mapped by their code, never by matching message text: `SM002` and `SM008` → 400; `SM003`, `SM006`, `SM007` → 409; `SM004` → 404 "No such member"; `SM005` → 400; anything else → 500 with the fixed message.
 9. Deployed to staging after the P2-1 migrations. A suite `e2e/saas/members_e2e.py` proves on staging, with real sign-ins and two organizations: every verb by each Administrator against the other organization is refused and changes nothing; Driller, Data Logger, Supervisor, a deactivated Administrator and an invited Administrator are refused; an account created for the second organization has no founding membership; adding an existing account gives `invited`, which reads nothing until `accept_membership`; deactivating a member of both organizations in one leaves the other working.
 
 #### P2-3 acceptance criteria — client foundation `src/saas` (drafted 2026-11-24)
