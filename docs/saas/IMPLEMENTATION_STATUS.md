@@ -6,7 +6,7 @@ Requirements: `docs/SAAS_ARCHITECTURE_PROPOSAL.md`. How the work is run: `docs/s
 
 - **Phase:** Phase 2 — Organization-aware apps (approved by the owner on 2026-11-23). Staging only; nothing in it may reach production without the owner approving that specific action.
 - **Branch:** `saas/phase-2-org-apps`, branched from `saas/phase-1-tenancy` at `3715f99`. Pull requests 3 (workflow tooling), 4 (Phase 0) and 5 (Phase 1) are open with green CI, awaiting the owner's merge, in that order.
-- **In progress:** P2-1 (database support for member management): tests first, with the Test Engineer.
+- **In progress:** P2-1 (database support for member management): tests are written and red; the Developer implements next.
 - **Next step:** P2-1 through the loop, then P2-2 (`saas-members`). Tasks and criteria are under "Phase 2" below.
 - **Phase 1** is done on staging; its production migration is **not approved**. **Do not check out `main` or any branch that predates the tooling until the pull requests are merged (RF-059).**
 - `.claude/settings.json`: the edit of 2026-11-17 (hooks commented out) was reverted by the owner on 2026-11-23; the file is as committed and the hooks are on.
@@ -46,7 +46,7 @@ Not in this phase: plans, user limits and subscription state (Phase 3); the plat
 
 | Id | Task | Status | Evidence |
 |---|---|---|---|
-| P2-1 | Database support for member management: reusable migration `saas_members` and Drill migration `drill_members` | In progress: tests first | — |
+| P2-1 | Database support for member management: reusable migration `saas_members` and Drill migration `drill_members` | In progress: tests written (red for the right reason); with the Developer | TEST_RESULTS 66 |
 | P2-2 | Edge Function `saas-members` with `_shared/saas`; handler tests in the gate; deployed to staging; authorization suite on staging | Planned | — |
 | P2-3 | Client foundation `src/saas` (`api.ts`, `orgContext.ts`) and the boundary test | Planned | — |
 | P2-4 | Dashboard: organization switcher, records and photos of the active organization, Crew view on `saas-members`, accepting an invitation | Planned | — |
@@ -91,6 +91,31 @@ Two new migrations, later than `20261116010000`, each safe to apply twice, each 
 11. Privileges stay as Phase 1 criterion 25 states them: no new table privilege for `anon` or `authenticated`; clients still cannot insert, update or delete in `memberships`, `organizations` or `audit_log` directly.
 12. Isolation: none of this lets a member of one organization read or change another organization's memberships, and an organization administrator still reads only their own organization's `audit_log` rows.
 13. Rollback scripts: `drill_members` first, then `saas_members`; after both, the schema and behaviour are those of Phase 1 (its database tests pass). Tested on a local database only.
+
+**C. Settled after the tests were written (2026-11-24)**
+
+14. The marker of criterion 8 is the key `saas_org` in `app_metadata`. An account that carries the key at all, whatever its value (the founding organization's id, an unknown id, text that is no id), is never enrolled by the legacy path; its memberships come only from `saas_add_member`. A re-application or reconciliation of `drill_tenancy` (Phase 1 criteria 39, 45, 49) does not enrol a marked account either; this is the one change allowed to the Phase 1 migration file.
+15. Copy-back (criterion 9) applies to changes made through the member functions, `saas_add_member` into the founding organization included. A direct write to `memberships` is not copied (the existing test `25_mirroring.sql` requires that). `saas_members` still names nothing of Drill's, so Drill attaches its copy-back through a hook the foundation leaves open.
+16. Rollback order is members first, then tenancy. The existing Phase 1 rollback tests run unchanged with the member migrations applied, so `drill_members` adds no trigger that survives the tenancy rollback.
+17. For a user with no membership in the organization, every function of criterion 3 except `saas_add_member` raises and changes nothing. An `invited` membership cannot be deactivated through `saas_set_member_status`; it can be removed. `saas_set_member_badge` on oneself is allowed. `saas_add_member` takes only `active` or `invited`.
+18. The last-administrator rule refuses only a change that takes an organization from one or more active administrators to none. Changes to other members of an organization that already has none are allowed.
+
+#### P2-2 acceptance criteria — Edge Function `saas-members` (drafted 2026-11-23; final when P2-1 is done)
+
+`supabase/functions/saas-members/` (`index.ts`, pure `policy.ts`) with shared code in `supabase/functions/_shared/saas/`. Reusable: neither names a Drill table, column, role or bucket (`profiles` and the record tables included); a test checks it. `admin-users` is not changed.
+
+1. A request needs a valid session (otherwise 401) and names one organization: `org_id` as a query parameter on GET, as a body field otherwise; missing or not a uuid is 400. The caller needs an **active** membership in that organization with a role in `saas_admin_roles()`; otherwise 403, the same answer whether the organization exists or not. Being a platform administrator gives nothing here. `profiles.role` is not consulted.
+2. GET answers `{ members: [...] }`: every membership of that organization, whatever its status, and nobody else. Each: `id`, `email`, `name`, `role`, `badgeNumber`, `status`, `createdAt`, `lastSignInAt`, `records` (from `saas_member_record_count`), `isSelf`. Name and email come from the auth account. The list is complete however many accounts the project holds.
+3. POST `{ org_id, email, name, role, badgeNumber, password }` adds a person. A role outside `saas_roles()` is 400 before anything is created.
+   - No account has that email: `password` is required, under the same rule `admin-users` applies; the account is created confirmed, carrying the `app_metadata` marker of P2-1 criterion 8, and gets an `active` membership. 201 `{ id, outcome: 'created' }`. If the membership cannot be created the new account is deleted again; nothing is left behind.
+   - An account has that email (compared without regard to case, found reliably however many accounts exist): an `invited` membership and nothing else. That account's password, metadata and ban state are not touched and the request's `password` is ignored. 201 `{ id, outcome: 'invited' }` (D2-1).
+   - Already a member of this organization, whatever the status: 409, nothing changed.
+4. PATCH `{ org_id, id, action }` with `setRole` (`role`), `setBadge` (`badgeNumber`), `deactivate`, `reactivate`. DELETE `{ org_id, id }` answers `{ action: 'removed' | 'deactivated', records }`. The target must have a membership in **that** organization: any other id, existing or not, a member elsewhere or not, gets 404 "No such member", indistinguishable, and nothing is changed. Acting on oneself is 400; leaving the organization without an active administrator is 409; reactivating an `invited` membership is 409.
+5. A target who also belongs to other organizations is managed normally: only the membership in the named organization changes. No request ever bans, unbans, deletes or changes the password of an existing account (D2-5).
+6. Every membership write goes through the functions of P2-1 criterion 3, so each has its audit row; the function never writes `memberships` directly.
+7. The authorization decisions are pure functions in `policy.ts` (no imports, nothing of the runtime) and unit-tested in the gate; the handler is tested in the gate against a stand-in client, as `admin-users` is, including: a refusal writes nothing; the target is checked before the first write on every branch; ids are compared after normalising case.
+8. A failed read ends the request with 500 and one fixed message before anything is written; the cause goes to the log only. Unknown methods are 405; CORS as `admin-users`.
+9. Deployed to staging after the P2-1 migrations. A suite `e2e/saas/members_e2e.py` proves on staging, with real sign-ins and two organizations: every verb by each Administrator against the other organization is refused and changes nothing; Driller, Data Logger, Supervisor, a deactivated Administrator and an invited Administrator are refused; an account created for the second organization has no founding membership; adding an existing account gives `invited`, which reads nothing until `accept_membership`; deactivating a member of both organizations in one leaves the other working.
 
 ### Phase 1 — Tenancy in the database (approved to start 2026-11-15; production migration NOT approved)
 
