@@ -333,6 +333,10 @@ begin
   from public.profiles p
   join auth.users u on u.id = p.id
   where not exists (select 1 from public.memberships x where x.user_id = p.id)
+    -- Nor an account created FOR an organization: one whose app_metadata
+    -- carries the key saas_org (20261123010000_drill_members.sql, section 3)
+    -- gets its memberships from saas_add_member only, never from here.
+    and not coalesce(u.raw_app_meta_data ? 'saas_org', false)
   on conflict (org_id, user_id) do nothing;
 end
 $$;
