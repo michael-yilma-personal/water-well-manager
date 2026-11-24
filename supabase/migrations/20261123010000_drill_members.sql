@@ -39,7 +39,9 @@ $$;
 -- (auth.users.raw_app_meta_data), which only the service role can write.
 -- An account that carries the key at all, whatever its value, is never
 -- enrolled by the legacy path: its memberships come from saas_add_member
--- only. user_metadata, which the user edits, is not looked at.
+-- only. At the insert the key is also accepted in user_metadata (see the
+-- function): there it can only withhold a membership, never grant one, and
+-- after the insert user_metadata has no influence on anything.
 --
 -- This is drill_tenancy's function (section 3) with that one test added to
 -- its INSERT branch. The profile is created by the statement that creates
@@ -62,9 +64,12 @@ begin
   end if;
 
   if tg_op = 'INSERT' then
+    -- Both are read: the auth server inserts the account with its
+    -- user_metadata only and adds the app_metadata by an update afterwards.
     if exists (
       select 1 from auth.users u
-      where u.id = new.id and u.raw_app_meta_data ? 'saas_org'
+      where u.id = new.id
+        and (u.raw_app_meta_data ? 'saas_org' or u.raw_user_meta_data ? 'saas_org')
     ) then
       return null;
     end if;

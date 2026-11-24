@@ -6,7 +6,7 @@ Requirements: `docs/SAAS_ARCHITECTURE_PROPOSAL.md`. How the work is run: `docs/s
 
 - **Phase:** Phase 2 — Organization-aware apps (approved by the owner on 2026-11-23). Staging only; nothing in it may reach production without the owner approving that specific action.
 - **Branch:** `saas/phase-2-org-apps`, branched from `saas/phase-1-tenancy` at `3715f99`. Pull requests 3 (workflow tooling), 4 (Phase 0) and 5 (Phase 1) are open with green CI, awaiting the owner's merge, in that order.
-- **In progress:** P2-1 (database support for member management): validation found one defect (RF-102), being fixed; the security review is running.
+- **In progress:** P2-1 (database support for member management): RF-102 fixed locally and green; waiting for the security review of the final code, then staging.
 - **Next step:** P2-1 through the loop, then P2-2 (`saas-members`). Tasks and criteria are under "Phase 2" below.
 - **Phase 1** is done on staging; its production migration is **not approved**. **Do not check out `main` or any branch that predates the tooling until the pull requests are merged (RF-059).**
 - `.claude/settings.json`: the edit of 2026-11-17 (hooks commented out) was reverted by the owner on 2026-11-23; the file is as committed and the hooks are on.
@@ -46,7 +46,7 @@ Not in this phase: plans, user limits and subscription state (Phase 3); the plat
 
 | Id | Task | Status | Evidence |
 |---|---|---|---|
-| P2-1 | Database support for member management: reusable migration `saas_members` and Drill migration `drill_members` | In progress: validation found RF-102 (the marker is missed the way the real auth server writes it); fix with the Developer; review running | TEST_RESULTS 66 to 69 |
+| P2-1 | Database support for member management: reusable migration `saas_members` and Drill migration `drill_members` | In progress: RF-102 fixed locally (criterion 22), gates green; waiting for the security review, which must cover the final code; then staging | TEST_RESULTS 66 to 70 |
 | P2-2 | Edge Function `saas-members` with `_shared/saas`; handler tests in the gate; deployed to staging; authorization suite on staging | Planned | — |
 | P2-3 | Client foundation `src/saas` (`api.ts`, `orgContext.ts`) and the boundary test | Planned | — |
 | P2-4 | Dashboard: organization switcher, records and photos of the active organization, Crew view on `saas-members`, accepting an invitation | Planned | — |

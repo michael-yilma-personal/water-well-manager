@@ -20,7 +20,7 @@
 -- membership's role directly and requires the profile to keep its own, so a
 -- direct write cannot copy back; this file uses the same direct write to set
 -- up a membership and a profile that disagree.
--- plan: 97
+-- plan: 98
 begin;
 \ir ../lib/helpers.sql
 \ir inc/members.sql
@@ -79,12 +79,13 @@ select t.ok('[P2-1 c8] ... and NO membership in the founding organization',
 select t.none('[P2-1 c8] ... so, signed in before anything else happens, it reads no borehole and is no member of the founding organization', 'n_marked',
   format('select 1 where public.is_org_member(%L) or exists (select 1 from public.boreholes)', t.f()));
 
--- user_metadata is the user's own to edit: it decides nothing.
+-- Criterion 22 (a change of requirement, RF-102; it replaces criterion 8's
+-- last sentence): AT THE INSERT the key in user_metadata suppresses enrolment too.
 insert into auth.users (id, email, raw_user_meta_data)
   values (t.uid('n_user'), 'n_user@db-test.invalid',
           jsonb_build_object('name', 'User', :'marker_key', t.s()::text));
-select t.ok('[P2-1 c8] the same key in USER metadata has no influence: the account is enrolled in the founding organization',
-  $$ select t.m('n_user') = 'Driller/active/-' and t.mo('n_user', t.f()) = 'Driller/active/-' $$);
+select t.ok('[P2-1 c22] the same key in USER metadata only, at the insert: a profile, and no membership anywhere',
+  $$ select t.p('n_user') = 'Driller/-' and t.m('n_user') = 'no membership' $$);
 
 insert into auth.users (id, email, raw_app_meta_data, raw_user_meta_data)
   values (t.uid('n_both'), 'n_both@db-test.invalid',
@@ -363,14 +364,16 @@ select t.ok('[P2-1 c20] ... the membership is active and accepting wrote nothing
   $$ select t.mo('i1', t.f()) = 'Administrator/active/I-2' and t.p('i1') = 'Driller/P-0' $$);
 
 -- Criterion 8, in the order Supabase Auth really writes (admin createUser,
--- internal/api/admin.go): the row is INSERTED with provider/providers only,
--- and the app_metadata of the request is added by an UPDATE in the same
--- transaction.
-insert into auth.users (id, email, raw_app_meta_data)
-  values (t.uid('n_seq'), 'n_seq@db-test.invalid', '{"provider": "email", "providers": ["email"]}');
+-- internal/api/admin.go): the row is INSERTED with the request's
+-- user_metadata and provider/providers only, and the app_metadata of the
+-- request is added by an UPDATE in the same transaction. saas-members sends
+-- the key in both (criterion 22).
+insert into auth.users (id, email, raw_app_meta_data, raw_user_meta_data)
+  values (t.uid('n_seq'), 'n_seq@db-test.invalid', '{"provider": "email", "providers": ["email"]}',
+          jsonb_build_object(:'marker_key', t.s()::text));
 update auth.users set raw_app_meta_data = raw_app_meta_data || jsonb_build_object(:'marker_key', t.s()::text)
   where id = t.uid('n_seq');
-select t.ok('[P2-1 c8] the marker written the way Supabase Auth writes it (insert, then update, one transaction): NO founding membership',
+select t.ok('[P2-1 c22] the marker written the way Supabase Auth writes it (insert, then update, one transaction): NO founding membership',
   $$ select t.mo('n_seq', t.f()) = 'no membership' $$);
 
 -- Criterion 14: the key counts, whatever its value.
@@ -391,6 +394,8 @@ select t.ok('[P2-1 c14] control: that application enrolled the accounts with no 
 select t.ok('[P2-1 c14] ... and no marked account: still no membership anywhere',
   $$ select t.m('v_founding') = 'no membership' and t.m('v_unknown') = 'no membership' and t.m('v_text') = 'no membership'
         and t.m('n_both') = 'no membership' $$);
+select t.ok('[P2-1 c22] ... while the reconciliation ignores USER metadata: the account marked there only is enrolled, as before',
+  $$ select t.m('n_user') = 'Driller/active/-' and t.mo('n_user', t.f()) = 'Driller/active/-' $$);
 
 rollback;
 select 'done';
