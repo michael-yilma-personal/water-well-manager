@@ -50,7 +50,7 @@ Not in this phase: plans, user limits and subscription state (Phase 3); the plat
 | P2-2 | Edge Function `saas-members` with `_shared/saas`; handler tests in the gate; deployed to staging; authorization suite on staging | In progress: implemented (`handler.ts` 189 lines, `index.ts` 130), RF-110 to RF-112 fixed and tested; **deployed to staging** and answering correctly in a first live check; the staging suite (criterion 9) is being written | TEST_RESULTS 73 to 77 |
 | P2-3 | Client foundation `src/saas` (`api.ts`, `orgContext.ts`) and the boundary test | Implemented (110 lines), unit tests and gate green; read by the Lead. Not yet used by an app: its validation and review happen with P2-4, its first use | TEST_RESULTS 71 |
 | P2-4 | Dashboard: organization switcher, records and photos of the active organization, Crew view on `saas-members`, accepting an invitation | Implemented; full gate green (type check and build); not yet run in a browser: the staging suites are being written | TEST_RESULTS 77 |
-| P2-5 | Field app: active organization, `org_id` on boreholes and queued work, new photo path, switching rules, role from the membership | Planned | — |
+| P2-5 | Field app: active organization, `org_id` on boreholes and queued work, new photo path, switching rules, role from the membership | In progress: unit tests first | — |
 | P2-6 | Phase suites on staging: the four phase acceptance points with real sign-ins; the existing suites; a legacy-client suite standing in for build 1.1.7 | Planned | — |
 | P2-7 | Version 1.2.0, a staging build of the APK, `test:apk` on a device or emulator | Planned (needs a device or emulator) | — |
 
@@ -150,6 +150,19 @@ Smallest change to `src/admin/` that meets these; it uses `src/saas` and adds no
 5. Photos: a signed URL is asked for the new path `<org_id>/<author>/<file>` and, when that object does not exist, for the legacy path `<author>/<file>`.
 6. The Crew view manages memberships of the active organization through `src/saas` (`saas-members`); nothing in the dashboard calls `admin-users` any more and `crewApi.ts` goes. It shows each member's status (active, invited, deactivated); adding a person who already has an account says they were invited and must accept; removing says what happened (removed, or deactivated because they have records) and no longer claims the person cannot sign in; role change, deactivate and reactivate as today. A member can edit nobody's password.
 7. Sign-out and sign-in as another person on the same browser never carries the first person's organization over.
+
+#### P2-5 acceptance criteria — field app (2026-11-25)
+
+Smallest change that meets these. A device works for one organization at a time (proposal section 6). Nothing here changes what an installed 1.1.7 build sends or needs.
+
+1. **Active organization.** When signed in and online the app reads `my_organizations()` and settles the active organization with `resolveActiveOrg` (`src/saas`), remembered per user. One active membership: silently. Several and none remembered: the person chooses before the main screen. None: a screen that says why (as the dashboard's), showing any invitation with Accept and Decline, and Sign out. The active organization's id and the role in it are cached on the device (`getCachedOrgId()` in `src/services/auth.ts`, next to the cached user id), so the app works offline exactly as today; nothing on the write path calls the network.
+2. **Role.** The person's role in the app is the role of the active membership, not `profiles.role`; name and badge still come from the profile.
+3. **Queued work carries its organization.** `OutboxItem` gains `orgId?: string`, stamped at enqueue from the cached active organization and never changed afterwards. The record transport sends a borehole with `org_id` equal to the item's `orgId`; children are sent as today (the database takes their organization from the borehole). An item with no `orgId` (queued before the update) is sent exactly as today, with no `org_id`. Nothing is ever sent under an organization other than the one it was captured in.
+4. **Photos.** An item with an `orgId` uploads to `<org_id>/<user_id>/<file>`; one without uploads to the legacy path as today.
+5. **Pull.** The pull asks for the caller's own rows **of the active organization** (`org_id` filter added to the existing `created_by` filter), so a device never holds another organization's records, not even the same person's.
+6. **Switching.** Offered only with more than one active membership. Refused while unsent work is queued, by the same rule as signing out; it clears the local records exactly as signing out does (`clearForAccountSwitch`), then pulls the new organization's.
+7. **Losing access.** When a refresh finds no active membership, the screen of criterion 1 is shown; queued work is not destroyed. Uploads the database refuses are parked as today.
+8. Unit tests, in the existing test files, once each: the borehole row carries the item's `org_id`, and none when the item has none; the photo path for both cases; the pull filter; enqueue stamps the cached organization. The screens are proved by the build, the existing offline-sync suite on staging and the device suite (P2-7).
 
 ### Phase 1 — Tenancy in the database (approved to start 2026-11-15; production migration NOT approved)
 
