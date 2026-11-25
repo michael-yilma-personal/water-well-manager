@@ -215,6 +215,22 @@ test('a member may change their own badge, through saas_set_member_badge; their 
   ]);
 });
 
+test('the list shows neither the name nor the last sign-in of a person who is only invited (RF-110)', async () => {
+  const w = world();
+  w.accounts.find((a) => a.id === INVITED_A)!.lastSignInAt = '2026-11-21T09:00:00Z';
+  const { body } = await w.send('GET', {}, `?org_id=${ORG_A}`);
+  const invited = body.members.find((m: any) => m.id === INVITED_A);
+  assert.deepEqual([invited.status, invited.name, invited.lastSignInAt], ['invited', '', null]);
+});
+
+test('POST with an email that is not shaped x@y is 400 and nothing is created (RF-112)', async () => {
+  const w = world();
+  for (const email of ['nobody', '@example.com', 'nobody@', 'a b@example.com']) {
+    assert.equal((await w.send('POST', { ...newPerson, email })).status, 400, email);
+  }
+  assert.deepEqual(w.writes, []);
+});
+
 test('the function is reusable: neither source file names a Drill table, role or bucket', () => {
   const words = ['profiles', 'boreholes', 'pipe_records', 'drilling_events', 'shift_logs', 'Driller', 'Data Logger', 'Supervisor', 'Administrator', 'drilling-photos'];
   for (const file of ['handler.ts', 'index.ts']) {
