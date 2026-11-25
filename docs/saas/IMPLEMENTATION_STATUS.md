@@ -6,10 +6,10 @@ Requirements: `docs/SAAS_ARCHITECTURE_PROPOSAL.md`. How the work is run: `docs/s
 
 - **Phase:** Phase 2 — Organization-aware apps (approved by the owner on 2026-11-23). Staging only; nothing in it may reach production without the owner approving that specific action.
 - **Branch:** `saas/phase-2-org-apps`, branched from `saas/phase-1-tenancy` at `3715f99`. Pull requests 3 (workflow tooling), 4 (Phase 0) and 5 (Phase 1) are open with green CI, awaiting the owner's merge, in that order.
-- **In progress:** P2-1 to P2-6 are done on staging: all suites pass (TEST_RESULTS 84 to 86), the gate is green, and the eighteenth review has no blocking finding. Open: RF-122 (Low, the wording of one message) and P2-7 (version 1.2.0 and the Android build; the device suite needs `adb` or a device from the owner).
-- **Next step:** RF-122, then P2-7 as far as it goes without a device, then the pull request for Phase 2.
+- **In progress:** Phase 2 tasks P2-1 to P2-7 are done on staging and on the emulator (TEST_RESULTS 84 to 88); the gate is green; the eighteenth review has no blocking finding. Open and not blocking: RF-123 (a device without a session shows unsent work and no way to link again; unconfirmed), the upgrade from 1.1.7 on a real device, and the deferred items of the production checklist (RF-101, RF-105, RF-106, RF-109, RF-111, RF-121).
+- **Next step:** the pull request for Phase 2 and its CI run; then the owner's decisions. Phase 3 is not approved.
 - **Phase 1** is done on staging; its production migration is **not approved**. **Do not check out `main` or any branch that predates the tooling until the pull requests are merged (RF-059).**
-- `.claude/settings.json`: the edit of 2026-11-17 (hooks commented out) was reverted by the owner on 2026-11-23; the file is as committed and the hooks are on.
+- `.claude/settings.json`: found on 2026-11-25 (14:44) with every line commented out again, which turns the four hooks off (the same edit as on 2026-11-17). Not made by the Lead or an agent as far as known; left as found and not committed. While it stands the Stop gate and the Bash guard do not run: the Lead runs `scripts/gate.sh` by hand.
 - **Waiting on the owner:** the production decision for Phase 1; the action recorded for RF-050 (deferred by the owner; does not block development); approval to delete the `probe` function from production (RF-049); confirmation of the staging rule (RF-054); branch protection on `main`; merging the three pull requests (RF-059).
 
 ## Phases
@@ -52,7 +52,7 @@ Not in this phase: plans, user limits and subscription state (Phase 3); the plat
 | P2-4 | Dashboard: organization switcher, records and photos of the active organization, Crew view on `saas-members`, accepting an invitation | Implemented; full gate green (type check and build); not yet run in a browser: the staging suites are being written | TEST_RESULTS 77 |
 | P2-5 | Field app: active organization, `org_id` on boreholes and queued work, new photo path, switching rules, role from the membership | Implemented; RF-114 to RF-116 verified fixed by the re-review; RF-119 fixed and tested; no open High or Medium. **Not yet run in a browser or on a device**: the staging suites (P2-6) and the device suite (P2-7) are what prove the screens | TEST_RESULTS 78 to 83 |
 | P2-6 | Phase suites on staging: the four phase acceptance points with real sign-ins; the existing suites; a legacy-client suite standing in for build 1.1.7 | **Done on staging**: criteria 1 to 7 met, no product defect | TEST_RESULTS 86 |
-| P2-7 | Version 1.2.0, a staging build of the APK, `test:apk` on a device or emulator | Planned (needs a device or emulator) | — |
+| P2-7 | Version 1.2.0, a staging build of the APK, `test:apk` on a device or emulator | **Done on the emulator** (fresh install). Not shown: an upgrade from 1.1.7 with queued work on a real device | TEST_RESULTS 87, 88 |
 
 Criteria for P2-2 to P2-7 are written when each starts.
 
@@ -450,7 +450,7 @@ Harden the enforcement after the security review (RF-010 to RF-024).
   - Rename "Founding organization" (Decision 8). Create no second organization before Phase 2's member management.
   - To run the tenant-isolation suite in CI: two more repository secrets for staging (a database URL and the service-role key), and a `test:tenant-isolation` line in `package.json`.
   - The decisions the Lead took where the criteria were silent (18 to 53) can each be changed before production.
-- `.claude/settings.json`: confirm the edit of 2026-11-17 20:38 (see "For the owner to look at").
+- `.claude/settings.json`: found on 2026-11-25 (14:44) with every line commented out again, which turns the four hooks off (the same edit as on 2026-11-17). Not made by the Lead or an agent as far as known; left as found and not committed. While it stands the Stop gate and the Bash guard do not run: the Lead runs `scripts/gate.sh` by hand.
 - **Branch protection on `main`** (require a pull request and passing CI; no force-push; no deletion). `main` is unprotected today. This is the only real control behind "agents never push to or merge into main". It also changes how the owner pushes, so it is the owner's call.
 - **The repository is public.** Consider making it private before Phase 1: it will hold the source of a commercial product and a record of its security findings.
 - Decisions 1–12 in section 14 of the proposal; Decisions 2, 3, 4 and 8 are needed before Phase 1 can finish.
