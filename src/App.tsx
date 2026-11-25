@@ -151,18 +151,26 @@ export default function App() {
   // Bumped after a pull merges, to make the views re-read local storage.
   const [dataVersion, setDataVersion] = useState(0);
 
-  const [pullRunner] = useState(() =>
-    createPullRunner({
-      pull: createSupabasePull({
-        getClient: getSupabase,
-        getUserId: getCurrentUserId,
-        getOrgId: getCachedOrgId,
-      }),
+  // The backend has no organizations at all (no tenancy migrations): the app
+  // then works as it did before them.
+  const noOrgBackend = useRef(false);
+
+  const [pullRunner] = useState(() => {
+    const pull = createSupabasePull({
+      getClient: getSupabase,
+      getUserId: getCurrentUserId,
+      getOrgId: getCachedOrgId,
+    });
+    return createPullRunner({
+      // Nothing is downloaded until the organization is settled: an unscoped
+      // pull would bring every organization's records onto the device.
+      pull: async (since) =>
+        getCachedOrgId() !== null || noOrgBackend.current ? pull(since) : null,
       readWatermark: () => DrillingStorage.getPullWatermark(),
       writeWatermark: (w) => DrillingStorage.setPullWatermark(w),
       merge: (snapshot) => DrillingStorage.mergeRemote(snapshot),
-    })
-  );
+    });
+  });
 
   const [syncWorker] = useState(
     () =>
@@ -250,40 +258,72 @@ export default function App() {
   const [orgReload, setOrgReload] = useState(0);
 
   /**
-   * Make `m` the organization this device works for.
+   * Make `m` the organization this device works for. Returns null when done,
+   * otherwise why not ('' when there is nothing to tell the person).
    *
-   * Moving from another one follows the rule of signing out: refused (false)
-   * while work is unsent, and the device's records are cleared, because a
-   * device holds one organization's records at a time.
+   * A device holds one organization's records at a time, so leaving another
+   * one - or settling the first while the device may hold several's - clears
+   * it, by the rules of signing out: only when the person chose it (`chosen`),
+   * never while work is unsent, and over parked work only once they agreed.
    */
-  const activateOrg = (m: Membership, profile: Profile): boolean => {
+  const activateOrg = (
+    m: Membership,
+    who: { profile: Profile; memberships: Membership[] },
+    chosen: boolean
+  ): string | null => {
     const previous = getCachedOrgId();
-    const switching = previous !== null && previous !== m.orgId;
-    if (switching) {
-      if (DrillingStorage.getPendingSyncCount() > 0) return false;
+    const pending = DrillingStorage.getPendingSyncCount();
+    const parked = DrillingStorage.getParkedSyncCount();
+    const mustClear =
+      previous !== null
+        ? previous !== m.orgId
+        : who.memberships.filter((x) => x.status === 'active').length > 1 &&
+          (pending > 0 || parked > 0 || storage.getBoreholes().length > 0);
+    if (mustClear) {
+      if (!chosen) return '';
+      if (pending > 0) {
+        return `${pending} record(s) still uploading. Wait until they are sent.`;
+      }
+      if (
+        parked > 0 &&
+        !window.confirm(
+          `${parked} record(s) could not be uploaded by this account and will be permanently discarded. Continue?`
+        )
+      ) {
+        return '';
+      }
       DrillingStorage.clearForAccountSwitch();
     }
     setCachedOrgId(m.orgId);
     // The role is the one held in this organization, not the profile's.
-    const me = DrillingStorage.adoptSignedInUser({ ...profile, role: m.role });
+    const me = DrillingStorage.adoptSignedInUser({ ...who.profile, role: m.role });
     setUsers([me]);
     setCurrentUser(me);
-    if (switching) {
+    if (mustClear) {
       setBoreholes(storage.getBoreholes());
       setActiveBoreholeId('');
       setDataVersion((v) => v + 1);
     }
     if (previous !== m.orgId) void syncWorker.pullNow();
-    return true;
+    return null;
   };
 
-  /** Read who this account is and which organization it works for. */
-  const refreshAccount = async (isStale: () => boolean = () => false) => {
+  /**
+   * Read who this account is and which organization it works for. Resolves
+   * false when that is still unknown and nothing cached stands in for it.
+   */
+  const refreshAccount = async (isStale: () => boolean = () => false): Promise<boolean> => {
     const [profile, memberships] = await Promise.all([
       fetchMyProfile(),
-      saas.fetchMyOrganizations().catch(() => null),
+      saas.fetchMyOrganizations().catch((e: { code?: string } | null) => {
+        // PostgREST's answer for a function that does not exist.
+        if (e?.code === 'PGRST202') noOrgBackend.current = true;
+        return null;
+      }),
     ]);
-    if (isStale() || !profile) return;
+    if (isStale()) return true;
+    const known = () => getCachedOrgId() !== null || noOrgBackend.current;
+    if (!profile) return known();
     if (!memberships) {
       // The organizations could not be read. Name and badge are refreshed as
       // before; a role already taken from a membership is not overwritten.
@@ -295,18 +335,24 @@ export default function App() {
       });
       setUsers([me]);
       setCurrentUser(me);
-      return;
+      if (noOrgBackend.current) void syncWorker.pullNow();
+      return known();
     }
-    setAccount({ profile, memberships });
-    const resolved = resolveActiveOrg(
-      memberships,
-      getCachedOrgId() ?? rememberedOrg(localStorage, profile.id)
-    );
-    const m =
-      resolved.kind === 'active'
-        ? memberships.find((x) => x.orgId === resolved.orgId)
-        : undefined;
-    if (m) activateOrg(m, profile);
+    const who = { profile, memberships };
+    setAccount(who);
+    const cached = getCachedOrgId();
+    // A cached organization is never left from here: when it is no longer an
+    // active membership the person is shown the screen and decides.
+    let orgId: string | null = null;
+    if (cached) {
+      if (mayActivate(cached, memberships)) orgId = cached;
+    } else {
+      const resolved = resolveActiveOrg(memberships, rememberedOrg(localStorage, profile.id));
+      if (resolved.kind === 'active') orgId = resolved.orgId;
+    }
+    const m = memberships.find((x) => x.orgId === orgId);
+    if (m) activateOrg(m, who, false);
+    return true;
   };
 
   // On every launch, and again when signal returns: a role, a badge or a
@@ -322,15 +368,13 @@ export default function App() {
     };
   }, [signedIn, isOnline, orgReload]);
 
-  /** The person's own choice. Returns why it was refused, or null. */
+  /** The person's own choice. Returns null when done, as `activateOrg` does. */
   const chooseOrg = (orgId: string): string | null => {
-    if (!account || !mayActivate(orgId, account.memberships)) return null;
+    if (!account || !mayActivate(orgId, account.memberships)) return '';
     const m = account.memberships.find((x) => x.orgId === orgId)!;
-    if (!activateOrg(m, account.profile)) {
-      return `${DrillingStorage.getPendingSyncCount()} record(s) still uploading. Wait until they are sent.`;
-    }
-    rememberOrg(localStorage, account.profile.id, orgId);
-    return null;
+    const refused = activateOrg(m, account, true);
+    if (refused === null) rememberOrg(localStorage, account.profile.id, orgId);
+    return refused;
   };
 
   // Handle START PIPE
@@ -775,7 +819,14 @@ export default function App() {
           // real driller's pipes were stamped with a demo name while created_by
           // recorded the true account - the log and the audit trail disagreed.
           // Its organization is settled here too, before the rig screens show.
-          await refreshAccount();
+          // When it cannot be read the device is not linked: the rig screens
+          // must not open for an account whose organization is unknown.
+          if (!(await refreshAccount().catch(() => false))) {
+            await signOut();
+            throw new Error(
+              'Signed in, but your organization could not be read. Check the connection and try again.'
+            );
+          }
 
           setBoreholes(storage.getBoreholes());
           setActiveBoreholeId(storage.getActiveBorehole()?.id ?? '');

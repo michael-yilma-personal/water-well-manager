@@ -30,7 +30,8 @@ export function createSaasApi(deps: Deps) {
 
   async function rpc<T>(fn: string, args?: Record<string, unknown>): Promise<T> {
     const { data, error } = await client().rpc(fn, args);
-    if (error) throw new Error(error.message);
+    // The code travels with the error, so a caller can tell causes apart.
+    if (error) throw Object.assign(new Error(error.message), { code: error.code });
     return data as T;
   }
 

@@ -31,7 +31,7 @@ export function OrgScreen({
 }: {
   message: string;
   memberships: Membership[];
-  /** Resolves to a reason when the choice was refused. */
+  /** Null when done; otherwise why not ('' when there is nothing to say). */
   onChoose: (orgId: string) => string | null;
   onAnswer: (orgId: string, accept: boolean) => Promise<void>;
   onSignOut: () => void;

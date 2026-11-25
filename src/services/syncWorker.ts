@@ -68,6 +68,7 @@ export class SyncWorker {
   private ticker: ReturnType<typeof setInterval> | null = null;
   private pullTicker: ReturnType<typeof setInterval> | null = null;
   private pulling = false;
+  private pullAgain = false;
 
   constructor(deps: SyncWorkerDeps) {
     this.deps = deps;
@@ -137,7 +138,12 @@ export class SyncWorker {
    */
   async pullNow(): Promise<boolean> {
     if (!this.deps.pull) return false;
-    if (this.pulling) return false;
+    if (this.pulling) {
+      // What is in flight may be for the organization just left, and is then
+      // discarded: the one asked for now must still happen.
+      this.pullAgain = true;
+      return false;
+    }
 
     const status = await Network.getStatus().catch(() => ({ connected: true }));
     if (!status.connected) return false;
@@ -153,6 +159,10 @@ export class SyncWorker {
       return false;
     } finally {
       this.pulling = false;
+      if (this.pullAgain) {
+        this.pullAgain = false;
+        void this.pullNow();
+      }
     }
   }
 

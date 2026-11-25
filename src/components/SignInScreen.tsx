@@ -19,7 +19,8 @@ export function SignInScreen({
   onSignedIn,
   onSkip,
 }: {
-  onSignedIn: () => void;
+  /** May reject: linking is not finished until this has settled. */
+  onSignedIn: () => void | Promise<void>;
   onSkip: () => void;
 }) {
   const [email, setEmail] = useState('');
@@ -35,7 +36,7 @@ export function SignInScreen({
     setError(null);
     try {
       await signIn(email.trim(), password);
-      onSignedIn();
+      await onSignedIn();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
