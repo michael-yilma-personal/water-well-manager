@@ -64,7 +64,10 @@ with sync_playwright() as p:
     page.wait_for_timeout(5000)
 
     page.get_by_role('button', name='Crew').click()
-    page.wait_for_timeout(4000)
+    try:  # the list takes 1.6 to 3.4 s on staging: wait for the row, not a fixed time
+        page.locator('tr', has_text=ADMIN[0]).first.wait_for(state='visible', timeout=20000)
+    except Exception:
+        pass
     body = page.inner_text('body')
     check('crew screen opens', 'Accounts that can sign in' in body, body[:70].replace('\n', ' | '))
     check('existing accounts are listed', ADMIN[0] in body)

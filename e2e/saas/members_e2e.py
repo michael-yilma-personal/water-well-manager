@@ -9,7 +9,8 @@ decisions D2-1 and D2-5; RF-102, RF-103, RF-110).
   3. an existing account is only invited, which gives nothing until accepted
   4. deactivating in one organization leaves the other one, and the account
   5. removing a member without records leaves the account
-  6. the project is left as it was found
+  6. an address held by an unconfirmed account is refused (RF-118)
+  7. the project is left as it was found
 
 Needs DRILL_E2E_DB_URL and DRILL_E2E_SERVICE_ROLE_KEY in the environment (see
 tenant_fixture.py). The fixture is removed also after a failure or interrupt.
@@ -187,6 +188,18 @@ def member_management():
               and body.get('records') == 0, f'HTTP {status} {short(body)}')
         check('the membership is gone and the auth account still exists and signs in',
               memberships(new_id) == [] and fx['new'].sign_in(), short(memberships(new_id)))
+
+    print('\n== 6. an address held by an unconfirmed account (RF-118) ==', flush=True)
+    held = fx.email('unconfirmed')
+    tf._service('POST', '/auth/v1/admin/users', body={'email': held, 'password': uuid.uuid4().hex + 'Aa1',
+                                                      'email_confirm': False})
+    before = fx.all_memberships()
+    status, body = fn('POST', sa, S, email=held, name='x', role='Driller', password=uuid.uuid4().hex + 'Aa1')
+    accounts = tf.query('select email_confirmed_at is null as unconfirmed from auth.users'
+                        f' where lower(email) = {tf.text_lit(held)}')
+    check('POST for an address held by an unconfirmed account answers 409; no membership and no second account',
+          status == 409 and accounts == [{'unconfirmed': True}] and fx.all_memberships() == before,
+          f'HTTP {status} {short(body)}; {len(accounts)} account(s)')
 
 
 # --------------------------------------------------------------------------
