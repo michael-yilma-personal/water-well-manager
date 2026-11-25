@@ -104,15 +104,17 @@ export async function handle(req: Request, ports: Ports): Promise<Response> {
       const members = [];
       for (const m of rows) {
         const account = accounts.find((a) => sameId(a.id, m.userId));
+        // An invitation shows nothing of the invited person's account but the email it was sent to.
+        const known = m.status !== 'invited';
         members.push({
           id: m.userId,
           email: account?.email ?? '',
-          name: account?.name ?? '',
+          name: known ? account?.name ?? '' : '',
           role: m.role,
           badgeNumber: m.badgeNumber,
           status: m.status,
           createdAt: m.createdAt,
-          lastSignInAt: account?.lastSignInAt ?? null,
+          lastSignInAt: known ? account?.lastSignInAt ?? null : null,
           records: await ports.recordCount(org, m.userId),
           isSelf: sameId(m.userId, caller),
         });
@@ -126,7 +128,7 @@ export async function handle(req: Request, ports: Ports): Promise<Response> {
     if (req.method === 'POST') {
       const email = String(body.email ?? '').trim().toLowerCase();
       const password = String(body.password ?? '');
-      if (!email) return json({ error: 'Email is required' }, 400);
+      if (!/^[^@\s]+@[^@\s]+$/.test(email)) return json({ error: 'A valid email is required' }, 400);
       if (!(await ports.roles()).includes(role)) return json({ error: 'Unknown role' }, 400);
 
       // An existing account is only invited: nothing of the account is touched
@@ -142,15 +144,18 @@ export async function handle(req: Request, ports: Ports): Promise<Response> {
       if (password.length < 8) return json({ error: 'Password must be at least 8 characters' }, 400);
       const id = await ports.createAccount({ email, password, name: String(body.name ?? '').trim(), orgId: org });
       // An account without its membership must not be left behind.
-      let added: { data?: unknown; code?: string };
+      let added: { data?: unknown; code?: string } = { code: '' };
       try {
         added = await ports.call('saas_add_member', { org, member: id, role, badge, status: 'active', actor: caller });
       } catch (err) {
-        await ports.deleteAccount(id);
-        throw err;
+        console.error('saas-members:', err instanceof Error ? err.message : String(err));
       }
       if ('code' in added) {
-        await ports.deleteAccount(id);
+        try {
+          await ports.deleteAccount(id);
+        } catch (err) {
+          return failed(`ORPHANED ACCOUNT ${id}: created without a membership and not deleted: ${err}`);
+        }
         return refusal(added.code);
       }
       return json({ id, outcome: 'created' }, 201);

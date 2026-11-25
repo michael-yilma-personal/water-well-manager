@@ -4,6 +4,8 @@
 -- (they trust profiles.role through is_admin() / is_reviewer() again), then
 -- drops what the migration added. Run the saas_core rollback after this one.
 --
+-- Once the member migrations (Phase 2) are applied: before running this, ban every account that is not banned and has no active founding membership; see 'Needs the owner' in docs/saas/IMPLEMENTATION_STATUS.md (RF-105).
+--
 -- What is lost: org_id on every record. While everything belongs to the
 -- founding organization that loses nothing. The pre-tenancy policies know no
 -- organizations: whatever another organization holds (a record row, a photo

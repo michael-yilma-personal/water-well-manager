@@ -95,7 +95,9 @@ const ports: Ports = {
 
   async accountIdByEmail(email) {
     const wanted = email.toLowerCase();
-    return (await allAccounts()).find((u) => u.email?.toLowerCase() === wanted)?.id ?? null;
+    // An address nobody proved they own is not an account to invite.
+    return (await allAccounts())
+      .find((u) => u.email_confirmed_at && u.email?.toLowerCase() === wanted)?.id ?? null;
   },
 
   async createAccount({ email, password, name, orgId }) {
@@ -106,7 +108,8 @@ const ports: Ports = {
       // The marker says which organization the account is created for, so it
       // is not enrolled in another. The auth server inserts the row with
       // user_metadata only and adds app_metadata afterwards: it must be in both.
-      user_metadata: { name, saas_org: orgId },
+      // No empty name: without one the name falls back to the email's.
+      user_metadata: name ? { name, saas_org: orgId } : { saas_org: orgId },
       app_metadata: { saas_org: orgId },
     });
     if (error || !data?.user) fail('account creation', error);
