@@ -148,7 +148,7 @@ export async function handle(req: Request, ports: Ports): Promise<Response> {
       } catch (err) {
         // The address is held by an account that cannot be invited. Nothing was created.
         if ((err as { code?: unknown } | null)?.code !== 'email_exists') throw err;
-        return json({ error: 'This person cannot be added with this address' }, 409);
+        return json({ error: 'This address could not be added. Try again; if it repeats, this person cannot be added with this address.' }, 409);
       }
       // An account without its membership must not be left behind.
       let added: { data?: unknown; code?: string } = { code: '' };
