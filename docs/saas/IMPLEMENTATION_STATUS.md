@@ -6,7 +6,7 @@ Requirements: `docs/SAAS_ARCHITECTURE_PROPOSAL.md`. How the work is run: `docs/s
 
 - **Phase:** Phase 2 — Organization-aware apps (approved by the owner on 2026-11-23). Staging only; nothing in it may reach production without the owner approving that specific action.
 - **Branch:** `saas/phase-2-org-apps`, branched from `saas/phase-1-tenancy` at `3715f99`. Pull requests 3 (workflow tooling), 4 (Phase 0) and 5 (Phase 1) are open with green CI, awaiting the owner's merge, in that order.
-- **In progress:** P2-1 (database support for member management): the fourteenth review requested changes (criteria 23 to 26), being fixed. P2-2 handler tests are written; P2-3 is implemented.
+- **In progress:** P2-1 (database support for member management): P2-1 is done and on staging; `saas-members` (P2-2) is deployed to staging; the dashboard (P2-4) is implemented; the staging suites for them are being written. P2-5 (field app) is next.
 - **Next step:** P2-1 through the loop, then P2-2 (`saas-members`). Tasks and criteria are under "Phase 2" below.
 - **Phase 1** is done on staging; its production migration is **not approved**. **Do not check out `main` or any branch that predates the tooling until the pull requests are merged (RF-059).**
 - `.claude/settings.json`: the edit of 2026-11-17 (hooks commented out) was reverted by the owner on 2026-11-23; the file is as committed and the hooks are on.
@@ -46,10 +46,10 @@ Not in this phase: plans, user limits and subscription state (Phase 3); the plat
 
 | Id | Task | Status | Evidence |
 |---|---|---|---|
-| P2-1 | Database support for member management: reusable migration `saas_members` and Drill migration `drill_members` | **Done locally**: every criterion has a passing check; the re-review (SR15) has no blocking finding; RF-105 deferred with the reviewer's agreement. To be applied to staging with P2-2 | TEST_RESULTS 66 to 76 |
-| P2-2 | Edge Function `saas-members` with `_shared/saas`; handler tests in the gate; deployed to staging; authorization suite on staging | In progress: implemented (`handler.ts` 189 lines, `index.ts` 130), validated; the fifteenth review requested changes (RF-110 to RF-112), with the Developer; then staging | TEST_RESULTS 73 to 76 |
+| P2-1 | Database support for member management: reusable migration `saas_members` and Drill migration `drill_members` | **Done**: every criterion has a passing check; the re-review (SR15) has no blocking finding; RF-105 deferred with the reviewer's agreement; **applied to staging** | TEST_RESULTS 66 to 77 |
+| P2-2 | Edge Function `saas-members` with `_shared/saas`; handler tests in the gate; deployed to staging; authorization suite on staging | In progress: implemented (`handler.ts` 189 lines, `index.ts` 130), RF-110 to RF-112 fixed and tested; **deployed to staging** and answering correctly in a first live check; the staging suite (criterion 9) is being written | TEST_RESULTS 73 to 77 |
 | P2-3 | Client foundation `src/saas` (`api.ts`, `orgContext.ts`) and the boundary test | Implemented (110 lines), unit tests and gate green; read by the Lead. Not yet used by an app: its validation and review happen with P2-4, its first use | TEST_RESULTS 71 |
-| P2-4 | Dashboard: organization switcher, records and photos of the active organization, Crew view on `saas-members`, accepting an invitation | In progress: with the Developer | — |
+| P2-4 | Dashboard: organization switcher, records and photos of the active organization, Crew view on `saas-members`, accepting an invitation | Implemented; full gate green (type check and build); not yet run in a browser: the staging suites are being written | TEST_RESULTS 77 |
 | P2-5 | Field app: active organization, `org_id` on boreholes and queued work, new photo path, switching rules, role from the membership | Planned | — |
 | P2-6 | Phase suites on staging: the four phase acceptance points with real sign-ins; the existing suites; a legacy-client suite standing in for build 1.1.7 | Planned | — |
 | P2-7 | Version 1.2.0, a staging build of the APK, `test:apk` on a device or emulator | Planned (needs a device or emulator) | — |
