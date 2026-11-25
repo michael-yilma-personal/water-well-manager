@@ -7,7 +7,7 @@ Requirements: `docs/SAAS_ARCHITECTURE_PROPOSAL.md`. How the work is run: `docs/s
 - **Phase:** Phase 2 — Organization-aware apps (approved by the owner on 2026-11-23). Staging only; nothing in it may reach production without the owner approving that specific action.
 - **Branch:** `saas/phase-2-org-apps`, branched from `saas/phase-1-tenancy` at `3715f99`. Pull requests 3 (workflow tooling), 4 (Phase 0) and 5 (Phase 1) are open with green CI, awaiting the owner's merge, in that order.
 - **In progress:** P2-1 to P2-5 are implemented; P2-1 and `saas-members` (P2-2) are on staging and their staging suites pass (TEST_RESULTS 84); the gate is green. Open: two Low fixes (RF-117 dashboard, RF-118 `saas-members`), then P2-6 (the existing suites and the field app's organization flows on staging) and P2-7 (version 1.2.0 and the Android build, which needs `adb` or a device from the owner). The field app's screens are unproven until P2-6 runs.
-- **Next step:** RF-117 and RF-118, redeploy `saas-members` to staging, then P2-6.
+- **Next step:** P2-6 on staging (RF-117 and RF-118 are fixed at `d9ed698` and `saas-members` is redeployed to staging; both await the re-review), then the re-review, then P2-7.
 - **Phase 1** is done on staging; its production migration is **not approved**. **Do not check out `main` or any branch that predates the tooling until the pull requests are merged (RF-059).**
 - `.claude/settings.json`: the edit of 2026-11-17 (hooks commented out) was reverted by the owner on 2026-11-23; the file is as committed and the hooks are on.
 - **Waiting on the owner:** the production decision for Phase 1; the action recorded for RF-050 (deferred by the owner; does not block development); approval to delete the `probe` function from production (RF-049); confirmation of the staging rule (RF-054); branch protection on `main`; merging the three pull requests (RF-059).
@@ -51,7 +51,7 @@ Not in this phase: plans, user limits and subscription state (Phase 3); the plat
 | P2-3 | Client foundation `src/saas` (`api.ts`, `orgContext.ts`) and the boundary test | Implemented (110 lines), unit tests and gate green; read by the Lead. Not yet used by an app: its validation and review happen with P2-4, its first use | TEST_RESULTS 71 |
 | P2-4 | Dashboard: organization switcher, records and photos of the active organization, Crew view on `saas-members`, accepting an invitation | Implemented; full gate green (type check and build); not yet run in a browser: the staging suites are being written | TEST_RESULTS 77 |
 | P2-5 | Field app: active organization, `org_id` on boreholes and queued work, new photo path, switching rules, role from the membership | Implemented; RF-114 to RF-116 verified fixed by the re-review; RF-119 fixed and tested; no open High or Medium. **Not yet run in a browser or on a device**: the staging suites (P2-6) and the device suite (P2-7) are what prove the screens | TEST_RESULTS 78 to 83 |
-| P2-6 | Phase suites on staging: the four phase acceptance points with real sign-ins; the existing suites; a legacy-client suite standing in for build 1.1.7 | Planned | — |
+| P2-6 | Phase suites on staging: the four phase acceptance points with real sign-ins; the existing suites; a legacy-client suite standing in for build 1.1.7 | In progress (criteria below) | — |
 | P2-7 | Version 1.2.0, a staging build of the APK, `test:apk` on a device or emulator | Planned (needs a device or emulator) | — |
 
 Criteria for P2-2 to P2-7 are written when each starts.
@@ -454,3 +454,16 @@ Harden the enforcement after the security review (RF-010 to RF-024).
 - **Branch protection on `main`** (require a pull request and passing CI; no force-push; no deletion). `main` is unprotected today. This is the only real control behind "agents never push to or merge into main". It also changes how the owner pushes, so it is the owner's call.
 - **The repository is public.** Consider making it private before Phase 1: it will hold the source of a commercial product and a record of its security findings.
 - Decisions 1–12 in section 14 of the proposal; Decisions 2, 3, 4 and 8 are needed before Phase 1 can finish.
+
+### P2-6 criteria (written 2026-11-25)
+
+All on staging, with real sign-ins; smallest test code, one check per rule, in the fewest files.
+
+1. The 21 suites of `npm run test:e2e` pass with the Phase 2 clients (the field app and dashboard of this branch). A suite is changed only where a recorded decision changed the behaviour it asserts, and the change is listed.
+2. `e2e/saas/members_e2e.py`, `dashboard_orgs_e2e.py` and `tenant_isolation_e2e.py` pass again after the redeploy of `saas-members`.
+3. Field app, a person with one membership: nothing new is asked; work entered offline uploads with the organization on the borehole and the photo under `<org>/<user>/`.
+4. Field app, a person active in two organizations: they must choose; they then see and upload only that organization's work; a switch is refused while work is unsent, and after a switch nothing of the first organization is on the device.
+5. A stand-in for build 1.1.7 (requests shaped as that build sends them: no `org_id`, the old photo path): a person with one membership keeps working unchanged; with two active memberships a new borehole is refused and nothing lands in the wrong organization.
+6. RF-118 live: an add for an address held by an unconfirmed account answers 409 and creates nothing.
+7. Staging ends as it was found.
+
