@@ -260,3 +260,30 @@ test('a failing pull leaves the watermark alone so the rows are retried', async 
   await assert.rejects(() => h.runner());
   assert.equal(h.stored, null);
 });
+
+// --- P2-5: the pull is scoped to the active organization ---------------------
+
+const ORG = '99999999-0000-4000-8000-000000000001';
+
+test('the pull asks only for rows of the active organization, still the caller\'s own', async () => {
+  const client = fakeClient();
+  const pull = createSupabasePull({ ...deps(client), getOrgId: () => ORG } as never);
+
+  await pull(null);
+
+  assert.equal(client.calls.length, 4);
+  for (const c of client.calls) {
+    assert.deepEqual(c.eq.filter(([col]) => col === 'org_id'), [['org_id', ORG]], c.table);
+    assert.ok(c.eq.some(([col, v]) => col === 'created_by' && v === UID), c.table);
+  }
+});
+
+test('with no active organization cached the pull is filtered as before, by author only', async () => {
+  const client = fakeClient();
+  const pull = createSupabasePull({ ...deps(client), getOrgId: () => null } as never);
+
+  await pull(null);
+
+  assert.equal(client.calls.length, 4);
+  for (const c of client.calls) assert.deepEqual(c.eq, [['created_by', UID]], c.table);
+});

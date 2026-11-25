@@ -252,3 +252,23 @@ test('a device already online must not sit on queued work', async () => {
   assert.equal(result.sent, 2);
   assert.equal(ob.depth(), 0, 'nothing may be left pending after a successful drain');
 });
+
+// --- P2-5: queued work carries its organization ------------------------------
+
+const ORG = '99999999-0000-4000-8000-000000000001';
+
+test('enqueue stamps the cached active organization, and it survives a reload', () => {
+  harness().set('wwdm_active_org', ORG);
+  const queued = new Outbox().enqueue('upsert', 'borehole', uid('bh-1'), { name: 'Site' });
+
+  assert.equal((queued as { orgId?: string }).orgId, ORG);
+  assert.equal((new Outbox().pending()[0] as { orgId?: string }).orgId, ORG);
+});
+
+test('enqueue leaves the organization off when none is cached', () => {
+  harness();
+  const queued = new Outbox().enqueue('upsert', 'borehole', uid('bh-1'), { name: 'Site' });
+
+  assert.ok(queued);
+  assert.equal('orgId' in queued, false, 'no orgId key, so it is sent as an old item is');
+});
