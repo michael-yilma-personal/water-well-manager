@@ -48,8 +48,19 @@ import { createSupabaseTransport } from './services/syncTransport';
 import { createPullRunner, createSupabasePull } from './services/pullTransport';
 import { createCompositeTransport, createPhotoTransport } from './services/photoTransport';
 import { getSupabase, isSupabaseConfigured } from './services/supabaseClient';
-import { getCurrentUserId, isProvisioned, fetchMyProfile, signOut } from './services/auth';
+import {
+  getCachedOrgId,
+  getCurrentUserId,
+  isProvisioned,
+  fetchMyProfile,
+  setCachedOrgId,
+  signOut,
+} from './services/auth';
+import { saas } from './services/saas';
+import type { Membership } from './saas/api';
+import { mayActivate, rememberOrg, rememberedOrg, resolveActiveOrg } from './saas/orgContext';
 import { SignInScreen } from './components/SignInScreen';
+import { NO_ORG_MESSAGE, OrgScreen } from './components/OrgScreen';
 import { SPRING_DEFAULT, CROSSFADE } from './ui/springs';
 import { useReducedMotion } from './ui/prefs';
 
@@ -145,6 +156,7 @@ export default function App() {
       pull: createSupabasePull({
         getClient: getSupabase,
         getUserId: getCurrentUserId,
+        getOrgId: getCachedOrgId,
       }),
       readWatermark: () => DrillingStorage.getPullWatermark(),
       writeWatermark: (w) => DrillingStorage.setPullWatermark(w),
@@ -176,35 +188,6 @@ export default function App() {
         onPulled: () => setDataVersion((v) => v + 1),
       })
   );
-
-  // A device linked before this behaviour existed still holds the fictional
-  // sample operators, so reconcile on every launch rather than only at sign-in.
-  useEffect(() => {
-    if (!signedIn || !isSupabaseConfigured()) return;
-    let alive = true;
-    fetchMyProfile()
-      .then((profile) => {
-        if (!alive || !profile) return;
-        // Role and badge are compared too: an administrator can change either
-        // from the dashboard, and a stale role here would leave a promoted
-        // account logging records the server then refuses.
-        if (
-          currentUser.id === profile.id &&
-          currentUser.name === profile.name &&
-          currentUser.role === profile.role &&
-          currentUser.badgeNumber === (profile.badgeNumber || '')
-        ) return;
-        const me = DrillingStorage.adoptSignedInUser(profile);
-        setUsers([me]);
-        setCurrentUser(me);
-      })
-      .catch(() => {
-        // Offline: the cached identity from the last successful link stands.
-      });
-    return () => {
-      alive = false;
-    };
-  }, [signedIn, currentUser.id, currentUser.name]);
 
   // Keep the badge honest. The pending count was previously refreshed only
   // after a drain or a manual tap, never when a record was saved - so the
@@ -256,6 +239,99 @@ export default function App() {
       window.removeEventListener('offline', off);
     };
   }, []);
+
+  type Profile = NonNullable<Awaited<ReturnType<typeof fetchMyProfile>>>;
+  // The account as the server last described it. Null until read online, and
+  // while it is null the cached organization and role stand.
+  const [account, setAccount] = useState<{
+    profile: Profile;
+    memberships: Membership[];
+  } | null>(null);
+  const [orgReload, setOrgReload] = useState(0);
+
+  /**
+   * Make `m` the organization this device works for.
+   *
+   * Moving from another one follows the rule of signing out: refused (false)
+   * while work is unsent, and the device's records are cleared, because a
+   * device holds one organization's records at a time.
+   */
+  const activateOrg = (m: Membership, profile: Profile): boolean => {
+    const previous = getCachedOrgId();
+    const switching = previous !== null && previous !== m.orgId;
+    if (switching) {
+      if (DrillingStorage.getPendingSyncCount() > 0) return false;
+      DrillingStorage.clearForAccountSwitch();
+    }
+    setCachedOrgId(m.orgId);
+    // The role is the one held in this organization, not the profile's.
+    const me = DrillingStorage.adoptSignedInUser({ ...profile, role: m.role });
+    setUsers([me]);
+    setCurrentUser(me);
+    if (switching) {
+      setBoreholes(storage.getBoreholes());
+      setActiveBoreholeId('');
+      setDataVersion((v) => v + 1);
+    }
+    if (previous !== m.orgId) void syncWorker.pullNow();
+    return true;
+  };
+
+  /** Read who this account is and which organization it works for. */
+  const refreshAccount = async (isStale: () => boolean = () => false) => {
+    const [profile, memberships] = await Promise.all([
+      fetchMyProfile(),
+      saas.fetchMyOrganizations().catch(() => null),
+    ]);
+    if (isStale() || !profile) return;
+    if (!memberships) {
+      // The organizations could not be read. Name and badge are refreshed as
+      // before; a role already taken from a membership is not overwritten.
+      const me = DrillingStorage.adoptSignedInUser({
+        ...profile,
+        role: getCachedOrgId()
+          ? storage.getCurrentUser()?.role ?? profile.role
+          : profile.role,
+      });
+      setUsers([me]);
+      setCurrentUser(me);
+      return;
+    }
+    setAccount({ profile, memberships });
+    const resolved = resolveActiveOrg(
+      memberships,
+      getCachedOrgId() ?? rememberedOrg(localStorage, profile.id)
+    );
+    const m =
+      resolved.kind === 'active'
+        ? memberships.find((x) => x.orgId === resolved.orgId)
+        : undefined;
+    if (m) activateOrg(m, profile);
+  };
+
+  // On every launch, and again when signal returns: a role, a badge or a
+  // membership changed in the office must reach a device that is already linked.
+  useEffect(() => {
+    if (!signedIn || !isOnline || !isSupabaseConfigured()) return;
+    let alive = true;
+    refreshAccount(() => !alive).catch(() => {
+      // Offline: the cached identity from the last successful link stands.
+    });
+    return () => {
+      alive = false;
+    };
+  }, [signedIn, isOnline, orgReload]);
+
+  /** The person's own choice. Returns why it was refused, or null. */
+  const chooseOrg = (orgId: string): string | null => {
+    if (!account || !mayActivate(orgId, account.memberships)) return null;
+    const m = account.memberships.find((x) => x.orgId === orgId)!;
+    if (!activateOrg(m, account.profile)) {
+      return `${DrillingStorage.getPendingSyncCount()} record(s) still uploading. Wait until they are sent.`;
+    }
+    rememberOrg(localStorage, account.profile.id, orgId);
+    return null;
+  };
 
   // Handle START PIPE
   const handleStartPipe = () => {
@@ -569,6 +645,7 @@ export default function App() {
     syncWorker.stop();
     await signOut();
     DrillingStorage.clearForAccountSwitch();
+    setAccount(null);
     setSignedIn(false);
     setDataVersion((v) => v + 1);
   };
@@ -697,18 +774,46 @@ export default function App() {
           // name came from a picker seeded with three fictional people, so a
           // real driller's pipes were stamped with a demo name while created_by
           // recorded the true account - the log and the audit trail disagreed.
-          const profile = await fetchMyProfile();
-          if (profile) {
-            const me = DrillingStorage.adoptSignedInUser(profile);
-            setUsers([me]);
-            setCurrentUser(me);
-          }
+          // Its organization is settled here too, before the rig screens show.
+          await refreshAccount();
 
           setBoreholes(storage.getBoreholes());
           setActiveBoreholeId(storage.getActiveBorehole()?.id ?? '');
           setSignedIn(true);
         }}
         onSkip={() => setSkippedSignIn(true)}
+      />
+    );
+  }
+
+  const activeOrgs = (account?.memberships ?? []).filter((m) => m.status === 'active');
+  const activeOrgId = getCachedOrgId();
+  // Only with an answer from the server: offline, the cached organization stands.
+  if (signedIn && account && !activeOrgs.some((m) => m.orgId === activeOrgId)) {
+    const resolved = resolveActiveOrg(account.memberships, null);
+    return (
+      <OrgScreen
+        message={
+          resolved.kind === 'none' ? NO_ORG_MESSAGE[resolved.reason] : 'Choose an organization.'
+        }
+        memberships={account.memberships}
+        onChoose={chooseOrg}
+        onAnswer={async (orgId, accept) => {
+          await (accept ? saas.acceptMembership(orgId) : saas.declineMembership(orgId));
+          setOrgReload((k) => k + 1);
+        }}
+        onSignOut={() => {
+          if (
+            parkedSync > 0 &&
+            !window.confirm(
+              `${parkedSync} record(s) could not be uploaded by this account and will be permanently discarded. Continue?`
+            )
+          ) {
+            return;
+          }
+          void handleSignOut();
+        }}
+        pendingCount={pendingSync}
       />
     );
   }
@@ -954,6 +1059,9 @@ export default function App() {
         onUpdateBoreholePipeLength={handleUpdateBoreholePipeLength}
         sunlightMode={sunlightMode}
         onSignOut={handleSignOut}
+        organizations={activeOrgs}
+        activeOrgId={activeOrgId}
+        onSwitchOrg={chooseOrg}
         pendingCount={pendingSync}
         parkedCount={parkedSync}
         onResetDemoData={handleResetDemoData}

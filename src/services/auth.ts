@@ -17,6 +17,7 @@ import { getSupabase } from './supabaseClient';
  */
 
 const CACHED_USER_ID_KEY = 'wwdm_auth_user_id';
+const CACHED_ORG_ID_KEY = 'wwdm_active_org';
 
 export interface AuthProfile {
   id: string;
@@ -51,6 +52,18 @@ export function getCachedUserId(): string | null {
   return localStorage.getItem(CACHED_USER_ID_KEY);
 }
 
+/**
+ * The organization this device is working for, as last settled online.
+ * Read synchronously when a record is queued, so the write path stays offline.
+ */
+export function getCachedOrgId(): string | null {
+  return localStorage.getItem(CACHED_ORG_ID_KEY);
+}
+
+export function setCachedOrgId(orgId: string): void {
+  localStorage.setItem(CACHED_ORG_ID_KEY, orgId);
+}
+
 export async function signIn(email: string, password: string): Promise<AuthProfile> {
   const client = getSupabase();
   if (!client) throw new Error('This build is not connected to a Supabase project');
@@ -80,6 +93,7 @@ export async function signOut(): Promise<void> {
   const client = getSupabase();
   if (client) await client.auth.signOut();
   localStorage.removeItem(CACHED_USER_ID_KEY);
+  localStorage.removeItem(CACHED_ORG_ID_KEY);
 }
 
 /**

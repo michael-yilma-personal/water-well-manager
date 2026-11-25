@@ -48,6 +48,8 @@ export interface PullDeps {
   getClient: () => SupabaseClient | null;
   /** Resolves the signed-in user's id, or null when there is no session. */
   getUserId: () => Promise<string | null>;
+  /** The active organization, or null when none has been settled yet. */
+  getOrgId?: () => string | null;
 }
 
 export interface PullResult {
@@ -76,6 +78,7 @@ export function createSupabasePull(deps: PullDeps): Pull {
     // whose records have all vanished.
     const userId = await deps.getUserId();
     if (!userId) return null;
+    const orgId = deps.getOrgId?.() ?? null;
 
     const lowerBound =
       since === null
@@ -91,6 +94,8 @@ export function createSupabasePull(deps: PullDeps): Pull {
       }).select('*') as Record<string, (...args: unknown[]) => unknown>;
 
       query = query.eq('created_by', userId) as typeof query;
+      // One organization per device: not even this person's own rows of another.
+      if (orgId !== null) query = query.eq('org_id', orgId) as typeof query;
       if (lowerBound !== null) {
         query = query.gte('modified_at', lowerBound) as typeof query;
       }
@@ -104,6 +109,10 @@ export function createSupabasePull(deps: PullDeps): Pull {
       if (error) throw new Error(`pull ${table}: ${error.message}`);
       fetched[table] = data ?? [];
     }
+
+    // The organization was switched while this was in flight: these rows belong
+    // to the one just cleared off the device.
+    if (orgId !== null && deps.getOrgId?.() !== orgId) return null;
 
     const deletedIds: string[] = [];
     let watermark = since;

@@ -20,6 +20,10 @@ interface SettingsModalProps {
   onDeleteCurrentProject: () => void;
   /** Hand the phone to another driller. */
   onSignOut: () => void;
+  /** Active memberships; switching is offered only when there are several. */
+  organizations: { orgId: string; name: string }[];
+  activeOrgId: string | null;
+  onSwitchOrg: (orgId: string) => void;
   /** Still retryable. Signing out is refused while any remain. */
   pendingCount: number;
   /** Given up on. This account can never upload it, so it does not block. */
@@ -37,6 +41,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onResetDemoData,
   onDeleteCurrentProject,
   onSignOut,
+  organizations,
+  activeOrgId,
+  onSwitchOrg,
   pendingCount,
   parkedCount,
 }) => {
@@ -312,6 +319,45 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   Reset Demo Data
                 </button>
               </div>
+
+              {organizations.length > 1 && (
+                <div className="flex justify-between items-center gap-2">
+                  <div>
+                    <div className="text-xs font-black uppercase text-rose-300">Switch Organization</div>
+                    <div className="text-[11px] opacity-70">
+                      {pendingCount > 0
+                        ? `${pendingCount} record(s) still uploading. Wait, or tap the sync badge.`
+                        : parkedCount > 0
+                          ? `${parkedCount} record(s) could not be uploaded and will be discarded.`
+                          : 'Clears this phone and loads the other organization\'s records. They stay on the server.'}
+                    </div>
+                  </div>
+                  <select
+                    aria-label="Organization"
+                    // Unsent work blocks the switch for the reason it blocks
+                    // signing out: clearing the phone would destroy it.
+                    disabled={pendingCount > 0}
+                    value={activeOrgId ?? ''}
+                    onChange={(e) => {
+                      const warning =
+                        parkedCount > 0
+                          ? `${parkedCount} record(s) could not be uploaded by this account and will be permanently discarded. Continue?`
+                          : 'Switch organization and clear this phone? Records already uploaded stay safe on the server.';
+                      if (window.confirm(warning)) {
+                        onSwitchOrg(e.target.value);
+                        onClose();
+                      }
+                    }}
+                    className="max-w-[45%] px-2 py-1.5 rounded text-xs font-black bg-black text-white border border-white/20 disabled:opacity-50"
+                  >
+                    {organizations.map((o) => (
+                      <option key={o.orgId} value={o.orgId}>
+                        {o.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
 
               <div className="flex justify-between items-center gap-2">
                 <div>

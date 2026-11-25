@@ -20,6 +20,8 @@
  *    own attempt count and backoff.
  */
 
+import { getCachedOrgId } from './auth';
+
 const STORAGE_KEY = 'wwdm_outbox';
 
 const UUID_RE =
@@ -55,6 +57,11 @@ export interface OutboxItem {
   nextAttemptAt: number;
   /** Exhausted its retries; held for recovery rather than deleted. */
   parked?: boolean;
+  /**
+   * The organization the work was captured in. Set once at enqueue and never
+   * changed; absent on items queued by a build that knew no organizations.
+   */
+  orgId?: string;
 }
 
 export type OutboxTransport = (item: OutboxItem) => Promise<void>;
@@ -201,6 +208,8 @@ export class Outbox {
       enqueuedAt: new Date().toISOString(),
       nextAttemptAt: 0,
     };
+    const orgId = getCachedOrgId();
+    if (orgId) item.orgId = orgId;
     this.items.push(item);
     this.write();
     this.notify();

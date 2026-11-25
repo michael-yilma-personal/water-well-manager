@@ -106,6 +106,9 @@ export function createSupabaseTransport(deps: TransportDeps): OutboxTransport {
     }
 
     const row = toRow(item.entity, item.payload, userId);
+    // Only the borehole names its organization; the database gives children
+    // their borehole's. An item queued before organizations is sent as it was.
+    if (item.entity === 'borehole' && item.orgId) row.org_id = item.orgId;
     // Upsert on the primary key makes a replay harmless. When the conflicting
     // row belongs to a different user, RLS rejects the update rather than
     // letting one crew overwrite another's work.
