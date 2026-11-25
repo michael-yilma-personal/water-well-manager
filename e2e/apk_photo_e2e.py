@@ -43,6 +43,11 @@ png_b64 = base64.b64encode(make_png()).decode()
 print(f'source image: {len(png_b64)*3//4/1024/1024:.1f} MB, 2400x1800\n')
 
 d1_token, d1_uid = sign_in_api(_target.DRILLER1)
+# Since P2-5 (criterion 4) the app uploads to <org>/<user>/, not <user>/.
+req = urllib.request.Request(f'{URL}/rest/v1/rpc/my_organizations', method='POST', data=b'{}')
+req.add_header('apikey', KEY); req.add_header('Authorization', f'Bearer {d1_token}')
+req.add_header('Content-Type', 'application/json')
+d1_uid = f"{json.loads(urllib.request.urlopen(req).read().decode())[0]['org_id']}/{d1_uid}"
 before = {o['name'] for o in list_photos(d1_token, d1_uid)}
 print(f'{len(before)} object(s) in storage before\n')
 
