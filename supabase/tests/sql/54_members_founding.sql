@@ -20,7 +20,7 @@
 -- membership's role directly and requires the profile to keep its own, so a
 -- direct write cannot copy back; this file uses the same direct write to set
 -- up a membership and a profile that disagree.
--- plan: 98
+-- plan: 103
 begin;
 \ir ../lib/helpers.sql
 \ir inc/members.sql
@@ -358,10 +358,18 @@ select t.did('[P2-1 c20] ... and its badge', 'service',
   t.set_badge(t.f(), t.uid('i1'), 'I-2', t.uid('f_admin')), 1);
 select t.ok('[P2-1 c20] ... none of the three wrote the profile',
   $$ select t.mo('i1', t.f()) = 'Administrator/invited/I-2' and t.p('i1') = 'Driller/P-0' $$);
+select t.none('[P2-1 c23] the inviting organization''s Administrator reads no profile of a person who is only invited', 'f_admin',
+  format('select id from public.profiles where id = %L', t.uid('i1')));
 select t.did('[P2-1 c20] the invited person accepts', 'i1',
   format('select public.accept_membership(%L)', t.f()), 1);
 select t.ok('[P2-1 c20] ... the membership is active and accepting wrote nothing to the profile either',
   $$ select t.mo('i1', t.f()) = 'Administrator/active/I-2' and t.p('i1') = 'Driller/P-0' $$);
+select t.rows('[P2-1 c23] ... once the invitation is accepted, the Administrator reads that profile', 'f_admin',
+  format('select id from public.profiles where id = %L', t.uid('i1')), 1);
+select t.did('[P2-1 c23] setup: that member is deactivated', 'service',
+  t.set_status(t.f(), t.uid('i1'), 'deactivated', t.uid('f_admin')), 1);
+select t.rows('[P2-1 c23] ... and still reads it after the membership is deactivated', 'f_admin',
+  format('select id from public.profiles where id = %L', t.uid('i1')), 1);
 
 -- Criterion 8, in the order Supabase Auth really writes (admin createUser,
 -- internal/api/admin.go): the row is INSERTED with the request's
@@ -396,6 +404,16 @@ select t.ok('[P2-1 c14] ... and no marked account: still no membership anywhere'
         and t.m('n_both') = 'no membership' $$);
 select t.ok('[P2-1 c22] ... while the reconciliation ignores USER metadata: the account marked there only is enrolled, as before',
   $$ select t.m('n_user') = 'Driller/active/-' and t.mo('n_user', t.f()) = 'Driller/active/-' $$);
+
+-- Criterion 24: drill_members on a database where the functions it replaces
+-- did not exist (a new function is executable by PUBLIC until revoked).
+drop function public.saas_member_changing(uuid, uuid, text, text, text, text);
+drop function public.saas_member_record_count(uuid, uuid);
+drop function public.saas_roles();
+\i :mig_drill_members
+select t.ok('[P2-1 c24] created anew by drill_members, saas_member_changing and saas_member_record_count are not executable by anon or authenticated',
+  $$ select count(*) = 2 and not bool_or(has_function_privilege('anon', oid, 'EXECUTE') or has_function_privilege('authenticated', oid, 'EXECUTE'))
+     from pg_proc where pronamespace = 'public'::regnamespace and proname in ('saas_member_changing', 'saas_member_record_count') $$);
 
 rollback;
 select 'done';

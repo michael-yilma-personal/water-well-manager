@@ -205,6 +205,16 @@ test('ids are compared without regard to case: an upper-case organization is the
   assert.deepEqual(w.writes, []);
 });
 
+test('a member may change their own badge, through saas_set_member_badge; their own role is still 400', async () => {
+  const w = world();
+  assert.equal((await w.send('PATCH', { org_id: ORG_A, id: ADMIN_A, action: 'setRole', role: 'member' })).status, 400);
+  assert.deepEqual(w.writes, []);
+  assert.equal((await w.send('PATCH', { org_id: ORG_A, id: ADMIN_A, action: 'setBadge', badgeNumber: 'A-2' })).status, 200);
+  assert.deepEqual(w.writes, [
+    { op: 'saas_set_member_badge', args: { org: ORG_A, member: ADMIN_A, badge: 'A-2', actor: ADMIN_A } },
+  ]);
+});
+
 test('the function is reusable: neither source file names a Drill table, role or bucket', () => {
   const words = ['profiles', 'boreholes', 'pipe_records', 'drilling_events', 'shift_logs', 'Driller', 'Data Logger', 'Supervisor', 'Administrator', 'drilling-photos'];
   for (const file of ['handler.ts', 'index.ts']) {
