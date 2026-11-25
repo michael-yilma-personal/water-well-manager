@@ -57,6 +57,7 @@ import {
   signOut,
 } from './services/auth';
 import { saas } from './services/saas';
+import { decideActivation } from './services/orgSwitch';
 import type { Membership } from './saas/api';
 import { mayActivate, rememberOrg, rememberedOrg, resolveActiveOrg } from './saas/orgContext';
 import { SignInScreen } from './components/SignInScreen';
@@ -261,10 +262,8 @@ export default function App() {
    * Make `m` the organization this device works for. Returns null when done,
    * otherwise why not ('' when there is nothing to tell the person).
    *
-   * A device holds one organization's records at a time, so leaving another
-   * one - or settling the first while the device may hold several's - clears
-   * it, by the rules of signing out: only when the person chose it (`chosen`),
-   * never while work is unsent, and over parked work only once they agreed.
+   * Whether the device is cleared first, and whether that is allowed, is
+   * decided by `decideActivation` alone.
    */
   const activateOrg = (
     m: Membership,
@@ -274,26 +273,29 @@ export default function App() {
     const previous = getCachedOrgId();
     const pending = DrillingStorage.getPendingSyncCount();
     const parked = DrillingStorage.getParkedSyncCount();
-    const mustClear =
-      previous !== null
-        ? previous !== m.orgId
-        : who.memberships.filter((x) => x.status === 'active').length > 1 &&
-          (pending > 0 || parked > 0 || storage.getBoreholes().length > 0);
-    if (mustClear) {
-      if (!chosen) return '';
-      if (pending > 0) {
-        return `${pending} record(s) still uploading. Wait until they are sent.`;
-      }
-      if (
-        parked > 0 &&
-        !window.confirm(
-          `${parked} record(s) could not be uploaded by this account and will be permanently discarded. Continue?`
-        )
-      ) {
-        return '';
-      }
-      DrillingStorage.clearForAccountSwitch();
+    const decision = decideActivation({
+      cachedOrgId: previous,
+      targetOrgId: m.orgId,
+      activeCount: who.memberships.filter((x) => x.status === 'active').length,
+      deviceHoldsData: pending > 0 || parked > 0 || storage.getBoreholes().length > 0,
+      pending,
+      parked,
+      chosen,
+    });
+    if (decision === 'ignore') return '';
+    if (decision === 'refuse-pending') {
+      return `${pending} record(s) still uploading. Wait until they are sent.`;
     }
+    if (
+      decision === 'confirm-then-clear' &&
+      !window.confirm(
+        `${parked} record(s) could not be uploaded by this account and will be permanently discarded. Continue?`
+      )
+    ) {
+      return '';
+    }
+    const mustClear = decision !== 'activate';
+    if (mustClear) DrillingStorage.clearForAccountSwitch();
     setCachedOrgId(m.orgId);
     // The role is the one held in this organization, not the profile's.
     const me = DrillingStorage.adoptSignedInUser({ ...who.profile, role: m.role });
@@ -310,21 +312,32 @@ export default function App() {
 
   /**
    * Read who this account is and which organization it works for. Resolves
-   * false when that is still unknown and nothing cached stands in for it.
+   * 'unread' when the organization is still unknown and nothing cached stands
+   * in for it, and rejects when the profile could not be read.
    */
-  const refreshAccount = async (isStale: () => boolean = () => false): Promise<boolean> => {
+  const refreshAccount = async (
+    isStale: () => boolean = () => false
+  ): Promise<'ok' | 'no-profile' | 'unread'> => {
     const [profile, memberships] = await Promise.all([
       fetchMyProfile(),
-      saas.fetchMyOrganizations().catch((e: { code?: string } | null) => {
-        // PostgREST's answer for a function that does not exist.
-        if (e?.code === 'PGRST202') noOrgBackend.current = true;
-        return null;
-      }),
+      saas.fetchMyOrganizations().then(
+        (list) => {
+          noOrgBackend.current = false;
+          return list;
+        },
+        (e: { code?: string } | null) => {
+          // PostgREST's answer for a function that does not exist. A migrated
+          // backend can give it too while its schema cache is stale, so a
+          // device that already has an organization takes no notice.
+          if (e?.code === 'PGRST202' && getCachedOrgId() === null) noOrgBackend.current = true;
+          return null;
+        }
+      ),
     ]);
-    if (isStale()) return true;
-    const known = () => getCachedOrgId() !== null || noOrgBackend.current;
-    if (!profile) return known();
+    if (isStale()) return 'ok';
+    if (!profile) return 'no-profile';
     if (!memberships) {
+      if (getCachedOrgId() === null && !noOrgBackend.current) return 'unread';
       // The organizations could not be read. Name and badge are refreshed as
       // before; a role already taken from a membership is not overwritten.
       const me = DrillingStorage.adoptSignedInUser({
@@ -336,7 +349,7 @@ export default function App() {
       setUsers([me]);
       setCurrentUser(me);
       if (noOrgBackend.current) void syncWorker.pullNow();
-      return known();
+      return 'ok';
     }
     const who = { profile, memberships };
     setAccount(who);
@@ -352,7 +365,7 @@ export default function App() {
     }
     const m = memberships.find((x) => x.orgId === orgId);
     if (m) activateOrg(m, who, false);
-    return true;
+    return 'ok';
   };
 
   // On every launch, and again when signal returns: a role, a badge or a
@@ -821,10 +834,13 @@ export default function App() {
           // Its organization is settled here too, before the rig screens show.
           // When it cannot be read the device is not linked: the rig screens
           // must not open for an account whose organization is unknown.
-          if (!(await refreshAccount().catch(() => false))) {
+          const outcome = await refreshAccount().catch(() => 'unread' as const);
+          if (outcome !== 'ok') {
             await signOut();
             throw new Error(
-              'Signed in, but your organization could not be read. Check the connection and try again.'
+              outcome === 'no-profile'
+                ? 'This account has no profile. Ask an Administrator.'
+                : 'Signed in, but your organization could not be read. Check the connection and try again.'
             );
           }
 

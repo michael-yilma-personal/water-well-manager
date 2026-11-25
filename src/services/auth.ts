@@ -121,8 +121,10 @@ export async function fetchMyProfile(): Promise<{
     .from('profiles')
     .select('id, name, role, badge_number')
     .eq('id', uid)
-    .single();
-  if (error || !data) return null;
+    .maybeSingle();
+  // A failed read is not a missing profile, and the caller tells them apart.
+  if (error) throw new Error(error.message);
+  if (!data) return null;
   return {
     id: data.id as string,
     name: (data.name as string) ?? '',
