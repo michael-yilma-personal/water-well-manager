@@ -112,6 +112,10 @@ const ports: Ports = {
       user_metadata: name ? { name, saas_org: orgId } : { saas_org: orgId },
       app_metadata: { saas_org: orgId },
     });
+    // The one refusal the handler tells apart. Older auth servers give it no code, only the message.
+    if (error?.code === 'email_exists' || /already been registered/i.test(error?.message ?? '')) {
+      throw Object.assign(new Error('account creation: the email is taken'), { code: 'email_exists' });
+    }
     if (error || !data?.user) fail('account creation', error);
     return data.user.id;
   },

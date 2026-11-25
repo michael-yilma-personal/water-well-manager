@@ -14,7 +14,7 @@ const ADMIN_A = uuid('1'), MEMBER_A = uuid('2'), INVITED_A = uuid('3'), ADMIN_B 
 const NEW_ID = uuid('9'), UNKNOWN = uuid('0');
 const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase(); // as PostgreSQL compares uuids
 
-type Opts = { caller?: string | null; refuse?: string; fail?: keyof Ports };
+type Opts = { caller?: string | null; refuse?: string; fail?: keyof Ports; unconfirmed?: string };
 
 function world(opts: Opts = {}) {
   const accounts = [ADMIN_A, MEMBER_A, INVITED_A, ADMIN_B, MEMBER_B].map((id, i) => (
@@ -37,6 +37,10 @@ function world(opts: Opts = {}) {
     accounts: async (ids) => accounts.filter((a) => ids.some((id) => same(id, a.id))),
     accountIdByEmail: async (email) => accounts.find((a) => a.email === email.toLowerCase())?.id ?? null,
     createAccount: async (input) => {
+      // An unconfirmed account holds the email: accountIdByEmail does not match it, the auth server refuses.
+      if (input.email === opts.unconfirmed) {
+        throw Object.assign(new Error('A user with this email address has already been registered'), { code: 'email_exists' });
+      }
       writes.push({ op: 'createAccount', args: input });
       accounts.push({ id: NEW_ID, email: input.email.toLowerCase(), name: input.name, lastSignInAt: null });
       return NEW_ID;
@@ -229,6 +233,18 @@ test('POST with an email that is not shaped x@y is 400 and nothing is created (R
     assert.equal((await w.send('POST', { ...newPerson, email })).status, 400, email);
   }
   assert.deepEqual(w.writes, []);
+});
+
+test('POST with an email held by an unconfirmed account is 409 with a fixed message; nothing is created and nobody invited (RF-118)', async () => {
+  const w = world({ unconfirmed: newPerson.email });
+  const res = await w.send('POST', newPerson);
+  assert.equal(res.status, 409);
+  assert.equal(typeof res.body.error, 'string');
+  assert.doesNotMatch(JSON.stringify(res.body), /new@example\.com|confirm|registered|email_exists/i);
+  assert.deepEqual(w.writes, []);
+  assert.equal(w.accounts.length, 5);
+  assert.ok(w.unchanged());
+  assert.equal((await world({ fail: 'createAccount' }).send('POST', newPerson)).status, 500, 'any other failure stays 500');
 });
 
 test('the function is reusable: neither source file names a Drill table, role or bucket', () => {

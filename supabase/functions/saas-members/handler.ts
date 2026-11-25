@@ -142,7 +142,14 @@ export async function handle(req: Request, ports: Ports): Promise<Response> {
 
       if (!password) return json({ error: 'Password is required for a new account' }, 400);
       if (password.length < 8) return json({ error: 'Password must be at least 8 characters' }, 400);
-      const id = await ports.createAccount({ email, password, name: String(body.name ?? '').trim(), orgId: org });
+      let id: string;
+      try {
+        id = await ports.createAccount({ email, password, name: String(body.name ?? '').trim(), orgId: org });
+      } catch (err) {
+        // The address is held by an account that cannot be invited. Nothing was created.
+        if ((err as { code?: unknown } | null)?.code !== 'email_exists') throw err;
+        return json({ error: 'This person cannot be added with this address' }, 409);
+      }
       // An account without its membership must not be left behind.
       let added: { data?: unknown; code?: string } = { code: '' };
       try {

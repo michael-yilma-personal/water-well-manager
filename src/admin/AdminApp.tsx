@@ -34,7 +34,7 @@ import { signIn, signOut, getSession } from '../services/auth';
 import { EditPipeModal } from '../components/modals/EditPipeModal';
 import { CrewView } from './CrewView';
 import { isSupabaseConfigured } from '../services/supabaseClient';
-import { saas } from './saas';
+import { FORBIDDEN_EVENT, saas } from './saas';
 import type { Membership } from '../saas/api';
 import { mayActivate, rememberOrg, rememberedOrg, resolveActiveOrg } from '../saas/orgContext';
 import {
@@ -698,6 +698,10 @@ function Invitations({
           >
             Decline
           </button>
+          <span className="basis-full text-xs font-semibold text-blue-200/80">
+            A phone still on app version 1.1.7 stops uploading new boreholes once you belong to two
+            organizations, until the app is updated.
+          </span>
         </div>
       ))}
       {error && (
@@ -793,6 +797,13 @@ export default function AdminApp() {
     };
   }, [session, orgReload]);
 
+  // A refusal means the role or membership changed since sign-in: read them again.
+  useEffect(() => {
+    const reload = () => setOrgReload((k) => k + 1);
+    window.addEventListener(FORBIDDEN_EVENT, reload);
+    return () => window.removeEventListener(FORBIDDEN_EVENT, reload);
+  }, []);
+
   const leave = async () => {
     await signOut();
     setOrgs(null);
@@ -831,6 +842,7 @@ export default function AdminApp() {
     setChosen(orgId);
     setSelected(null);
     setShowCrew(false);
+    setOrgReload((k) => k + 1);
   };
 
   const invitations = (
