@@ -3,9 +3,9 @@
 -- Run BEFORE the rollback of 20261123000000_saas_members.sql, and both
 -- before the tenancy rollbacks; it assumes both are still applied.
 --
--- The migration replaced four functions and added nothing else, so this puts
--- the four back: the legacy enrolment as drill_tenancy defines it, and the
--- foundation's defaults. No table, row, trigger or grant changes. No
+-- The migration replaced five functions and added nothing else, so this puts
+-- the five back: the legacy enrolment and shares_org_as() as drill_tenancy
+-- defines them, and the foundation's defaults. No table, row, trigger or grant changes. No
 -- transaction statements: the caller wraps it.
 --
 -- From the first statement on, every new account is enrolled in the founding
@@ -50,6 +50,25 @@ begin
   end if;
   return null;
 end;
+$$;
+
+-- Exactly as in 20261116010000_drill_tenancy.sql (section 7): an invited
+-- membership of the target counts again.
+create or replace function public.shares_org_as(target uuid, variadic roles text[])
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select exists (
+    select 1
+    from public.memberships mine
+    join public.memberships theirs on theirs.org_id = mine.org_id
+    where mine.user_id = auth.uid() and mine.status = 'active'
+      and mine.role = any (roles)
+      and theirs.user_id = target
+  );
 $$;
 
 -- The foundation's defaults, as 20261123000000_saas_members.sql creates them.

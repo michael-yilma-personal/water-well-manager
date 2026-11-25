@@ -333,7 +333,8 @@ begin
 
   -- Invitations. The caller is auth.uid() and nothing else, and only an
   -- 'invited' membership is touched, so neither function reaches anyone
-  -- else's membership or brings a deactivated member back.
+  -- else's membership or brings a deactivated member back. They take the
+  -- organization's lock like the functions above.
   create or replace function public.accept_membership(org uuid)
   returns void
   language plpgsql
@@ -341,6 +342,8 @@ begin
   set search_path = public
   as $fn$
   begin
+    perform 1 from public.organizations o where o.id = org for no key update;
+
     update public.memberships x
     set status = 'active'
     where x.org_id = org and x.user_id = auth.uid() and x.status = 'invited';
@@ -360,6 +363,8 @@ begin
   set search_path = public
   as $fn$
   begin
+    perform 1 from public.organizations o where o.id = org for no key update;
+
     delete from public.memberships x
     where x.org_id = org and x.user_id = auth.uid() and x.status = 'invited';
     if not found then

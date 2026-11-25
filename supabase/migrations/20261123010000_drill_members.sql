@@ -1,15 +1,24 @@
 -- Member management for Drill: what the reusable functions of
 -- 20261123000000_saas_members.sql need to know about this application.
 --
--- It replaces four functions and adds nothing else: no table, column,
--- trigger, policy or privilege. The trigger that calls one of them is
--- drill_tenancy's and stays as it is, so the tenancy rollback still takes
--- everything of its own away.
+-- It replaces five functions and adds nothing else: no table, column,
+-- trigger or policy. The trigger that calls one of them is drill_tenancy's
+-- and stays as it is, so the tenancy rollback still takes everything of its
+-- own away.
 --
--- Re-runnable; each statement replaces one function in place and keeps its
--- grants. Rollback: supabase/rollback/20261123010000_drill_members.sql.
+-- Each function is replaced together with its revoke and grants inside one
+-- DO block, which is one statement, so its privileges are right whatever was
+-- there before (also when the function did not exist and a hosted project
+-- handed the new one to every API role). The function text inside a block is
+-- not indented. The exception is mirror_profile_to_membership(): a trigger
+-- function cannot be called directly by anyone, and it keeps the privileges
+-- drill_tenancy left it with.
+--
+-- Re-runnable. Rollback: supabase/rollback/20261123010000_drill_members.sql.
 
 -- Drill's four roles, the same names memberships_role_check allows.
+do $do$
+begin
 create or replace function public.saas_roles()
 returns text[]
 language sql
@@ -18,8 +27,15 @@ security definer
 set search_path = public
 as $$ select array['Driller', 'Data Logger', 'Supervisor', 'Administrator'] $$;
 
+  revoke execute on function public.saas_roles() from public, anon;
+  grant execute on function public.saas_roles() to authenticated, service_role;
+end
+$do$;
+
 -- Rows the member authored in the four record tables OF THAT ORGANIZATION,
 -- soft-deleted ones included.
+do $do$
+begin
 create or replace function public.saas_member_record_count(org uuid, member uuid)
 returns bigint
 language sql
@@ -32,6 +48,11 @@ as $$
        + (select count(*) from public.drilling_events r where r.org_id = org and r.created_by = member)
        + (select count(*) from public.shift_logs r      where r.org_id = org and r.created_by = member);
 $$;
+
+  revoke execute on function public.saas_member_record_count(uuid, uuid) from public, anon, authenticated;
+  grant execute on function public.saas_member_record_count(uuid, uuid) to service_role;
+end
+$do$;
 
 -- An account created FOR an organization is not enrolled in the founding one.
 --
@@ -121,6 +142,8 @@ $$;
 -- saas_set_member_status or saas_remove_member is deactivated on purpose,
 -- also when a ban had already deactivated it. The mark goes, so lifting the
 -- ban later does not bring the member back.
+do $do$
+begin
 create or replace function public.saas_member_changing(
   org uuid, member uuid, change text, role text, badge text, status text)
 returns void
@@ -148,3 +171,38 @@ begin
   end if;
 end;
 $$;
+
+  revoke execute on function public.saas_member_changing(uuid, uuid, text, text, text, text) from public, anon, authenticated;
+  grant execute on function public.saas_member_changing(uuid, uuid, text, text, text, text) to service_role;
+end
+$do$;
+
+-- A profile is readable by a Supervisor or Administrator of an organization
+-- its owner belongs to (profiles_select). An INVITED membership must not
+-- count for that: the invited person has accepted nothing, and may belong to
+-- another company. A deactivated one still counts, so the name on an old
+-- record resolves. This is drill_tenancy's function (section 7) with that
+-- one condition added.
+do $do$
+begin
+create or replace function public.shares_org_as(target uuid, variadic roles text[])
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select exists (
+    select 1
+    from public.memberships mine
+    join public.memberships theirs on theirs.org_id = mine.org_id
+    where mine.user_id = auth.uid() and mine.status = 'active'
+      and mine.role = any (roles)
+      and theirs.user_id = target and theirs.status <> 'invited'
+  );
+$$;
+
+  revoke execute on function public.shares_org_as(uuid, text[]) from public, anon;
+  grant execute on function public.shares_org_as(uuid, text[]) to authenticated, service_role;
+end
+$do$;
