@@ -467,3 +467,10 @@ All on staging, with real sign-ins; smallest test code, one check per rule, in t
 6. RF-118 live: an add for an address held by an unconfirmed account answers 409 and creates nothing.
 7. Staging ends as it was found.
 
+### P2-7 criteria (written 2026-11-25)
+
+1. The app is version 1.2.0: `package.json` 1.2.0, Android `versionName` 1.2.0 and `versionCode` 10, and wherever the app shows its own version. Nothing else in those files changes.
+2. A debug APK built from this branch with the staging project's address and publishable key installs on the emulator (`Medium_Phone`). No production address or key is in it.
+3. `npm run test:apk` and `npm run test:apk-photos` pass on the emulator against staging (the photo captured on the device lands under `<org>/<user>/`).
+4. Nothing is published: no store upload, no release signing, no web deploy.
+
