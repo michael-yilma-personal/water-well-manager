@@ -14,7 +14,7 @@ const ADMIN_A = uuid('1'), MEMBER_A = uuid('2'), INVITED_A = uuid('3'), ADMIN_B 
 const NEW_ID = uuid('9'), UNKNOWN = uuid('0');
 const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase(); // as PostgreSQL compares uuids
 
-type Opts = { caller?: string | null; refuse?: string; fail?: keyof Ports; unconfirmed?: string; access?: Record<string, string> };
+type Opts = { caller?: string | null; refuse?: string; fail?: keyof Ports; unconfirmed?: string; access?: Record<string, 'full' | 'read_only' | 'none'> };
 
 function world(opts: Opts = {}) {
   const accounts = [ADMIN_A, MEMBER_A, INVITED_A, ADMIN_B, MEMBER_B].map((id, i) => (
@@ -29,6 +29,8 @@ function world(opts: Opts = {}) {
   const writes: { op: string; args: any }[] = [];
   const ports: Ports = {
     callerId: async () => (opts.caller === undefined ? ADMIN_A : opts.caller),
+    // P3-2: the organization's access level ('full', 'read_only', 'none').
+    orgAccess: async (orgId: string) => opts.access?.[orgId.toLowerCase()] ?? 'full',
     adminRoles: async () => ['admin'],
     roles: async () => ['admin', 'member'],
     membershipsOf: async (userId) => memberships.filter((m) => same(m.userId, userId)),
@@ -59,8 +61,6 @@ function world(opts: Opts = {}) {
       return { data: fn === 'saas_remove_member' ? 'deactivated' : null };
     },
   };
-  // P3-2, ASSUMED: the handler learns the organization's access level ('full', 'read_only', 'none') from this port.
-  (ports as any).orgAccess = async (orgId: string) => opts.access?.[orgId.toLowerCase()] ?? 'full';
   if (opts.fail) (ports as any)[opts.fail] = async () => { throw new Error('connection refused at db.internal'); };
   const before = JSON.stringify(memberships);
   const send = async (method: string, body: Record<string, unknown> = {}, query = '') => {
@@ -272,7 +272,7 @@ test('expired (read_only): the list and deactivating a member work; adding, invi
 });
 
 test('suspended or canceled (none): everything is 402, the list included; another organization is not affected and a non-administrator still gets 403', async () => {
-  const access = { [ORG_A]: 'none' };
+  const access = { [ORG_A]: 'none' as const };
   const w = world({ access });
   refused402(await w.send('GET', {}, `?org_id=${ORG_A}`), 'list');
   refused402(await w.send('POST', newPerson), 'add');

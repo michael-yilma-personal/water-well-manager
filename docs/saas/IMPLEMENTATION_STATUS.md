@@ -47,7 +47,7 @@ Not in this phase: the platform console and the audited platform functions that 
 | Id | Task | Status | Evidence |
 |---|---|---|---|
 | P3-1 | Reusable migration `saas_subscriptions`: `plans`, `subscriptions` (RLS on), `org_access(org)`, the user-limit trigger on `memberships`, `my_organizations()` returning access level and end date; a subscription row for every existing organization | Implemented (migration 183 lines, rollback 44); reviewed (SR21), no blocking finding, RF-134 to RF-138 fixed and tested; not yet on staging | TEST_RESULTS 92, 94, 95 |
-| P3-2 | Drill migration `drill_subscriptions`: `org_access()` in the Drill policies and the photo bucket; a distinct error code for a write refused by the subscription; `saas-members` follows the "Manage members" column | Tests written (red as intended); with the Developer | TEST_RESULTS 95 |
+| P3-2 | Drill migration `drill_subscriptions`: `org_access()` in the Drill policies and the photo bucket; a distinct error code for a write refused by the subscription; `saas-members` follows the "Manage members" column | Implemented (migration 126 lines, rollback 25; handler +14); gate green (full), database suite green; review pending; not yet on staging | TEST_RESULTS 95, 97 |
 | P3-3 | Apps: notices in both (grace, expired, suspended, canceled); the field app holds subscription-refused work in the queue and uploads it after renewal; the dashboard is read-only when expired | Not started | — |
 | P3-4 | Phase suite on staging: the three phase acceptance points with real sign-ins; the existing suites still pass; CI | Not started | — |
 
@@ -65,6 +65,8 @@ Criteria are written when each task starts.
 | D3-6 | One plan is seeded, `standard`, with `max_users` 100. The real plans and limits are the owner's to set. |
 | D3-7 | `plans` is on the allowlist of `schema_check.sql` (tables without `org_id`): it is a catalog shared by all organizations and holds no tenant data. |
 | D3-8 | Clients do not read `subscriptions` directly (it holds `notes` and overrides meant for the platform administrator). The apps get `access` and `ends_at` from `my_organizations()`, for active memberships only. This replaces the first half of P3-1 criterion 1. |
+| D3-9 | With an expired subscription an Administrator may list and deactivate members, nothing else (no removal, no badge change). A refusal for the subscription is HTTP 402; "not an Administrator" stays 403; the user limit is 409. |
+| D3-10 | The apps show one notice for suspended and canceled ("this organization's subscription is not active"): `my_organizations()` gives the access level, not the stored status. |
 
 #### P3-1 criteria (2026-11-25)
 
@@ -88,6 +90,16 @@ Criteria are written when each task starts.
 8. Records refused during a lapse are accepted unchanged after renewal.
 9. One organization's subscription state never affects another's members or records.
 10. The founding organization and every existing suite behave as before; the rollback restores the previous policies exactly; the reusable files stay free of Drill names.
+
+#### P3-3 criteria (2026-11-25)
+
+1. Both apps show a notice from the active organization's `access` and `ends_at`: past the end date but still `full` (grace) a renewal notice; `read_only` an expired notice; `none` a "subscription not active" screen with no data and a way to sign out or change organization. No notice for an organization in good standing.
+2. Field app: a write refused with `SS002` is held: it stays queued, is not parked and uses no attempt; capture keeps working during the lapse; the held work uploads after renewal with nothing lost.
+3. Field app: a photo refused while the organization's access is not `full` is held the same way, not parked.
+4. Field app: a soft delete made while the organization's access is `none` is not taken as sent; it applies after reactivation (RF-142).
+5. Dashboard, expired: reading and exporting work; editing records and adding, inviting, re-activating or changing members are not offered or show the server's sentence; deactivating a member works.
+6. Dashboard: the user-limit refusal shows the server's sentence.
+7. A device or browser that has no access level cached yet behaves as `full` until it has read one. The founding organization sees no change.
 
 ### Phase 2 — Organization-aware apps (approved 2026-11-23; staging only)
 

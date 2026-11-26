@@ -28,6 +28,8 @@ export type Ports = {
   accountIdByEmail(email: string): Promise<string | null>;
   createAccount(input: { email: string; password: string; name: string; orgId: string }): Promise<string>;
   deleteAccount(id: string): Promise<void>;
+  /** What the organization's subscription allows (org_access() of the database). */
+  orgAccess(orgId: string): Promise<'full' | 'read_only' | 'none'>;
   /** A member function of the database: its result, or the SQLSTATE of its refusal. */
   call(fn: string, args: Record<string, unknown>): Promise<{ data?: unknown; code?: string }>;
 };
@@ -51,6 +53,7 @@ const REFUSALS: Record<string, [number, string]> = {
   SM006: [409, 'The organization would be left without an active administrator'],
   SM007: [409, 'This membership is an invitation: it can be accepted or removed, nothing else'],
   SM004: [404, NO_MEMBER],
+  SS001: [409, "The plan's user limit is reached"],
 };
 
 function json(body: unknown, status = 200) {
@@ -97,6 +100,17 @@ export async function handle(req: Request, ports: Ports): Promise<Response> {
     const mayAdminister = (await ports.membershipsOf(caller)).some(
       (m) => sameId(m.orgId, org) && m.status === 'active' && adminRoles.includes(m.role));
     if (!mayAdminister) return json({ error: 'Organization administrators only' }, 403);
+
+    // The subscription: full access allows everything, read-only access the
+    // list and deactivating a member, anything else nothing.
+    const access = await ports.orgAccess(org);
+    if (access !== 'full' && access !== 'read_only') {
+      return json({ error: "The organization's subscription is suspended or canceled" }, 402);
+    }
+    if (access === 'read_only' && req.method !== 'GET'
+      && !(req.method === 'PATCH' && body.action === 'deactivate')) {
+      return json({ error: "The organization's subscription has expired: until it is renewed, members can only be listed and deactivated" }, 402);
+    }
 
     if (req.method === 'GET') {
       const rows = await ports.membersOf(org);

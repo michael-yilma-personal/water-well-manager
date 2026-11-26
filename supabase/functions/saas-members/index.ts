@@ -7,7 +7,8 @@
  * the database's member functions; it writes no table itself.
  *
  * Needs the member migrations (saas_roles(), saas_add_member() and the
- * others): deploy it after them, never before.
+ * others) and the subscriptions migration (org_access()): deploy it after
+ * them, never before.
  */
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
@@ -119,6 +120,9 @@ const ports: Ports = {
     if (error || !data?.user) fail('account creation', error);
     return data.user.id;
   },
+
+  // Anything but an answer the handler knows is no access.
+  orgAccess: async (orgId) => (await rpc('org_access', { org: orgId })) ?? 'none',
 
   async deleteAccount(id) {
     const { error } = await admin.auth.admin.deleteUser(id);
