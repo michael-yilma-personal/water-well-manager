@@ -7,7 +7,7 @@ Requirements: `docs/SAAS_ARCHITECTURE_PROPOSAL.md`. How the work is run: `docs/s
 - **Phase:** Phase 2 — Organization-aware apps (approved by the owner on 2026-11-23). Staging only; nothing in it may reach production without the owner approving that specific action.
 - **Branch:** `saas/phase-2-org-apps`, branched from `saas/phase-1-tenancy` at `3715f99`. Pull requests 3 (workflow tooling), 4 (Phase 0) and 5 (Phase 1) are open with green CI, awaiting the owner's merge, in that order.
 - **In progress:** Phase 2 tasks P2-1 to P2-7 are done on staging and on the emulator (TEST_RESULTS 84 to 88); the gate is green; the eighteenth review has no blocking finding. Open and not blocking: RF-123 (a device without a session shows unsent work and no way to link again; unconfirmed), the upgrade from 1.1.7 on a real device, and the deferred items of the production checklist (RF-101, RF-105, RF-106, RF-109, RF-111, RF-121).
-- **Next step:** the owner's decisions: merging pull requests 3, 4, 5 and 6 in that order; the production decisions for Phases 1 and 2. Pull request 6 (Phase 2) is open with green CI (TEST_RESULTS 89). Phase 3 is not approved.
+- **Next step:** (owner, 2026-11-25) close the open Phase 2 gaps first (reproduce RF-123; drive in a browser the screens not yet driven), then start Phase 3, which the owner approved on 2026-11-25 for staging only. The upgrade from 1.1.7 on a real phone is moved to last (the owner has no phone at hand). Still the owner's: merging pull requests 3, 4, 5 and 6 in that order; the production decisions for Phases 1 and 2. Pull request 6 (Phase 2) is open with green CI (TEST_RESULTS 89).
 - **Phase 1** is done on staging; its production migration is **not approved**. **Do not check out `main` or any branch that predates the tooling until the pull requests are merged (RF-059).**
 - `.claude/settings.json`: found on 2026-11-25 (14:44) with every line commented out again, which turns the four hooks off (the same edit as on 2026-11-17). Not made by the Lead or an agent as far as known; left as found and not committed. While it stands the Stop gate and the Bash guard do not run: the Lead runs `scripts/gate.sh` by hand.
 - **Waiting on the owner:** the production decision for Phase 1; the action recorded for RF-050 (deferred by the owner; does not block development); approval to delete the `probe` function from production (RF-049); confirmation of the staging rule (RF-054); branch protection on `main`; merging the three pull requests (RF-059).
@@ -20,7 +20,7 @@ Requirements: `docs/SAAS_ARCHITECTURE_PROPOSAL.md`. How the work is run: `docs/s
 | 0 Preparation | `saas/phase-0-preparation` | Done; CI green; awaiting the owner's merge (after pull request 3) | https://github.com/michael-yilma-personal/water-well-manager/pull/4 |
 | 1 Tenancy in the database | `saas/phase-1-tenancy` | Done on staging; awaiting the owner's review. **Production migration not approved** | https://github.com/michael-yilma-personal/water-well-manager/pull/5 |
 | 2 Organization-aware apps | `saas/phase-2-org-apps` | Approved 2026-11-23; in progress on staging | — |
-| 3 Subscriptions and entitlements | — | Not approved | — |
+| 3 Subscriptions and entitlements | — | Approved 2026-11-25 (staging only); starts after the Phase 2 gaps | — |
 | 4 Platform console and audit | — | Not approved | — |
 | 5 Onboarding polish and cleanup | — | Not approved | — |
 | 6 Extract the foundation | — | Not approved | — |
@@ -418,6 +418,7 @@ Harden the enforcement after the security review (RF-010 to RF-024).
 
 | Date | Decision | By |
 |---|---|---|
+| 2026-11-25 | **Phase 3 approved, after the Phase 2 gaps** (answer "Both, gaps first" to the Lead's question). Staging only; production still needs the owner's approval of each specific action. The upgrade test on a real phone is done last. | Owner |
 | 2026-11-24 | **Keep test code minimal and do not bloat the code base.** From here each brief asks for the smallest set of tests that covers every criterion once, and the smallest implementation that meets it. Existing tests are not removed or weakened. | Owner |
 | 2026-11-23 | **Phase 2 approved** ("proceed with phase 2"). Staging only; production migrations, deployments and data changes still need the owner's approval of that specific action. | Owner |
 | 2026-11-15 | Workflow tooling goes on its own branch and pull request, separate from the SaaS phases. | Lead |
