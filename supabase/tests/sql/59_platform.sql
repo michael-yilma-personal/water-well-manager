@@ -24,8 +24,11 @@
 --     subscription) raise anything that is not a broken call.
 --   * start_trial needs no argument and is allowed from any status.
 --
--- A refusal raises, so it changes nothing: that is not asserted separately.
--- plan: 31
+--   * (review) D4-4: the service role is refused with 42501. D4-5: no
+--     `notes` key in details.before / details.after.
+--
+-- A refusal raises, so it changes nothing: that is asserted once, by t.silent.
+-- plan: 41
 begin;
 \ir ../lib/helpers.sql
 \ir ../lib/fixture.sql
@@ -37,6 +40,7 @@ create function t.upd(org uuid, action text, args jsonb default '{}') returns te
   select format('select public.platform_update_subscription(%L, %L, %L)', org, action, args) $$;
 
 insert into public.plans (id, name, max_users) values ('t_one', 'Test plan of one', 1), ('t_big', 'Test plan of fifty', 50);
+insert into public.plans (id, name, max_users, is_active) values ('t_off', 'Withdrawn test plan', 50, false);
 update auth.users set raw_user_meta_data = '{"name": "Ada Admin"}' where id = t.uid('a_admin');
 -- Organization A: 7 counting members (6 active, 1 invited), 4 deactivated.
 select t.sub(t.a(), 'active', now() + interval '10 days', 5, 9);
@@ -63,7 +67,10 @@ select t.throws('[P4-1 c6] ... and its user limit applies: its plan allows one m
      where o.name = 'P4 New Co' $$, 'SS001');
 select t.refused(format('[P4-1 c1] creating an organization with %s is refused', why), 'padmin',
   format('select public.platform_create_organization(''P4 Refused'', %L, %L)', plan, st), 'create', why)
-from (values ('no_such_plan', 'active', 'an unknown plan'), ('standard', 'suspended', 'a status other than trial or active')) v(plan, st, why);
+from (values ('no_such_plan', 'active', 'an unknown plan'), ('standard', 'suspended', 'a status other than trial or active'),
+             ('t_off', 'active', 'a plan that is not active')) v(plan, st, why);
+select t.refused('[P4-1 c1] creating an organization with a blank name is refused', 'padmin',
+  $$ select public.platform_create_organization('  ', 'standard', 'active') $$, 'create', 'a blank name');
 
 -- ---------------------------------------------------------------------------
 -- Criterion 3: the console's reads
@@ -131,14 +138,46 @@ from (values
 order by n;
 
 delete from public.subscriptions where org_id = t.b();
-select t.refused(format('[P4-1 c2] %s is refused', why), 'padmin', t.upd(org, action), 'update', why)
-from (values (t.a(), 'delete',  'an unknown action'),
-             (t.a(), 'extend',  'extend without ends_at'),
-             (t.b(), 'suspend', 'an action on an organization without a subscription')) v(org, action, why);
+select t.refused(format('[P4-1 c2] %s is refused', why), 'padmin', t.upd(org, action, args), 'update', why)
+from (values (t.a(), 'delete',      '{}'::jsonb,           'an unknown action'),
+             (t.a(), 'extend',      '{}',                  'extend without ends_at'),
+             (t.b(), 'suspend',     '{}',                  'an action on an organization without a subscription'),
+             (t.a(), 'override',    '{"features": "all"}', 'override with features that is not an object'),
+             (t.a(), 'change_plan', '{"plan": "t_off"}',   'change_plan to a plan that is not active')) v(org, action, args, why);
+
+-- The call as the platform administrator, outside any check's subtransaction:
+-- true when it raised and no audit row was written.
+create function t.silent(q text) returns boolean
+language plpgsql as $f$
+declare seen bigint := (select coalesce(max(id), 0) from public.audit_log);
+begin
+  begin
+    perform t._become('padmin');
+    execute q;
+    perform set_config('role', 'none', true);
+    return false;
+  exception when others then
+    return not t.broken(sqlstate, sqlerrm) and not exists (select 1 from public.audit_log where id > seen);
+  end;
+end
+$f$;
+select t.ok(format('[P4-1 c2] %s is refused and leaves no audit row', why), format('select t.silent(%L)', t.upd(t.a(), action, args)))
+from (values ('delete', '{}'::jsonb, 'an unknown action'), ('override', null, 'override with SQL NULL args')) v(action, args, why);
+
+select t.ok('[P4-1 c2] D4-5: no audit row of a subscription change carries the notes, before or after',
+  $$ select count(*) = 9 and not bool_or(details -> 'before' ? 'notes' or details -> 'after' ? 'notes')
+     from public.audit_log where action like 'subscription.%' $$);
+select t.ok('[P4-1 c3] an organization''s Administrator reads the platform''s audit rows of their own organization and of no other', 'a_admin',
+  format($$ select count(*) = 9 and bool_and(org_id = %L) from public.audit_log where action = 'org.create' or action like 'subscription.%%' $$, t.a()));
 
 select t.ok('[P4-1 c3] a platform administrator reads the new audit rows: actor, time, action and details', 'padmin',
   format($$ select count(*) = 10 and bool_and(actor_id = %L and at is not null and details is not null)
             from public.audit_log where action = 'org.create' or action like 'subscription.%%' $$, t.uid('padmin')));
+
+-- After the counts above: one call takes an expired organization to full access.
+select t.sub(t.a(), 'trial', now() - interval '30 days');
+select t.act('activate', jsonb_build_object('ends_at', now() + interval '30 days'), 'ends_at',
+  $$s.status = 'active' and s.ends_at = now() + interval '30 days' and public.org_access(s.org_id) = 'full'$$);
 
 -- ---------------------------------------------------------------------------
 -- Criteria 4 and 5: nobody else, and nothing more for the platform administrator
@@ -159,6 +198,8 @@ select t.ok('[P4-1 c4] anon holds no EXECUTE on any of the four functions',
   $$ select count(*) = 4 and not bool_or(coalesce(has_function_privilege('anon', to_regprocedure('public.' || f), 'EXECUTE'), true))
      from unnest(array['platform_create_organization(text,text,text,timestamptz)', 'platform_update_subscription(uuid,text,jsonb)',
                        'platform_organizations()', 'platform_members(uuid)']) f $$);
+select t.throws('[P4-1 c4] D4-4: the service role cannot call a platform function (42501)', 'service',
+  t.upd(t.a(), 'suspend'), '42501');
 select t.throws('[P4-1 c4] a platform administrator still cannot add a platform administrator through the API', 'padmin',
   format('insert into public.platform_admins (user_id) values (%L)', t.uid('stranger')), '42501');
 

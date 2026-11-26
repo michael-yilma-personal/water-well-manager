@@ -8,8 +8,8 @@
 -- Each function refuses, with 42501, a caller who is not a signed-in platform
 -- administrator; the service role is not one and holds no EXECUTE either. A
 -- change and its audit row are one transaction. Other refusals are 22023
--- (a status, an action or an argument the function does not take, or no
--- subscription); an unknown plan is refused by the foreign key (23503).
+-- (a blank name, a status, an action or an argument the function does not
+-- take, a plan that does not exist or is not active, or no subscription).
 --
 -- The audit row of a subscription change carries the row before and after
 -- WITHOUT its notes: an organization's administrators read their
@@ -40,6 +40,12 @@ begin
     if p_status is null or p_status not in ('trial', 'active') then
       raise exception 'An organization is created as trial or active.' using errcode = '22023';
     end if;
+    if p_name is null or btrim(p_name) = '' then
+      raise exception 'An organization needs a name.' using errcode = '22023';
+    end if;
+    if not exists (select 1 from public.plans p where p.id = p_plan and p.is_active) then
+      raise exception 'No such active plan.' using errcode = '22023';
+    end if;
 
     insert into public.organizations (name) values (p_name) returning id into org;
     insert into public.subscriptions (org_id, plan_id, status, ends_at)
@@ -54,12 +60,14 @@ begin
 
   -- One action on an organization's subscription. No transition between
   -- statuses is forbidden. p_args:
-  --   start_trial   ends_at, optional (JSON null: no end date)
+  --   start_trial, activate, reactivate
+  --                 ends_at, optional (JSON null: no end date)
   --   extend        ends_at, required
-  --   change_plan   plan, required
-  --   override      max_users, features: at least one; a key that is present
-  --                 is set, JSON null clears it, an absent key is left alone
-  --   activate, suspend, reactivate, cancel   nothing
+  --   change_plan   plan, required: one that is active
+  --   override      max_users, features (an object): at least one; a key that
+  --                 is present is set, JSON null clears it, an absent key is
+  --                 left alone
+  --   suspend, cancel   nothing
   --   any action    notes, optional
   create or replace function public.platform_update_subscription(
     p_org uuid, p_action text, p_args jsonb default '{}')
@@ -72,6 +80,7 @@ begin
     b public.subscriptions;
     a public.subscriptions;
   begin
+    p_args := coalesce(p_args, '{}');
     if not public.is_platform_admin() then
       raise exception 'Platform administrators only.' using errcode = '42501';
     end if;
@@ -83,13 +92,11 @@ begin
     a := b;
 
     case p_action
-      when 'start_trial' then
-        a.status := 'trial';
+      when 'start_trial', 'activate', 'reactivate' then
+        a.status := case p_action when 'start_trial' then 'trial' else 'active' end;
         if p_args ? 'ends_at' then
           a.ends_at := (p_args ->> 'ends_at')::timestamptz;
         end if;
-      when 'activate', 'reactivate' then
-        a.status := 'active';
       when 'suspend' then
         a.status := 'suspended';
       when 'cancel' then
@@ -103,6 +110,10 @@ begin
         if p_args ->> 'plan' is null then
           raise exception 'change_plan needs plan.' using errcode = '22023';
         end if;
+        if not exists (select 1 from public.plans p
+                       where p.id = p_args ->> 'plan' and p.is_active) then
+          raise exception 'No such active plan.' using errcode = '22023';
+        end if;
         a.plan_id := p_args ->> 'plan';
       when 'override' then
         if not p_args ?| array['max_users', 'features'] then
@@ -110,6 +121,9 @@ begin
         end if;
         if p_args ? 'max_users' then
           a.max_users_override := (p_args ->> 'max_users')::integer;
+        end if;
+        if jsonb_typeof(p_args -> 'features') not in ('object', 'null') then
+          raise exception 'features is an object or null.' using errcode = '22023';
         end if;
         if p_args ? 'features' then
           a.features_override := nullif(p_args -> 'features', 'null');
