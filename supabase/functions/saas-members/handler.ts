@@ -104,10 +104,14 @@ export async function handle(req: Request, ports: Ports): Promise<Response> {
     // A platform administrator who is not one of them may do one thing: add the
     // organization's first administrator, never themselves. Once it has an
     // active administrator, nothing is open to them here.
-    const mayAddFirstAdmin = mayAdminister || (req.method === 'POST'
-      && typeof body.role === 'string' && adminRoles.includes(body.role) && await ports.isPlatformAdmin(caller)
-      && !(await ports.membersOf(org)).some((m) => m.status === 'active' && adminRoles.includes(m.role)));
-    if (!mayAddFirstAdmin) return json({ error: 'Organization administrators only' }, 403);
+    if (!mayAdminister) {
+      const platform = req.method === 'POST' && typeof body.role === 'string'
+        && adminRoles.includes(body.role) && await ports.isPlatformAdmin(caller);
+      if (!platform) return json({ error: 'Organization administrators only' }, 403);
+      if ((await ports.membersOf(org)).some((m) => m.status === 'active' && adminRoles.includes(m.role))) {
+        return json({ error: "This organization already has an administrator; add more people from the organization's own dashboard." }, 403);
+      }
+    }
 
     // The subscription: full access allows everything, read-only access the
     // list and deactivating a member, anything else nothing.
