@@ -20,6 +20,14 @@ export function resolveActiveOrg(memberships: Membership[], rememberedOrgId: str
   return { kind: 'none', reason: invited ? 'invited-only' : 'deactivated' };
 }
 
+/**
+ * The invitations to offer, in the order given, whether or not an organization
+ * is active: answering one never changes which organization is active.
+ */
+export function invitationsToOffer(memberships: Membership[], _activeOrgId: string | null): Membership[] {
+  return memberships.filter((m) => m.status === 'invited');
+}
+
 // Keyed by user, so the next person signing in on this browser starts without a choice.
 const key = (userId: string) => `saas.activeOrg.${userId}`;
 

@@ -88,11 +88,11 @@ function Audit({ api, orgId, names }: { api: PlatformApi; orgId?: string; names:
           empty="Nothing recorded yet."
           rows={rows && rows.map((a) => [
             <span className="whitespace-nowrap text-xs">{new Date(a.at).toLocaleString()}</span>,
-            <span className="text-xs">{name(a.actorId)}</span>,
-            ...(orgId ? [] : [<span className="text-xs">{name(a.orgId)}</span>]),
+            <span className="text-xs">{a.actorEmail ?? name(a.actorId)}</span>,
+            ...(orgId ? [] : [<span className="text-xs">{a.orgName ?? name(a.orgId)}</span>]),
             <span className="whitespace-nowrap font-black">{a.action}</span>,
             <span className="font-mono text-xs break-all text-slate-300">
-              {a.target ? `${name(a.target)} ` : ''}{a.details == null ? '' : JSON.stringify(a.details)}
+              {a.target ? `${a.targetEmail ?? name(a.target)} ` : ''}{a.details == null ? '' : JSON.stringify(a.details)}
             </span>,
           ])}
         />

@@ -25,9 +25,13 @@ export type AuditEntry = {
   id: number;
   at: string;
   actorId: string | null;
+  actorEmail: string | null;
   orgId: string | null;
+  orgName: string | null;
   action: string;
   target: string | null;
+  // The target's email when the target is a user's id.
+  targetEmail: string | null;
   details: unknown;
 };
 
@@ -83,11 +87,10 @@ export function createPlatformApi(deps: Deps) {
 
     /** Newest first, at most AUDIT_LIMIT rows; for one organization when one is given. */
     async listAudit(orgId?: string): Promise<AuditEntry[]> {
-      let query = client().from('audit_log').select('*');
-      if (orgId) query = query.eq('org_id', orgId);
-      const rows = unwrap<Record<string, never>[] | null>(await query.order('id', { ascending: false }).limit(AUDIT_LIMIT));
+      const rows = await rpc<Record<string, never>[] | null>('platform_audit', { p_org: orgId ?? null, p_limit: AUDIT_LIMIT });
       return (rows ?? []).map((r) => ({
-        id: r.id, at: r.at, actorId: r.actor_id, orgId: r.org_id, action: r.action, target: r.target, details: r.details,
+        id: r.id, at: r.at, actorId: r.actor_id, actorEmail: r.actor_email, orgId: r.org_id, orgName: r.org_name,
+        action: r.action, target: r.target, targetEmail: r.target_email, details: r.details,
       }));
     },
 

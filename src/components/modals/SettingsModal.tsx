@@ -25,6 +25,10 @@ interface SettingsModalProps {
   activeOrgId: string | null;
   /** Null when switched; otherwise why not ('' when there is nothing to say). */
   onSwitchOrg: (orgId: string) => string | null;
+  /** Waiting invitations; answering one does not switch organization. */
+  invitations?: { orgId: string; name: string; role: string }[];
+  /** Rejects with the server's sentence. */
+  onAnswerInvitation?: (orgId: string, accept: boolean) => Promise<void>;
   /** Still retryable. Signing out is refused while any remain. */
   pendingCount: number;
   /** Given up on. This account can never upload it, so it does not block. */
@@ -47,6 +51,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   organizations,
   activeOrgId,
   onSwitchOrg,
+  invitations = [],
+  onAnswerInvitation,
   pendingCount,
   parkedCount,
   heldForSubscription,
@@ -70,6 +76,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   );
   const [sunlight, setSunlight] = useState(settings.sunlightMode);
   const [switchRefused, setSwitchRefused] = useState('');
+  const [inviteBusy, setInviteBusy] = useState(false);
+  const [inviteError, setInviteError] = useState<{ orgId: string; message: string } | null>(null);
 
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
@@ -373,6 +381,41 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   </select>
                 </div>
               )}
+
+              {onAnswerInvitation &&
+                invitations.map((m) => (
+                  <div key={m.orgId} className="flex justify-between items-center gap-2">
+                    <div className="text-[11px] font-bold text-blue-200">
+                      You have been invited to join {m.name} as {m.role}.
+                      {inviteError?.orgId === m.orgId && <div className="text-rose-400">{inviteError.message}</div>}
+                    </div>
+                    <div className="flex gap-1.5">
+                      {[true, false].map((accept) => (
+                        <button
+                          key={String(accept)}
+                          type="button"
+                          disabled={inviteBusy}
+                          onClick={async () => {
+                            setInviteBusy(true);
+                            setInviteError(null);
+                            try {
+                              await onAnswerInvitation(m.orgId, accept);
+                            } catch (e) {
+                              setInviteError({ orgId: m.orgId, message: e instanceof Error ? e.message : String(e) });
+                            } finally {
+                              setInviteBusy(false);
+                            }
+                          }}
+                          className={`px-3 py-1.5 rounded text-xs font-black uppercase disabled:opacity-50 ${
+                            accept ? 'bg-[#FFD700] text-black' : 'border border-slate-600 text-slate-300'
+                          }`}
+                        >
+                          {accept ? 'Accept' : 'Decline'}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ))}
 
               <div className="flex justify-between items-center gap-2">
                 <div>
