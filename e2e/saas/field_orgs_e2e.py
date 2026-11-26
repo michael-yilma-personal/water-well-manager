@@ -16,6 +16,11 @@ installed build 1.1.7 over plain HTTP, against the project named by _target
 Not repeated here, see tenant_isolation_e2e.py: a plain insert without org_id
 (sections 1 and 4) and who may read or write the legacy photo path (section 7).
 
+Also driven here (the Phase 2 gaps of 2026-11-25): a switch over work that
+could not be sent asks first and can be cancelled (P2-5 criterion 9); the
+screens of an account with no membership and with only an invitation (P2-5
+criterion 1); and RF-123, a linked device whose session is gone.
+
 Same needs, fixture, tear-down and end-state checks as members_e2e.py.
 
 Run:  python3 e2e/saas/field_orgs_e2e.py    (exit 0 only if every check passes)
@@ -33,6 +38,13 @@ from playwright.sync_api import sync_playwright
 HAS_WELL = "(n) => JSON.parse(localStorage.getItem('wwdm_boreholes') || '[]').some(b => b.name === n)"
 QUEUED = "() => JSON.parse(localStorage.getItem('wwdm_outbox') || '[]').some(o => o.entity === 'pipeRecord')"
 DRAINED = "() => JSON.parse(localStorage.getItem('wwdm_outbox') || '[]').length === 0"
+PARKED = "() => JSON.parse(localStorage.getItem('wwdm_outbox') || '[]').some(o => o.parked)"
+ACTIVE_ORG = "() => localStorage.getItem('wwdm_active_org')"
+# One operation the outbox has given up on, as the device stores it.
+PARK_ONE = """(org) => localStorage.setItem('wwdm_outbox', JSON.stringify([{id: crypto.randomUUID(), op: 'upsert',
+    entity: 'pipeRecord', entityId: crypto.randomUUID(), payload: {}, attempts: 8, parked: true, orgId: org,
+    enqueuedAt: new Date().toISOString(), nextAttemptAt: 0}]))"""
+dialog = {'accept': True, 'asked': ''}   # how confirmations are answered, and the last one asked
 
 
 def waited(page, js, arg=None, timeout=60000):
@@ -47,12 +59,17 @@ def stored(page, key):
     return page.evaluate("(k) => JSON.parse(localStorage.getItem(k) || '[]')", key)
 
 
+def answer(d):
+    dialog['asked'] = d.message
+    d.accept() if dialog['accept'] else d.dismiss()
+
+
 def linked(browser, account, errors):
     """A fresh device on which `account` has just pressed "Link this device"."""
     ctx = browser.new_context(viewport={'width': 411, 'height': 900}, is_mobile=True, has_touch=True)
     page = ctx.new_page()
     page.on('pageerror', lambda e: errors.append(str(e)))
-    page.on('dialog', lambda d: d.accept())
+    page.on('dialog', answer)
     page.goto(_target.start_app(), wait_until='networkidle')
     page.fill('input[type="email"]', account.email)
     page.fill('input[type="password"]', account.secret)
@@ -105,6 +122,17 @@ def field_app():
         check('and uploads once online', back_online(ctx, page), m.short(stored(page, 'wwdm_outbox'), 300))
         check('the borehole and the pipe are in the founding organization',
               fx.record_counts(one) == {F: 2}, m.short(fx.record_counts(one)))
+
+        # RF-123 (open defect; red until it is fixed). The session is gone, the
+        # device still holds its link marks and unsent work.
+        log_offline(ctx, page, one_well)
+        page.evaluate("() => Object.keys(localStorage).filter(k => /^sb-.*-auth-token$/.test(k))"
+                      ".forEach(k => localStorage.removeItem(k))")
+        ctx.set_offline(False)
+        page.reload(wait_until='networkidle')
+        check('RF-123: work queued when the session is lost stays queued for retry, it is not given up on',
+              not waited(page, PARKED, timeout=20000) and page.evaluate(QUEUED),
+              m.short([(o['entity'], o.get('parked'), o.get('lastError')) for o in stored(page, 'wwdm_outbox')], 300))
         ctx.close()
 
         print('\n== 4. a person active in two organizations ==', flush=True)
@@ -129,12 +157,43 @@ def field_app():
         check('the work uploads once online', back_online(ctx, page), m.short(stored(page, 'wwdm_outbox'), 300))
         check('and it is all in the chosen organization: nothing new in the founding one',
               fx.record_counts(two) == {F: 1, S: 2}, m.short(fx.record_counts(two)))
+        page.evaluate(PARK_ONE, S)
+        page.reload(wait_until='networkidle')
+        page.get_by_text(s_well, exact=False).first.click()
+        page.get_by_text('Rig Settings', exact=True).click()
+        dialog['accept'] = False
+        switch.select_option(F)
+        dialog['accept'] = True
+        check('over work that could not be sent a switch asks first, and cancelling keeps the organization and the work',
+              'will be permanently discarded' in dialog['asked'] and page.evaluate(ACTIVE_ORG) == S
+              and page.evaluate(PARKED) and page.evaluate(HAS_WELL, s_well), m.short(dialog['asked']))
         switch.select_option(F)
         check('after switching, the device holds the founding borehole',
               waited(page, HAS_WELL, f_well) and page.evaluate("() => localStorage.getItem('wwdm_active_org')") == F)
         check('and nothing of the second organization',
               not page.evaluate(HAS_WELL, s_well) and stored(page, 'wwdm_pipe_records') == [],
               m.short([b['name'] for b in stored(page, 'wwdm_boreholes')]))
+        ctx.close()
+
+        print('\n== an account with no membership, then with only an invitation ==', flush=True)
+        who = fx['fl']
+        fx.remove_membership(who, F)
+        ctx, page = linked(browser, who, errors)
+        check('an account in no organization is told so, with Sign out, and the device holds no record',
+              seen(page, 'does not belong to any organization') and page.get_by_role('button', name='Sign out').count() == 1
+              and stored(page, 'wwdm_boreholes') == [] and page.evaluate(ACTIVE_ORG) is None)
+        invited = m.fn('POST', fx['sa'], S, email=who.email, name='x', role='Driller')[0]
+        page.reload(wait_until='networkidle')
+        accept = page.get_by_role('button', name='Accept')
+        check('with only an invitation they see it, with Accept and Decline, and still no organization',
+              invited == 201 and seen(page, f'You have been invited to join {fx.second_name}') and accept.count() == 1
+              and page.get_by_role('button', name='Decline').count() == 1 and page.evaluate(ACTIVE_ORG) is None,
+              f'HTTP {invited}')
+        if accept.count() == 1:
+            accept.click()
+        check('after Accept the device works for that organization and the membership is active',
+              waited(page, f"() => localStorage.getItem('wwdm_active_org') === '{S}'")
+              and m.memberships(who.id) == [(S, 'Driller', 'active')], m.short(m.memberships(who.id)))
         check('no JS errors', not errors, m.short(errors[:2]))
         browser.close()
 

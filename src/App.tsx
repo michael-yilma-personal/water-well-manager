@@ -52,6 +52,7 @@ import {
   getCachedOrgId,
   getCurrentUserId,
   isProvisioned,
+  sessionLost,
   fetchMyProfile,
   setCachedOrgId,
   signOut,
@@ -189,9 +190,11 @@ export default function App() {
             getUserId: getCurrentUserId,
           })
         ),
-        onChange: () => {
+        onChange: (result) => {
           setPendingSync(DrillingStorage.getPendingSyncCount());
           setParkedSync(DrillingStorage.getParkedSyncCount());
+          // The session went while the app was open: stop and ask (RF-123).
+          if (result.failed > 0) void sessionLost().then((lost) => lost && setSignedIn(false));
         },
         pull: pullRunner,
         onPulled: () => setDataVersion((v) => v + 1),
@@ -216,8 +219,19 @@ export default function App() {
   // spent the day out of coverage uploads as soon as it is opened in range.
   useEffect(() => {
     if (!signedIn || !isSupabaseConfigured()) return;
-    void syncWorker.start();
-    return () => syncWorker.stop();
+    // RF-123: with no session nothing can be sent, and every failed try brings
+    // queued work nearer to being given up on. The sign-in screen is shown
+    // instead; the queue and the cached identity stay as they are.
+    let alive = true;
+    void sessionLost().then((lost) => {
+      if (!alive) return;
+      if (lost) setSignedIn(false);
+      else void syncWorker.start();
+    });
+    return () => {
+      alive = false;
+      syncWorker.stop();
+    };
   }, [syncWorker, signedIn]);
 
   // Reload records when active borehole changes

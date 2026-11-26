@@ -27,24 +27,31 @@ export interface AuthProfile {
 }
 
 /**
- * The signed-in user's id, preferring the live session but falling back to the
- * last known value.
+ * The live session's user id, or null when there is no session to send with.
  *
- * The fallback matters: a device that has been offline long enough for the
- * access token to expire still knows who it is, so queued rows keep the correct
- * author instead of being stamped with nobody.
+ * Never the cached id (RF-123): a request sent without a session is refused by
+ * the server as a permission error, and queued work was given up on for it.
+ * Stamping a record on save uses `getCachedUserId`.
  */
 export async function getCurrentUserId(): Promise<string | null> {
   const client = getSupabase();
-  if (client) {
-    const { data } = await client.auth.getSession();
-    const id = data.session?.user?.id;
-    if (id) {
-      localStorage.setItem(CACHED_USER_ID_KEY, id);
-      return id;
-    }
-  }
-  return localStorage.getItem(CACHED_USER_ID_KEY);
+  if (!client) return null;
+  const { data } = await client.auth.getSession();
+  const id = data.session?.user?.id ?? null;
+  if (id) localStorage.setItem(CACHED_USER_ID_KEY, id);
+  return id;
+}
+
+/**
+ * True when this device holds no session at all, so only signing in again can
+ * upload. A session that merely cannot be refreshed right now (no network)
+ * answers with an error and is not lost.
+ */
+export async function sessionLost(): Promise<boolean> {
+  const client = getSupabase();
+  if (!client) return false;
+  const { data, error } = await client.auth.getSession();
+  return !data.session && !error;
 }
 
 /** Synchronous view of the cached identity, for stamping records on save. */
