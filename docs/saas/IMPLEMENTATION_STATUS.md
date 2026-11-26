@@ -49,8 +49,8 @@ Not in this half: email invitations (waiting for the owner's choice of sender); 
 
 | Id | Task | Status | Evidence |
 |---|---|---|---|
-| P5-1 | Change your own password: in the field app (Rig Settings), the dashboard and the console | Not started | — |
-| P5-2 | Password reset: "Forgot password?" on the sign-in screens; the emailed link opens a page that sets a new password | Not started | — |
+| P5-1 | Change your own password: in the field app (Rig Settings), the dashboard and the console | Tests written (red as intended); with the Developer | TEST_RESULTS 120 |
+| P5-2 | Password reset: "Forgot password?" on the sign-in screens; the emailed link opens a page that sets a new password | Tests written (red as intended); with the Developer | TEST_RESULTS 120 |
 | P5-3 | Phase suite on staging; the existing suites still pass; CI | Not started | — |
 
 Criteria are written when each task starts.
@@ -62,6 +62,13 @@ Criteria are written when each task starts.
 | D5-1 | Changing a password asks for the current one, checked by signing in with it, and the new one twice. The person stays signed in on that device; nothing else is signed out. |
 | D5-2 | The reset link from any app opens one page on the dashboard's site, which sets the new password; the person then signs in again in the app they use (the APK cannot receive the link itself). The sign-in screens never say whether an address has an account. |
 | D5-3 | On staging, reset emails are not sent to real inboxes: the suites take the link from the Auth admin API. Production needs the dashboard's address in the Auth redirect list and a working sender (production checklist). |
+
+#### P5-1 and P5-2 criteria (2026-11-26)
+
+1. Changing a password asks for the current one and the new one twice; refused without a server call when the two do not match, when it is shorter than 8 characters, or when it equals the current one; a wrong current password gives one plain sentence and changes nothing; the person stays signed in and nothing else is signed out. Available in the field app (Rig Settings), the dashboard and the console.
+2. "Forgot password?" on each sign-in screen sends a reset email and then shows the same sentence whatever the server answered (rate limiting may say "try again later"); an empty address is refused without a server call.
+3. The link opens one page on the dashboard's site which, on a password-recovery session, asks for the new password twice (same rules, no current one), sets it, and tells the person to sign in again in the app they use.
+4. The password logic is in the reusable `src/saas/password.ts`, without Drill names.
 
 ### Phase 4 — Platform console and audit (approved 2026-11-25; staging only)
 
