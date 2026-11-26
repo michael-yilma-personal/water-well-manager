@@ -45,6 +45,8 @@
 -- plan: 50
 begin;
 \ir ../lib/helpers.sql
+-- A migration later than the ones this file rehearses is rolled back first.
+\ir inc/roll_back_later.sql
 
 create function t.m(actor text) returns text
 language sql stable

@@ -50,6 +50,12 @@ select t.ok('[P2-1] setup: the founding organization has an active Administrator
 
 insert into public.organizations (id, name, created_at)
   values (t.s(), 'Second', timestamptz '2000-01-01 00:00:00+00');
+-- SaaS Phase 3, task P3-2: without a subscription it would have no access (D3-1).
+do $$ begin
+  if to_regclass('public.subscriptions') is not null then
+    insert into public.subscriptions (org_id, plan_id, status) values (t.s(), 'standard', 'active');
+  end if;
+end $$;
 
 -- ---------------------------------------------------------------------------
 -- Criterion 8: the marker

@@ -46,8 +46,8 @@ Not in this phase: the platform console and the audited platform functions that 
 
 | Id | Task | Status | Evidence |
 |---|---|---|---|
-| P3-1 | Reusable migration `saas_subscriptions`: `plans`, `subscriptions` (RLS on), `org_access(org)`, the user-limit trigger on `memberships`, `my_organizations()` returning access level and end date; a subscription row for every existing organization | Implemented (migration 181 lines, rollback 36); local database suite green; review pending; not yet on staging | TEST_RESULTS 92, 94 |
-| P3-2 | Drill migration `drill_subscriptions`: `org_access()` in the Drill policies and the photo bucket; a distinct error code for a write refused by the subscription; `saas-members` follows the "Manage members" column | Not started | — |
+| P3-1 | Reusable migration `saas_subscriptions`: `plans`, `subscriptions` (RLS on), `org_access(org)`, the user-limit trigger on `memberships`, `my_organizations()` returning access level and end date; a subscription row for every existing organization | Implemented (migration 183 lines, rollback 44); reviewed (SR21), no blocking finding, RF-134 to RF-138 fixed and tested; not yet on staging | TEST_RESULTS 92, 94, 95 |
+| P3-2 | Drill migration `drill_subscriptions`: `org_access()` in the Drill policies and the photo bucket; a distinct error code for a write refused by the subscription; `saas-members` follows the "Manage members" column | Tests written (red as intended); with the Developer | TEST_RESULTS 95 |
 | P3-3 | Apps: notices in both (grace, expired, suspended, canceled); the field app holds subscription-refused work in the queue and uploads it after renewal; the dashboard is read-only when expired | Not started | — |
 | P3-4 | Phase suite on staging: the three phase acceptance points with real sign-ins; the existing suites still pass; CI | Not started | — |
 
@@ -75,6 +75,19 @@ Criteria are written when each task starts.
 5. Every existing organization gets a `standard`, `active` subscription without end date.
 6. The existing database suite stays green; nothing is wired into a policy yet.
 7. A rollback restores the previous state exactly.
+
+#### P3-2 criteria (2026-11-25)
+
+1. Inserting or updating Drill records succeeds only when the organization's access is `full`; trial, active and within grace behave as today.
+2. A write refused by the subscription fails with SQLSTATE `SS002`, visible to the client as the error code; an ordinary permission refusal is still 42501.
+3. With `full` or `read_only` everything readable today stays readable; with `none` a member reads no Drill records of that organization.
+4. Photos: upload needs `full`; reading needs not `none`.
+5. Signing in always works: `my_organizations()` lists the organization with its access in every state, and the caller's own profile is readable.
+6. Managing members through `saas-members`: `full` as today; `read_only` only listing and deactivating; `none` nothing. The refusal is HTTP 402 with one sentence; "not an Administrator" stays 403.
+7. The user-limit refusal (`SS001`) reaches the dashboard as HTTP 409 saying the plan's user limit is reached.
+8. Records refused during a lapse are accepted unchanged after renewal.
+9. One organization's subscription state never affects another's members or records.
+10. The founding organization and every existing suite behave as before; the rollback restores the previous policies exactly; the reusable files stay free of Drill names.
 
 ### Phase 2 — Organization-aware apps (approved 2026-11-23; staging only)
 

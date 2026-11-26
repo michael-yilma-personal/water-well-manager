@@ -14,7 +14,7 @@ const ADMIN_A = uuid('1'), MEMBER_A = uuid('2'), INVITED_A = uuid('3'), ADMIN_B 
 const NEW_ID = uuid('9'), UNKNOWN = uuid('0');
 const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase(); // as PostgreSQL compares uuids
 
-type Opts = { caller?: string | null; refuse?: string; fail?: keyof Ports; unconfirmed?: string };
+type Opts = { caller?: string | null; refuse?: string; fail?: keyof Ports; unconfirmed?: string; access?: Record<string, string> };
 
 function world(opts: Opts = {}) {
   const accounts = [ADMIN_A, MEMBER_A, INVITED_A, ADMIN_B, MEMBER_B].map((id, i) => (
@@ -59,6 +59,8 @@ function world(opts: Opts = {}) {
       return { data: fn === 'saas_remove_member' ? 'deactivated' : null };
     },
   };
+  // P3-2, ASSUMED: the handler learns the organization's access level ('full', 'read_only', 'none') from this port.
+  (ports as any).orgAccess = async (orgId: string) => opts.access?.[orgId.toLowerCase()] ?? 'full';
   if (opts.fail) (ports as any)[opts.fail] = async () => { throw new Error('connection refused at db.internal'); };
   const before = JSON.stringify(memberships);
   const send = async (method: string, body: Record<string, unknown> = {}, query = '') => {
@@ -245,6 +247,50 @@ test('POST with an email held by an unconfirmed account is 409 with a fixed mess
   assert.equal(w.accounts.length, 5);
   assert.ok(w.unchanged());
   assert.equal((await world({ fail: 'createAccount' }).send('POST', newPerson)).status, 500, 'any other failure stays 500');
+});
+
+// P3-2, criteria 6 and 7. ASSUMED: a refusal for the subscription is HTTP 402 with a one-sentence
+// message; someone who is not an administrator still gets the 403, whatever the subscription.
+const refused402 = (res: { status: number; body: any }, what: string) => {
+  assert.equal(res.status, 402, what);
+  assert.match(res.body.error, /^[^.!?]+[.!?]?$/, what);
+};
+
+test('expired (read_only): the list and deactivating a member work; adding, inviting, re-activating and changing a role or badge are 402 and write nothing', async () => {
+  const w = world({ access: { [ORG_A]: 'read_only' } });
+  const change = { org_id: ORG_A, id: MEMBER_A };
+  refused402(await w.send('POST', newPerson), 'add');
+  refused402(await w.send('POST', { ...newPerson, email: 'user5@example.com' }), 'invite');
+  refused402(await w.send('PATCH', { ...change, action: 'reactivate' }), 'reactivate');
+  refused402(await w.send('PATCH', { ...change, action: 'setRole', role: 'admin' }), 'setRole');
+  refused402(await w.send('PATCH', { ...change, action: 'setBadge', badgeNumber: 'X' }), 'setBadge');
+  assert.deepEqual(w.writes, []);
+  assert.equal((await w.send('GET', {}, `?org_id=${ORG_A}`)).status, 200);
+  w.memberships.find((m) => m.orgId === ORG_A && m.userId === MEMBER_A)!.status = 'active';
+  assert.equal((await w.send('PATCH', { ...change, action: 'deactivate' })).status, 200);
+  assert.deepEqual(w.writes.map((x) => [x.op, x.args.status]), [['saas_set_member_status', 'deactivated']]);
+});
+
+test('suspended or canceled (none): everything is 402, the list included; another organization is not affected and a non-administrator still gets 403', async () => {
+  const access = { [ORG_A]: 'none' };
+  const w = world({ access });
+  refused402(await w.send('GET', {}, `?org_id=${ORG_A}`), 'list');
+  refused402(await w.send('POST', newPerson), 'add');
+  refused402(await w.send('PATCH', { org_id: ORG_A, id: MEMBER_A, action: 'deactivate' }), 'deactivate');
+  refused402(await w.send('DELETE', { org_id: ORG_A, id: MEMBER_A }), 'remove');
+  assert.deepEqual(w.writes, []);
+  const other = world({ caller: ADMIN_B, access });
+  assert.equal((await other.send('GET', {}, `?org_id=${ORG_B}`)).status, 200);
+  assert.equal((await other.send('GET', {}, `?org_id=${ORG_A}`)).status, 403);
+});
+
+test('the user-limit refusal (SS001) is 409 with a message that says the user limit is reached; the account just created is deleted again', async () => {
+  const w = world({ refuse: 'SS001' });
+  const res = await w.send('POST', newPerson);
+  assert.equal(res.status, 409);
+  assert.match(res.body.error, /user limit/i);
+  assert.equal(w.accounts.length, 5);
+  assert.equal((await w.send('PATCH', { org_id: ORG_A, id: MEMBER_A, action: 'reactivate' })).status, 409);
 });
 
 test('the function is reusable: neither source file names a Drill table, role or bucket', () => {

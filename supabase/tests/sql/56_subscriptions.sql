@@ -11,20 +11,23 @@
 --   * A subscription row can be written by the table owner with an upsert on
 --     org_id (the fixture of decision D3-3), whether or not the migration
 --     gives a new organization a row of its own.
---   * "A member" who may read the subscription is an ACTIVE member, as in
---     is_org_member(); a deactivated one learns it from my_organizations().
+--   * D3-8 (changed after the review of P3-1): no client reads `subscriptions`
+--     directly, a member of the organization included; what a client may
+--     know comes from my_organizations(). `plans` stays readable.
 --
 -- Subscriptions are set by the connecting role; dates are relative to now(),
 -- which does not move inside this transaction.
--- plan: 30
+-- plan: 35
 begin;
 \ir ../lib/helpers.sql
 
 -- Criterion 5, before the fixture adds organizations of its own.
 select t.ok('[P3-1 c5] every organization that exists after the migrations has a subscription: plan standard, status active, no end date',
-  $$ select count(*) >= 1 and bool_and(s.plan_id = 'standard' and s.status = 'active' and s.ends_at is null)
-          and (select is_active and max_users > 0 from public.plans where id = 'standard')
-     from public.organizations o left join public.subscriptions s on s.org_id = o.id $$);
+  $$ select (select count(*) from public.organizations) >= 1
+        and not exists (select 1 from public.organizations o
+                        where not exists (select 1 from public.subscriptions s
+                                          where s.org_id = o.id and s.plan_id = 'standard' and s.status = 'active' and s.ends_at is null))
+        and (select is_active and max_users > 0 from public.plans where id = 'standard') $$);
 
 \ir ../lib/fixture.sql
 \ir inc/members.sql
@@ -32,16 +35,7 @@ select t.ok('[P3-1 c5] every organization that exists after the migrations has a
 create function t.a() returns uuid language sql immutable as $$ select t.uid('org_a') $$;
 create function t.b() returns uuid language sql immutable as $$ select t.uid('org_b') $$;
 
--- plpgsql, so that it loads before the migration exists.
-create function t.sub(org uuid, st text, ends timestamptz, grace int default 7, lim int default null, plan text default 'standard')
-returns void language plpgsql as $f$
-begin
-  insert into public.subscriptions (org_id, plan_id, status, ends_at, grace_days, max_users_override)
-  values (org, plan, st, ends, grace, lim)
-  on conflict (org_id) do update set plan_id = excluded.plan_id, status = excluded.status, ends_at = excluded.ends_at,
-    grace_days = excluded.grace_days, max_users_override = excluded.max_users_override;
-end
-$f$;
+-- t.sub(org, status, ends_at, grace, limit, plan) sets a subscription: lib/fixture.sql.
 
 -- ---------------------------------------------------------------------------
 -- Criterion 1: the tables, who reads them, and that nobody writes them
@@ -65,13 +59,13 @@ select t.none('[P3-1 c1] an organization''s Administrator cannot change its subs
 select t.none('[P3-1 c1] ... nor add a plan', 'a_admin',
   $$ insert into public.plans (id, name, max_users) values ('free_for_all', 'Mine', 1000) $$);
 
-select t.ok('[P3-1 c1] a member reads exactly one subscription, their own organization''s', 'a_driller',
-  format('select count(*) = 1 and bool_and(org_id = %L) from public.subscriptions', t.a()));
 select t.rows('[P3-1 c1] a member reads the plans', 'a_driller',
   $$ select 1 from public.plans where id = 'standard' $$, 1);
 select t.none(format('[P3-1 c1] %s cannot read organization A''s subscription by its id', why), actor,
   format('select * from public.subscriptions where org_id = %L', t.a()))
-from (values ('b_admin',  'the Administrator of another organization'),
+from (values ('a_driller', 'a member of the organization itself (D3-8)'),
+             ('a_admin',  'the organization''s own Administrator (D3-8)'),
+             ('b_admin',  'the Administrator of another organization'),
              ('a_gone',   'a deactivated member'),
              ('stranger', 'an account with no membership'),
              ('anon',     'a signed-out client')) v(actor, why);
@@ -110,7 +104,8 @@ from (values
   (5, 'trial',     interval '-8 days', 7, 'read_only', 'a trial 8 days past its end date with 7 days of grace (expired)'),
   (6, 'suspended', null,               7, 'none',      'a suspended subscription'),
   (7, 'canceled',  interval '30 days', 7, 'none',      'a canceled subscription, even before its end date'),
-  (8, null,        null,               7, 'none',      'an organization with no subscription row (D3-1)')
+  (8, null,        null,               7, 'none',      'an organization with no subscription row (D3-1)'),
+  (9, 'active',    interval '0',       0, 'full',      'an active subscription whose end date is this very moment, with no grace (the end is inclusive)')
 ) v(n, st, ends, grace, want, why)
 order by n;
 
@@ -130,6 +125,9 @@ select t.ok('[P3-1 c4] my_organizations(): each row carries its own organization
                                       and access = 'none' and ends_at is null) = 1
             from public.my_organizations() $$, t.a(), t.b()));
 
+select t.ok('[P3-1 c4] my_organizations(): a membership that is not active carries neither the access level nor the end date', 'a_invited',
+  $$ select count(*) = 1 and bool_and(status = 'invited' and access is null and ends_at is null) from public.my_organizations() $$);
+
 -- ---------------------------------------------------------------------------
 -- Criterion 3: the user limit (D3-2: active and invited count)
 -- ---------------------------------------------------------------------------
@@ -142,6 +140,11 @@ select t.throws('[P3-1 c3] at the plan''s limit, saas_add_member is refused with
   t.add(t.b(), t.uid('stranger'), 'Driller', null, 'active', t.uid('b_admin')), 'SS001');
 select t.throws('[P3-1 c3] ... and so is a plain insert of an invited membership: SS001', null,
   format('insert into public.memberships (org_id, user_id, role, status) values (%L, %L, ''Driller'', ''invited'')', t.b(), t.uid('stranger')), 'SS001');
+select t.throws('[P3-1 c3] ... and so is moving a membership into it by changing its org_id: SS001', null,
+  format('update public.memberships set org_id = %L where org_id = %L and user_id = %L', t.b(), t.a(), t.uid('a_logger')), 'SS001');
+select t.rows('[P3-1 c3] ... with its subscription row gone the organization has no limit: the same person is added (D3-5)', null,
+  format('with gone as (delete from public.subscriptions where org_id = %1$L returning org_id) '
+         'insert into public.memberships (org_id, user_id, role, status) select org_id, %2$L, ''Driller'', ''active'' from gone', t.b(), t.uid('stranger')), 1);
 select t.rows('[P3-1 c3] ... a deactivated membership does not count: it is inserted', null,
   format('insert into public.memberships (org_id, user_id, role, status) values (%L, %L, ''Driller'', ''deactivated'')', t.b(), t.uid('stranger')), 1);
 

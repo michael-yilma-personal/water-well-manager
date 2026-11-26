@@ -394,6 +394,9 @@ class Fixture:
                 f'delete from public.{table} where {mine} or borehole_id in'
                 f' (select id from public.boreholes where {mine});')
         statements.append(f'delete from public.boreholes where {mine};')
+        # Subscriptions reference organizations (SaaS Phase 3); no such table before it.
+        statements.append("do $$ begin if to_regclass('public.subscriptions') is not null then"
+                          f' delete from public.subscriptions where org_id = any({o}); end if; end $$;')
         statements.append(f'delete from public.memberships where org_id = any({o});')
         statements.append(f'delete from public.organizations where id = any({o}) and not is_founding;')
         sql('begin;\n' + '\n'.join(statements) + '\ncommit;')
@@ -492,6 +495,10 @@ class Fixture:
         sql(f'insert into public.organizations (id, name) values ({uid(second)},'
             f' {text_lit(self.second_name)});')
         self.second = second
+        # Without a subscription an organization has no access (SaaS Phase 3, D3-1).
+        sql("do $$ begin if to_regclass('public.subscriptions') is not null then"
+            " insert into public.subscriptions (org_id, plan_id, status)"
+            f" values ({uid(second)}, 'standard', 'active') on conflict (org_id) do nothing; end if; end $$;")
 
         labels = list(FOUNDING_ROLES) + list(SECOND_ROLES) + ['fp', 'fh', 'dual']
         for label in labels:
