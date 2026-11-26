@@ -40,9 +40,10 @@ function setup(o: Options = {}) {
 }
 
 test('fetchMyOrganizations returns the rows of my_organizations() as orgId, name, role, status', async () => {
-  const rows = [{ org_id: ORG, name: 'Acme', role: 'admin', status: 'invited' }];
+  // The row shape since P3-1: access and ends_at are always present, null for a membership that is not active.
+  const rows = [{ org_id: ORG, name: 'Acme', role: 'admin', status: 'invited', access: null, ends_at: null }];
   const { api, rpcCalls } = setup({ rpc: { data: rows, error: null } });
-  assert.deepEqual(await api.fetchMyOrganizations(), [{ orgId: ORG, name: 'Acme', role: 'admin', status: 'invited' }]);
+  assert.deepEqual(await api.fetchMyOrganizations(), [{ orgId: ORG, name: 'Acme', role: 'admin', status: 'invited', access: null, endsAt: null }]);
   assert.equal(rpcCalls[0].fn, 'my_organizations');
 });
 
