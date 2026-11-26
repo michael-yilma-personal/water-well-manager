@@ -49,8 +49,8 @@ Not in this half: email invitations (waiting for the owner's choice of sender); 
 
 | Id | Task | Status | Evidence |
 |---|---|---|---|
-| P5-1 | Change your own password: in the field app (Rig Settings), the dashboard and the console | Tests written (red as intended); with the Developer | TEST_RESULTS 120 |
-| P5-2 | Password reset: "Forgot password?" on the sign-in screens; the emailed link opens a page that sets a new password | Tests written (red as intended); with the Developer | TEST_RESULTS 120 |
+| P5-1 | Change your own password: in the field app (Rig Settings), the dashboard and the console | Implemented (`src/saas/password.ts`, `src/saas/PasswordForms.tsx`, the three apps); unit 368 of 368; gate green; driven with stubbed answers; review and staging suite running | TEST_RESULTS 120, 121 |
+| P5-2 | Password reset: "Forgot password?" on the sign-in screens; the emailed link opens a page that sets a new password | Implemented (`src/saas/password.ts`, `src/saas/PasswordForms.tsx`, the three apps); unit 368 of 368; gate green; driven with stubbed answers; review and staging suite running | TEST_RESULTS 120, 121 |
 | P5-3 | Phase suite on staging; the existing suites still pass; CI | Not started | — |
 
 Criteria are written when each task starts.
