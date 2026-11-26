@@ -29,6 +29,8 @@ interface SettingsModalProps {
   pendingCount: number;
   /** Given up on. This account can never upload it, so it does not block. */
   parkedCount: number;
+  /** The unsent work waits for the subscription, not for signal. */
+  heldForSubscription?: boolean;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -47,7 +49,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onSwitchOrg,
   pendingCount,
   parkedCount,
+  heldForSubscription,
 }) => {
+  const pendingText = heldForSubscription
+    ? `${pendingCount} record(s) are kept on this phone until the subscription is renewed.`
+    : `${pendingCount} record(s) still uploading. Wait, or tap the sync badge.`;
   const [defaultPipeLength, setDefaultPipeLength] = useState(
     activeBorehole.defaultPipeLength || settings.defaultPipeLength || 4.55
   );
@@ -330,7 +336,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       {switchRefused
                         ? switchRefused
                         : pendingCount > 0
-                          ? `${pendingCount} record(s) still uploading. Wait, or tap the sync badge.`
+                          ? pendingText
                           : parkedCount > 0
                             ? `${parkedCount} record(s) could not be uploaded and will be discarded.`
                             : 'Clears this phone and loads the other organization\'s records. They stay on the server.'}
@@ -373,7 +379,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   <div className="text-xs font-black uppercase text-rose-300">Sign Out / Switch Driller</div>
                   <div className="text-[11px] opacity-70">
                     {pendingCount > 0
-                      ? `${pendingCount} record(s) still uploading. Wait, or tap the sync badge.`
+                      ? pendingText
                       : parkedCount > 0
                         ? `${parkedCount} record(s) could not be uploaded and will be discarded.`
                         : 'Unlinks this phone and clears its records. They stay on the server.'}

@@ -49,12 +49,14 @@ import { createPullRunner, createSupabasePull } from './services/pullTransport';
 import { createCompositeTransport, createPhotoTransport } from './services/photoTransport';
 import { getSupabase, isSupabaseConfigured } from './services/supabaseClient';
 import {
+  getCachedAccess,
   getCachedOrgId,
   getCachedUserId,
   getCurrentUserId,
   isProvisioned,
   sessionLost,
   fetchMyProfile,
+  setCachedAccess,
   setCachedOrgId,
   signOut,
   undoSignIn,
@@ -62,11 +64,14 @@ import {
 import { saas } from './services/saas';
 import { decideActivation } from './services/orgSwitch';
 import type { Membership } from './saas/api';
-import { mayActivate, rememberOrg, rememberedOrg, resolveActiveOrg } from './saas/orgContext';
+import { mayActivate, rememberOrg, rememberedOrg, resolveActiveOrg, subscriptionNotice } from './saas/orgContext';
 import { SignInScreen } from './components/SignInScreen';
 import { NO_ORG_MESSAGE, OrgScreen } from './components/OrgScreen';
 import { SPRING_DEFAULT, CROSSFADE } from './ui/springs';
 import { useReducedMotion } from './ui/prefs';
+
+/** Unsent work on this phone waits for the subscription, as last read. */
+const heldForSubscription = () => (getCachedAccess() ?? 'full') !== 'full';
 
 export default function App() {
   // Storage instance
@@ -176,6 +181,19 @@ export default function App() {
     });
   });
 
+  // The access level as the server gives it now, for the transports. A failed
+  // read rejects, and the transport then holds the work.
+  const refreshAccess = async () => {
+    if (noOrgBackend.current) return null;
+    const memberships = await saas.fetchMyOrganizations();
+    const access =
+      memberships.find((m) => m.orgId === getCachedOrgId() && m.status === 'active')?.access ?? null;
+    setCachedAccess(access);
+    // The notice follows without a restart.
+    setAccount((a) => a && { ...a, memberships });
+    return access;
+  };
+
   const [syncWorker] = useState(
     () =>
       new SyncWorker({
@@ -186,10 +204,14 @@ export default function App() {
           createSupabaseTransport({
             getClient: getSupabase,
             getUserId: getCurrentUserId,
+            getAccess: getCachedAccess,
+            refreshAccess,
           }),
           createPhotoTransport({
             getClient: getSupabase,
             getUserId: getCurrentUserId,
+            getAccess: getCachedAccess,
+            refreshAccess,
           })
         ),
         hasSession: async () => {
@@ -198,9 +220,12 @@ export default function App() {
           if (await sessionLost()) setSignedIn(false);
           return false;
         },
-        onChange: () => {
+        onChange: (result) => {
           setPendingSync(DrillingStorage.getPendingSyncCount());
           setParkedSync(DrillingStorage.getParkedSyncCount());
+          // Something went through although the last level read was not full:
+          // the subscription was renewed, so the notice must go by itself.
+          if (result.sent > 0 && heldForSubscription()) void refreshAccess().catch(() => {});
         },
         pull: pullRunner,
         onPulled: () => setDataVersion((v) => v + 1),
@@ -304,7 +329,9 @@ export default function App() {
     });
     if (decision === 'ignore') return '';
     if (decision === 'refuse-pending') {
-      return `${pending} record(s) still uploading. Wait until they are sent.`;
+      return heldForSubscription()
+        ? `${pending} record(s) are kept on this phone until the subscription is renewed.`
+        : `${pending} record(s) still uploading. Wait until they are sent.`;
     }
     if (
       decision === 'confirm-then-clear' &&
@@ -317,6 +344,9 @@ export default function App() {
     const mustClear = decision !== 'activate';
     if (mustClear) DrillingStorage.clearForAccountSwitch();
     setCachedOrgId(m.orgId);
+    // Read again on launch, when signal returns and on a manual sync, so work
+    // held during a lapse goes out after renewal.
+    setCachedAccess(m.access);
     // The role is the one held in this organization, not the profile's.
     const me = DrillingStorage.adoptSignedInUser({ ...who.profile, role: m.role });
     setUsers([me]);
@@ -383,6 +413,8 @@ export default function App() {
     let orgId: string | null = null;
     if (cached) {
       if (mayActivate(cached, memberships)) orgId = cached;
+      // No longer a member: refusals are then permission errors, not the subscription's.
+      else setCachedAccess(null);
     } else {
       const resolved = resolveActiveOrg(memberships, rememberedOrg(localStorage, profile.id));
       if (resolved.kind === 'active') orgId = resolved.orgId;
@@ -391,6 +423,15 @@ export default function App() {
     if (m) activateOrg(m, who, false);
     return 'ok';
   };
+
+  // Coming back to the app: the subscription may have changed meanwhile.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') setOrgReload((k) => k + 1);
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, []);
 
   // On every launch, and again when signal returns: a role, a badge or a
   // membership changed in the office must reach a device that is already linked.
@@ -699,9 +740,12 @@ export default function App() {
       // work one - otherwise the only route out of a parked queue is a
       // reinstall, which takes the records with it.
       if (getOutbox().parked().length > 0) getOutbox().retryParked();
+      // The subscription may have been renewed, or have lapsed, since launch.
+      await refreshAccount().catch(() => {});
       const result = await syncWorker.syncNow();
       setPendingSync(storage.getPendingSyncCount());
       setParkedSync(storage.getParkedSyncCount());
+      // Work held for the subscription is not counted as failed: the notice explains it.
       if (result.failed > 0 && result.sent === 0) {
         // Silence here would look identical to a successful upload, which is
         // the failure mode this whole feature exists to remove.
@@ -904,12 +948,18 @@ export default function App() {
   const activeOrgs = (account?.memberships ?? []).filter((m) => m.status === 'active');
   const activeOrgId = getCachedOrgId();
   // Only with an answer from the server: offline, the cached organization stands.
-  if (signedIn && account && !activeOrgs.some((m) => m.orgId === activeOrgId)) {
+  const activeOrg = activeOrgs.find((m) => m.orgId === activeOrgId);
+  const notice = subscriptionNotice(activeOrg?.access, activeOrg?.endsAt, Date.now());
+  if (signedIn && account && (!activeOrg || notice === 'inactive')) {
     const resolved = resolveActiveOrg(account.memberships, null);
     return (
       <OrgScreen
         message={
-          resolved.kind === 'none' ? NO_ORG_MESSAGE[resolved.reason] : 'Choose an organization.'
+          activeOrg
+            ? "This organization's subscription is not active."
+            : resolved.kind === 'none'
+              ? NO_ORG_MESSAGE[resolved.reason]
+              : 'Choose an organization.'
         }
         memberships={account.memberships}
         onChoose={chooseOrg}
@@ -929,9 +979,18 @@ export default function App() {
           void handleSignOut();
         }}
         pendingCount={pendingSync}
+        heldForSubscription={heldForSubscription()}
       />
     );
   }
+
+  const subscriptionBanner = notice && (
+    <div className="mx-3 mt-2 p-2.5 rounded border border-amber-500/40 bg-amber-500/10 text-amber-300 text-[11px] font-bold">
+      {notice === 'grace'
+        ? `This organization's subscription ended on ${new Date(activeOrg!.endsAt!).toLocaleDateString()}. Renew it to keep uploading.`
+        : "This organization's subscription has expired. Records are kept on this device and upload after renewal."}
+    </div>
+  );
 
   // A device with no boreholes is a real state, not an error: it is exactly what
   // a crew sees the moment their device is linked and the sample job is cleared.
@@ -940,6 +999,7 @@ export default function App() {
     return (
       <div className="min-h-screen bg-[#0A0A0A] text-white flex flex-col items-center justify-center p-6 text-center">
         <h1 className="text-2xl font-black tracking-tight">PERIPLUS DRILL</h1>
+        {subscriptionBanner}
         <p className="mt-2 mb-6 text-sm text-slate-400 font-semibold max-w-xs">
           No borehole on this device yet. Create one to start logging pipes.
           Everything is saved on the rig and uploads when you next have signal.
@@ -997,6 +1057,7 @@ export default function App() {
       />
 
       {/* Main Content Area */}
+      {subscriptionBanner}
       {syncError && (
         <div className="mx-3 mt-2 p-2.5 rounded border border-rose-500/40 bg-rose-500/10 text-rose-300 text-[11px] font-bold flex items-start justify-between gap-2">
           <span>{syncError}</span>
@@ -1178,6 +1239,7 @@ export default function App() {
         activeOrgId={activeOrgId}
         onSwitchOrg={chooseOrg}
         pendingCount={sessionGone ? 0 : pendingSync}
+        heldForSubscription={heldForSubscription()}
         parkedCount={sessionGone ? pendingSync + parkedSync : parkedSync}
         onResetDemoData={handleResetDemoData}
         onDeleteCurrentProject={() => {

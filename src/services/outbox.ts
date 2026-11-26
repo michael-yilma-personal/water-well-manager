@@ -85,6 +85,13 @@ export class PermanentSyncError extends Error {
  */
 export class NoSessionError extends Error {}
 
+/**
+ * The organization's subscription refused the work. It is held like work
+ * waiting for a session: never counted, backed off or parked, so it uploads
+ * after renewal.
+ */
+export class SubscriptionHeldError extends Error {}
+
 function isPermanent(err: unknown): boolean {
   return (err as { permanent?: boolean } | null)?.permanent === true;
 }
@@ -280,6 +287,9 @@ export class Outbox {
         result.sent++;
       } catch (err) {
         item.lastError = err instanceof Error ? err.message : String(err);
+        // The subscription refuses everything behind it too, and a record sent
+        // without its held borehole would be refused for good: stop here.
+        if (err instanceof SubscriptionHeldError) break;
         result.failed++;
         if (err instanceof NoSessionError) continue;
         item.attempts++;

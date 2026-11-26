@@ -40,10 +40,22 @@ function setup(o: Options = {}) {
 }
 
 test('fetchMyOrganizations returns the rows of my_organizations() as orgId, name, role, status', async () => {
-  const rows = [{ org_id: ORG, name: 'Acme', role: 'admin', status: 'invited' }];
+  // The row shape since P3-1: access and ends_at are always present, null for a membership that is not active.
+  const rows = [{ org_id: ORG, name: 'Acme', role: 'admin', status: 'invited', access: null, ends_at: null }];
   const { api, rpcCalls } = setup({ rpc: { data: rows, error: null } });
-  assert.deepEqual(await api.fetchMyOrganizations(), [{ orgId: ORG, name: 'Acme', role: 'admin', status: 'invited' }]);
+  assert.deepEqual(await api.fetchMyOrganizations(), [{ orgId: ORG, name: 'Acme', role: 'admin', status: 'invited', access: null, endsAt: null }]);
   assert.equal(rpcCalls[0].fn, 'my_organizations');
+});
+
+// P3-3 (D3-8). Assumed: Membership gains access ('full' | 'read_only' | 'none' | null) and endsAt (string | null).
+test('fetchMyOrganizations carries the access level and end date of each organization', async () => {
+  const rows = [
+    { org_id: ORG, name: 'Acme', role: 'admin', status: 'active', access: 'read_only', ends_at: '2026-11-20T00:00:00+00:00' },
+    { org_id: MEMBER, name: 'Other', role: 'member', status: 'invited', access: null, ends_at: null },
+  ];
+  const { api } = setup({ rpc: { data: rows, error: null } });
+  const got = (await api.fetchMyOrganizations()) as unknown as { access: unknown; endsAt: unknown }[];
+  assert.deepEqual(got.map((m) => [m.access ?? null, m.endsAt ?? null]), [['read_only', '2026-11-20T00:00:00+00:00'], [null, null]]);
 });
 
 test('accepting and declining call the invitation functions with the organization given', async () => {

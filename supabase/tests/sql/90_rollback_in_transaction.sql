@@ -19,6 +19,8 @@
 -- plan: 106
 begin;
 \ir ../lib/helpers.sql
+-- A migration later than the ones this file rehearses is rolled back first.
+\ir inc/roll_back_later.sql
 
 select t.ok('[c14] precondition: tenancy is applied before the rehearsal',
   $$ select to_regclass('public.organizations') is not null

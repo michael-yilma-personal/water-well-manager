@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import * as outboxModule from './outbox';
 import { Outbox, MAX_ATTEMPTS, NoSessionError, PermanentSyncError, type OutboxItem } from './outbox';
 
 
@@ -296,4 +297,59 @@ test('drains without a session never count, back off or park; the work goes once
   const t = transportThatFails();
   await ob.drain(t.send, now);
   assert.deepEqual(t.sent, [uid('p-1')], 'sent at once, with no backoff to wait out');
+});
+
+// --- P3-3: work refused by the subscription is held (criterion 2) -------------
+// Assumed, beside NoSessionError in outbox.ts:
+//   export class SubscriptionHeldError extends Error {}   // new SubscriptionHeldError(message)
+// Read through the namespace so this file type-checks before the class exists.
+
+test('work refused by the subscription never counts, backs off or parks; it goes once the refusal stops', async () => {
+  harness();
+  const { SubscriptionHeldError } = outboxModule as unknown as { SubscriptionHeldError: new (m: string) => Error };
+  const ob = new Outbox();
+  ob.enqueue('upsert', 'pipeRecord', uid('p-1'), { depth: 4.55 });
+  const before = ob.pending()[0].nextAttemptAt;
+  const now = Date.parse('2026-08-05T10:00:00Z');
+
+  for (let i = 0; i < MAX_ATTEMPTS + 2; i++) {
+    const r = await ob.drain(async () => {
+      throw new SubscriptionHeldError('subscription expired');
+    }, now);
+    assert.equal(r.sent, 0);
+    assert.equal(r.parked, 0);
+  }
+  const [held] = ob.pending();
+  assert.equal(held.attempts, 0);
+  assert.equal(held.nextAttemptAt, before);
+  assert.equal(ob.parked().length, 0);
+
+  const t = transportThatFails();
+  await ob.drain(t.send, now);
+  assert.deepEqual(t.sent, [uid('p-1')], 'sent at once after renewal, with no backoff to wait out');
+  assert.equal(ob.depth(), 0);
+});
+
+test('a subscription refusal stops the drain: nothing behind the held item is sent or counted, and all go in order after', async () => {
+  harness();
+  const { SubscriptionHeldError } = outboxModule as unknown as { SubscriptionHeldError: new (m: string) => Error };
+  const ob = new Outbox();
+  ob.enqueue('upsert', 'borehole', uid('bh-1'), {});
+  ob.enqueue('upsert', 'pipeRecord', uid('p-1'), {});
+  ob.enqueue('upsert', 'pipeRecord', uid('p-2'), {});
+  const now = Date.parse('2026-08-05T10:00:00Z');
+
+  let calls = 0;
+  const r = await ob.drain(async () => {
+    calls++;
+    throw new SubscriptionHeldError('subscription expired');
+  }, now);
+  assert.equal(calls, 1, 'the pipes behind a held borehole are not tried');
+  assert.equal(r.sent, 0);
+  assert.equal(r.parked, 0);
+  assert.deepEqual(ob.pending().map((i) => [i.attempts, i.nextAttemptAt]), [[0, 0], [0, 0], [0, 0]]);
+
+  const t = transportThatFails();
+  await ob.drain(t.send, now);
+  assert.deepEqual(t.sent, [uid('bh-1'), uid('p-1'), uid('p-2')]);
 });

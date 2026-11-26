@@ -28,6 +28,7 @@ export function OrgScreen({
   onAnswer,
   onSignOut,
   pendingCount,
+  heldForSubscription,
 }: {
   message: string;
   memberships: Membership[];
@@ -37,6 +38,8 @@ export function OrgScreen({
   onSignOut: () => void;
   /** Unsent work. Signing out is refused while any remains. */
   pendingCount: number;
+  /** The unsent work waits for the subscription, not for signal. */
+  heldForSubscription?: boolean;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -118,7 +121,10 @@ export function OrgScreen({
         </button>
         {pendingCount > 0 && (
           <p className="text-[11px] text-slate-500 font-semibold">
-            {pendingCount} record(s) still uploading. They are kept on this phone.
+            {pendingCount} record(s){' '}
+            {heldForSubscription
+              ? 'are kept on this phone until the subscription is renewed.'
+              : 'still uploading. They are kept on this phone.'}
           </p>
         )}
       </div>

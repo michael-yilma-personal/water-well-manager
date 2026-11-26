@@ -4,8 +4,9 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { NoSessionError, PermanentSyncError, type OutboxItem } from './outbox';
+import { NoSessionError, PermanentSyncError, SubscriptionHeldError, type OutboxItem } from './outbox';
 import { PHOTO_BUCKET } from './supabaseClient';
+import { accessNow } from './syncTransport';
 import { deleteLocalPhoto, photoNames, readLocalPhoto } from './photos';
 
 /**
@@ -30,6 +31,10 @@ export interface PhotoUploadPayload {
 export interface PhotoTransportDeps {
   getClient: () => SupabaseClient | null;
   getUserId: () => Promise<string | null>;
+  /** The active organization's access as last read; absent or null means full. */
+  getAccess?: () => 'full' | 'read_only' | 'none' | null;
+  /** Reads it from the server (and caches it); rejects when it cannot be read. */
+  refreshAccess?: () => Promise<'full' | 'read_only' | 'none' | null>;
 }
 
 function base64ToBytes(base64: string): Uint8Array {
@@ -80,6 +85,8 @@ export function createPhotoTransport(deps: PhotoTransportDeps) {
         const message = `upload ${name}: ${error.message}`;
         // A storage policy rejection will not resolve by waiting.
         if (/row-level security|not authorized|Unauthorized/i.test(error.message)) {
+          // During a lapse the refusal is the subscription's: held until renewal.
+          if ((await accessNow(deps)) !== 'full') throw new SubscriptionHeldError(message);
           throw new PermanentSyncError(message);
         }
         throw new Error(message);

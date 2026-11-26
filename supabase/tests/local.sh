@@ -119,6 +119,11 @@
 #             saas_core and saas_members alone, nothing of Drill's: the
 #             member functions with the foundation's own roles (P2-1 section
 #             A, criteria 1 and 2), a second application, and the rollback.
+#   subscriptions (SaaS Phase 3, task P3-1; checks named [P3-1 ...])
+#             in the upgrade phase saas_subscriptions is applied after the
+#             member migrations, so the suite (sql/56_subscriptions.sql) runs
+#             on organizations that existed before it, and rolled back first.
+#             In the core phase it is applied to the foundation alone.
 #
 # Output and exit status are as for run.sh: one line per check, a total,
 # non-zero when anything failed.
@@ -146,6 +151,16 @@ MIG_SAAS_MEMBERS="$MIGRATIONS/20261123000000_saas_members.sql"
 MIG_DRILL_MEMBERS="$MIGRATIONS/20261123010000_drill_members.sql"
 RB_SAAS_MEMBERS="$SUPA/rollback/20261123000000_saas_members.sql"
 RB_DRILL_MEMBERS="$SUPA/rollback/20261123010000_drill_members.sql"
+
+# The subscriptions migration of SaaS Phase 3 (task P3-1) and its rollback
+# script. The timestamp is the Developer's; run.sh finds it the same way.
+MIG_SAAS_SUBSCRIPTIONS="$(ls "$MIGRATIONS"/*_saas_subscriptions.sql 2>/dev/null | head -n 1)"
+MIG_SAAS_SUBSCRIPTIONS="${MIG_SAAS_SUBSCRIPTIONS:-$MIGRATIONS/<timestamp>_saas_subscriptions.sql}"
+RB_SAAS_SUBSCRIPTIONS="$SUPA/rollback/$(basename "$MIG_SAAS_SUBSCRIPTIONS")"
+# Task P3-2: Drill's use of them.
+MIG_DRILL_SUBSCRIPTIONS="$(ls "$MIGRATIONS"/*_drill_subscriptions.sql 2>/dev/null | head -n 1)"
+MIG_DRILL_SUBSCRIPTIONS="${MIG_DRILL_SUBSCRIPTIONS:-$MIGRATIONS/<timestamp>_drill_subscriptions.sql}"
+RB_DRILL_SUBSCRIPTIONS="$SUPA/rollback/$(basename "$MIG_DRILL_SUBSCRIPTIONS")"
 
 for tool in initdb pg_ctl postgres psql python3; do
   command -v "$tool" >/dev/null 2>&1 || { echo "local.sh: $tool is not on PATH (brew install postgresql@17)." >&2; exit 2; }
@@ -239,6 +254,13 @@ apply() {
   local db="$1" file="$2"
   psql -X -q -v ON_ERROR_STOP=1 -1 -d "$db" -f "$file" >/dev/null 2>"$WORK/apply.err"
 }
+# In a database built from EVERY migration, what is newer than the member
+# migrations goes before the foundation's tables can (P3-1: subscriptions
+# reference organizations). A failure shows in the saas_core rollback after it.
+undo_later() { [ ! -f "$RB_SAAS_SUBSCRIPTIONS" ] || apply "$1" "$RB_SAAS_SUBSCRIPTIONS" || true; }
+# P3-2: and Drill's use of them goes before the Drill tenancy rollback is
+# tried (newest first). A failure shows in the tenancy rollback after it.
+undo_drill_later() { [ ! -f "$RB_DRILL_SUBSCRIPTIONS" ] || apply "$1" "$RB_DRILL_SUBSCRIPTIONS" || true; }
 first_error() { grep -m 1 -E 'ERROR|FATAL|error' "$WORK/apply.err" | sed 's/^psql:[^ ]* //'; }
 
 apply_checked() {
@@ -315,7 +337,7 @@ phase_fresh() {
 # --- upgrade: legacy data first, then the tenancy migrations, then rollback ---
 
 phase_upgrade() {
-  local world="$1" db="upgrade_$1" f d s tbl what migrated rolled_back members_saas members_drill
+  local world="$1" db="upgrade_$1" f d s tbl what migrated rolled_back members_saas members_drill subscriptions drill_subscriptions
   PHASE="$world, upgrade"
   new_db "$db"
   load_stub "$db" "$world" || fail "[harness] the Supabase stand-in loads :: $(first_error)"
@@ -377,6 +399,21 @@ phase_upgrade() {
     fail "$what :: not checked, the member migrations did not apply"
   fi
 
+  # SaaS Phase 3, task P3-1 (criterion 5): saas_subscriptions on top of all
+  # that. 56_subscriptions.sql, in the suite below, looks at what it gave the
+  # organization that was already there.
+  subscriptions=0
+  if [ "$members_saas" -eq 1 ] && [ "$members_drill" -eq 1 ]; then
+    apply_checked "$db" "$MIG_SAAS_SUBSCRIPTIONS" "[P3-1 c5] saas_subscriptions applies on top of existing data" && subscriptions=1
+  else
+    fail "[P3-1 c5] saas_subscriptions applies on top of existing data :: not run, the member migrations did not apply"
+  fi
+  # Task P3-2 (criterion 10): drill_subscriptions on top, with the catalog as
+  # it was just before it, for the comparison after its rollback.
+  snapshot "$db" "$WORK/snap.p32" || fail "[harness] catalog snapshot before drill_subscriptions :: $(head -n 1 "$WORK/snap.err")"
+  drill_subscriptions=0
+  apply_checked "$db" "$MIG_DRILL_SUBSCRIPTIONS" "[P3-2 c10] drill_subscriptions applies on top of existing data" && drill_subscriptions=1
+
   # The whole suite again, now with the legacy data underneath it.
   PHASE="$world, upgrade, full suite"
   suite "$db"
@@ -385,6 +422,20 @@ phase_upgrade() {
   # P2-1 criterion 13: the member migrations are rolled back first, the Drill
   # one before the reusable one. What follows (criterion 14) then compares
   # with the pre-tenancy database, so anything they leave behind shows there.
+  # P3-1: newest first. What it leaves behind shows in criterion 14 below.
+  if [ "$drill_subscriptions" -eq 1 ] && apply_checked "$db" "$RB_DRILL_SUBSCRIPTIONS" "[P3-2 c10] the drill_subscriptions rollback script runs on the migrated database with its data"; then
+    snapshot "$db" "$WORK/snap.p32rb"
+    for s in $SECTIONS; do
+      same_section "$s" "$WORK/snap.p32" "$WORK/snap.p32rb" "[P3-2 c10] after the drill_subscriptions rollback the $s are exactly what they were"
+    done
+  else
+    fail "[P3-2 c10] the drill_subscriptions rollback restores the catalog exactly :: not run, drill_subscriptions or its rollback did not apply"
+  fi
+  if [ "$subscriptions" -eq 1 ]; then
+    apply_checked "$db" "$RB_SAAS_SUBSCRIPTIONS" "[P3-1] the saas_subscriptions rollback script runs on the migrated database with its data"
+  else
+    fail "[P3-1] the saas_subscriptions rollback script runs on the migrated database with its data :: not run, saas_subscriptions did not apply"
+  fi
   if [ "$members_drill" -eq 1 ]; then
     apply_checked "$db" "$RB_DRILL_MEMBERS" "[P2-1 c13] the drill_members rollback script runs on the migrated database with its data"
   else
@@ -628,6 +679,7 @@ phase_rollback_guard() {
   while IFS= read -r f; do
     apply "$db" "$f" || { fail "[harness] $(basename "$f") applies :: $(first_error)"; ok=0; }
   done < <(all_migrations)
+  undo_drill_later "$db"
   [ -f "$MIG_DRILL" ] && [ -f "$RB_DRILL" ] && [ -f "$RB_CORE" ] || ok=0
   apply "$db" "$HERE/guards/two_companies.sql" || { fail "[harness] two organizations with records are loaded :: $(first_error)"; ok=0; }
   rm -f "$WORK"/snap.before "$WORK"/snap.after
@@ -654,6 +706,7 @@ phase_rollback_guard() {
     # One organization with records: as before.
     psql -X -q -d "$db" -c "delete from public.boreholes where org_id = '7e57da7a-0000-4000-8000-000000000002'" >/dev/null 2>&1
     apply_checked "$db" "$RB_DRILL" "[c31] with records in one organization only, the Drill rollback runs as before (a second, empty organization exists)"
+    undo_later "$db"
     apply_checked "$db" "$RB_CORE"  "[c31] ... and the saas_core rollback after it"
   else
     fail "[c31] the Drill rollback raises when two organizations hold record rows :: not checked, the database could not be prepared"
@@ -682,6 +735,7 @@ phase_rollback_guard_members() {
   while IFS= read -r f; do
     apply "$db" "$f" || { fail "[harness] $(basename "$f") applies :: $(first_error)"; ok=0; }
   done < <(all_migrations)
+  undo_drill_later "$db"
   [ -f "$MIG_DRILL" ] && [ -f "$RB_DRILL" ] && [ -f "$RB_CORE" ] || ok=0
   apply "$db" "$HERE/guards/second_company_member.sql" || { fail "[harness] a second organization with a membership and no records is loaded :: $(first_error)"; ok=0; }
   # The fixture is what the check assumes: one membership there, records in
@@ -716,6 +770,7 @@ phase_rollback_guard_members() {
     # The organization stays, without its member: nothing left to refuse for.
     psql -X -q -d "$db" -c "delete from public.memberships where org_id = '$second'" >/dev/null 2>&1
     apply_checked "$db" "$RB_DRILL" "[c41] with that membership removed, the Drill rollback runs (the second organization still exists, empty)"
+    undo_later "$db"
     apply_checked "$db" "$RB_CORE"  "[c41] ... and the saas_core rollback after it"
   else
     fail "[c41] the Drill rollback raises when a non-founding organization has a membership (a deactivated one) but no records :: not checked, the database could not be prepared"
@@ -1344,6 +1399,7 @@ phase_rollback_guard_no_members() {
   while IFS= read -r f; do
     apply "$tpl" "$f" || { fail "[harness] $(basename "$f") applies :: $(first_error)"; ok=0; }
   done < <(all_migrations)
+  undo_drill_later "$tpl"
   [ -f "$MIG_DRILL" ] && [ -f "$RB_DRILL" ] && [ -f "$RB_CORE" ] || ok=0
 
   for what in boreholes pipe_records drilling_events shift_logs photo; do
@@ -1415,6 +1471,7 @@ phase_rollback_guard_no_members() {
       -f "$HERE/guards/c48_fixture.sql" >"$WORK/c48.out" 2>"$WORK/apply.err"
     if grep -q '^FIXTURE-READY$' "$WORK/c48.out"; then
       apply_checked "$db" "$RB_DRILL" "[c48] with a second, empty organization and everything stored in the founding one (records in all four tables, a photo under its folder, a legacy photo), the Drill rollback runs"
+      undo_later "$db"
       apply_checked "$db" "$RB_CORE"  "[c48] ... and the saas_core rollback after it"
     else
       fail "[c48] with a second, empty organization and everything stored in the founding one (records in all four tables, a photo under its folder, a legacy photo), the Drill rollback runs :: not checked, the fixture did not load: $(first_error)"
@@ -1705,6 +1762,16 @@ if [ -s "$WORK/core.1" ] && apply_checked core "$MIG_SAAS_MEMBERS" "[P2-1 A] saa
   fi
 else
   fail "[P2-1 A] saas_members on the foundation alone :: not checked, saas_core or saas_members did not apply"
+fi
+
+# --- core, subscriptions: saas_subscriptions on the foundation alone (P3-1) -----
+
+PHASE="core, subscriptions"
+apply core "$MIG_SAAS_MEMBERS" || fail "[harness] saas_members applies to the foundation again :: $(first_error)"
+if apply_checked core "$MIG_SAAS_SUBSCRIPTIONS" "[P3-1] saas_subscriptions applies to a database with the foundation alone and nothing of Drill's"; then
+  apply_checked core "$RB_SAAS_SUBSCRIPTIONS" "[P3-1] the saas_subscriptions rollback script runs on the foundation alone"
+else
+  fail "[P3-1] the saas_subscriptions rollback script runs on the foundation alone :: not run, saas_subscriptions did not apply"
 fi
 
 # --- Result -------------------------------------------------------------------

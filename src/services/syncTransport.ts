@@ -4,7 +4,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { NoSessionError, PermanentSyncError, type OutboxEntity, type OutboxItem, type OutboxTransport } from './outbox';
+import { NoSessionError, PermanentSyncError, SubscriptionHeldError, type OutboxEntity, type OutboxItem, type OutboxTransport } from './outbox';
 import {
   boreholeToRow,
   eventToRow,
@@ -32,6 +32,10 @@ export interface TransportDeps {
   getClient: () => SupabaseClient | null;
   /** Resolves the signed-in user's id, or null when there is no session. */
   getUserId: () => Promise<string | null>;
+  /** The active organization's access as last read; absent or null means full. */
+  getAccess?: () => 'full' | 'read_only' | 'none' | null;
+  /** Reads it from the server (and caches it); rejects when it cannot be read. */
+  refreshAccess?: () => Promise<'full' | 'read_only' | 'none' | null>;
   /** Injected for tests; defaults to wall clock. */
   now?: () => string;
 }
@@ -58,8 +62,27 @@ function toRow(
   }
 }
 
+/**
+ * The access level to judge an ambiguous answer by. The cached one may be out
+ * of date in either direction (a phone left open across an expiry or a
+ * renewal), so it is read again; if that read fails the work is held, never
+ * given up on. Without `refreshAccess` the cached level decides.
+ */
+export async function accessNow(
+  deps: Pick<TransportDeps, 'getAccess' | 'refreshAccess'>
+): Promise<'full' | 'read_only' | 'none'> {
+  if (!deps.refreshAccess) return deps.getAccess?.() ?? 'full';
+  try {
+    return (await deps.refreshAccess()) ?? 'full';
+  } catch {
+    throw new SubscriptionHeldError('the subscription could not be read; will retry');
+  }
+}
+
 function classify(error: { code?: string; message?: string } | null, context: string): Error {
   const message = `${context}: ${error?.message ?? 'unknown error'}`;
+  // The subscription refused the write: held until renewal, not parked.
+  if (error?.code === 'SS002') return new SubscriptionHeldError(message);
   if (error?.code && PERMANENT_PG_CODES.has(error.code)) {
     return new PermanentSyncError(message);
   }
@@ -76,6 +99,12 @@ function classify(error: { code?: string; message?: string } | null, context: st
  */
 export function createSupabaseTransport(deps: TransportDeps): OutboxTransport {
   const now = deps.now ?? (() => new Date().toISOString());
+  const refused = async (error: { code?: string; message?: string }, context: string): Promise<Error> => {
+    // The server says the subscription lapsed: bring the cached level and the notice up to date.
+    // Once per lapse: afterwards the cache no longer says full.
+    if (error.code === 'SS002' && (deps.getAccess?.() ?? 'full') === 'full') await accessNow(deps).catch(() => {});
+    return classify(error, context);
+  };
 
   return async (item: OutboxItem): Promise<void> => {
     const client = deps.getClient();
@@ -97,11 +126,16 @@ export function createSupabaseTransport(deps: TransportDeps): OutboxTransport {
 
     if (item.op === 'delete') {
       // Soft delete: this is an audit log, so the row stays and is marked.
-      const { error } = await client
+      const { error, count } = await client
         .from(table)
-        .update({ deleted_at: now() })
+        .update({ deleted_at: now() }, { count: 'exact' })
         .eq('id', item.entityId);
-      if (error) throw classify(error, `soft-delete ${table}/${item.entityId}`);
+      if (error) throw await refused(error, `soft-delete ${table}/${item.entityId}`);
+      // While access is `none` the row is hidden and the update matches nothing
+      // without an error: that is not a delivery (RF-142).
+      if (!count && (await accessNow(deps)) === 'none') {
+        throw new SubscriptionHeldError(`soft-delete ${table}/${item.entityId}: subscription not active`);
+      }
       return;
     }
 
@@ -113,6 +147,6 @@ export function createSupabaseTransport(deps: TransportDeps): OutboxTransport {
     // row belongs to a different user, RLS rejects the update rather than
     // letting one crew overwrite another's work.
     const { error } = await client.from(table).upsert(row, { onConflict: 'id' });
-    if (error) throw classify(error, `upsert ${table}/${item.entityId}`);
+    if (error) throw await refused(error, `upsert ${table}/${item.entityId}`);
   };
 }

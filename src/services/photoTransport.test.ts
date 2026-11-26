@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createCompositeTransport, createPhotoTransport } from './photoTransport';
+import * as outboxModule from './outbox';
 import { NoSessionError, type OutboxItem } from './outbox';
 
 function item(entity: OutboxItem['entity']): OutboxItem {
@@ -46,9 +47,8 @@ test('a failing photo upload propagates so the queue can retry it alone', async 
 const UID = '11111111-2222-3333-4444-555555555555';
 const ORG = '99999999-0000-4000-8000-000000000001';
 
-/** Uploads one photo and returns the object paths it was stored under. */
-async function uploadedPaths(orgId?: string): Promise<string[]> {
-  // The device's photo store (IndexedDB off a phone): every file reads back.
+// The device's photo store (IndexedDB off a phone): every file reads back.
+function fakePhotoStore(): void {
   const req = (result: unknown) => {
     const r: { result: unknown; onsuccess?: () => void } = { result };
     queueMicrotask(() => r.onsuccess?.());
@@ -58,7 +58,11 @@ async function uploadedPaths(orgId?: string): Promise<string[]> {
   const g = globalThis as Record<string, unknown>;
   g.indexedDB = { open: () => req(db) };
   g.window = g;
+}
 
+/** Uploads one photo and returns the object paths it was stored under. */
+async function uploadedPaths(orgId?: string): Promise<string[]> {
+  fakePhotoStore();
   const paths: string[] = [];
   const upload = async (path: string) => (paths.push(path), { error: null });
   const send = createPhotoTransport({
@@ -89,4 +93,50 @@ test('a photo without a session is not uploaded and is not counted as an attempt
   });
   await assert.rejects(send({ ...item('photo'), payload: { photoId: 'p1' } }), NoSessionError);
   assert.equal(asked, 0);
+});
+
+// --- P3-3: a photo refused during a lapse is held (criterion 3) ---------------
+// Assumed: SubscriptionHeldError exported by outbox.ts, and PhotoTransportDeps gains
+//   getAccess?: () => 'full' | 'read_only' | 'none' | null   (absent or null means full).
+// The deps are cast so this file type-checks before the field exists.
+
+test('a photo refused by row-level security is held while access is not full, and permanent when it is', async () => {
+  fakePhotoStore();
+  const upload = async () => ({ error: { message: 'new row violates row-level security policy' } });
+  const sendWith = (access: string) =>
+    createPhotoTransport({
+      getClient: () => ({ storage: { from: () => ({ upload }) } }) as never,
+      getUserId: async () => UID,
+      getAccess: () => access,
+    } as never)({ ...item('photo'), payload: { photoId: 'p1' }, orgId: ORG });
+  const { SubscriptionHeldError } = outboxModule as unknown as { SubscriptionHeldError: new (m: string) => Error };
+
+  await assert.rejects(sendWith('read_only'), (err: Error & { permanent?: boolean }) => {
+    assert.ok(err instanceof SubscriptionHeldError, `${err.name}: ${err.message}`);
+    assert.notEqual(err.permanent, true);
+    return true;
+  });
+  await assert.rejects(sendWith('full'), (err: Error & { permanent?: boolean }) => err.permanent === true);
+});
+
+// Review of P3-3. Assumed: PhotoTransportDeps gains
+//   refreshAccess?: () => Promise<'full' | 'read_only' | 'none' | null>
+// (reads the access level from the server; rejects when it cannot be read).
+
+test('a photo refused while the cached access is full is decided on a fresh read, and held if that read fails', async () => {
+  fakePhotoStore();
+  const upload = async () => ({ error: { message: 'new row violates row-level security policy' } });
+  const sendWith = (refreshAccess: () => Promise<string>) =>
+    createPhotoTransport({
+      getClient: () => ({ storage: { from: () => ({ upload }) } }) as never,
+      getUserId: async () => UID,
+      getAccess: () => 'full',
+      refreshAccess,
+    } as never)({ ...item('photo'), payload: { photoId: 'p1' }, orgId: ORG });
+  const { SubscriptionHeldError } = outboxModule as unknown as { SubscriptionHeldError: new (m: string) => Error };
+  const isHeld = (err: Error) => err instanceof SubscriptionHeldError;
+
+  await assert.rejects(sendWith(async () => 'read_only'), isHeld);
+  await assert.rejects(sendWith(async () => Promise.reject(new Error('offline'))), isHeld);
+  await assert.rejects(sendWith(async () => 'full'), (err: Error & { permanent?: boolean }) => err.permanent === true);
 });

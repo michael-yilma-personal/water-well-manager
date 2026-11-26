@@ -4,10 +4,11 @@ Requirements: `docs/SAAS_ARCHITECTURE_PROPOSAL.md`. How the work is run: `docs/s
 
 ## Current state
 
-- **Phase:** Phase 2 — Organization-aware apps (approved by the owner on 2026-11-23). Staging only; nothing in it may reach production without the owner approving that specific action.
-- **Branch:** `saas/phase-2-org-apps`, branched from `saas/phase-1-tenancy` at `3715f99`. Pull requests 3 (workflow tooling), 4 (Phase 0) and 5 (Phase 1) are open with green CI, awaiting the owner's merge, in that order.
-- **In progress:** Phase 2 tasks P2-1 to P2-7 are done on staging and on the emulator (TEST_RESULTS 84 to 88); the gate is green; the eighteenth review has no blocking finding. Open and not blocking: RF-123 (a device without a session shows unsent work and no way to link again; unconfirmed), the upgrade from 1.1.7 on a real device, and the deferred items of the production checklist (RF-101, RF-105, RF-106, RF-109, RF-111, RF-121).
-- **Next step:** (owner, 2026-11-25) close the open Phase 2 gaps first (reproduce RF-123; drive in a browser the screens not yet driven), then start Phase 3, which the owner approved on 2026-11-25 for staging only. The upgrade from 1.1.7 on a real phone is moved to last (the owner has no phone at hand). Still the owner's: merging pull requests 3, 4, 5 and 6 in that order; the production decisions for Phases 1 and 2. Pull request 6 (Phase 2) is open with green CI (TEST_RESULTS 89).
+- **Phase:** Phase 4 — Platform console and audit (approved by the owner on 2026-11-25, to start when Phase 3 is done). Staging only; nothing may reach production without the owner approving that specific action. No push to `main` (owner, 2026-11-25): `main` is updated together with the production migration.
+- **Branch:** `saas/phase-4-platform`, from `saas/phase-3-subscriptions`. Pull requests 3 (tooling), 4 (Phase 0), 5 (Phase 1), 6 (Phase 2) and 7 (Phase 3) are open, each based on the one before, awaiting the owner's merge in that order.
+- **Phase 3 is done on staging** (TEST_RESULTS 92 to 102): tasks P3-1 to P3-4; both migrations applied to staging, `saas-members` and `admin-users` redeployed there; five reviews (SR21, SR23, SR24, SR25 and the session-loss rounds), no blocking finding left. Not run for Phase 3: the APK on a device or emulator. The field app's version is still 1.2.0.
+- **Open for the owner from Phase 3:** RF-143 (phones on 1.1.7 can lose records captured during a lapse: update the phones or accept it before any organization gets an end date); RF-152 (held work that will never be renewed leaves no exit: export and discard, or keep blocking); the real plans and user limits (D3-6 seeds one plan of 100 users). The upgrade test on a real phone is last (owner, 2026-11-25).
+- **Next step:** plan Phase 4 and run its tasks one after the other without asking (owner, 2026-11-25).
 - **Phase 1** is done on staging; its production migration is **not approved**. **Do not check out `main` or any branch that predates the tooling until the pull requests are merged (RF-059).**
 - `.claude/settings.json`: found on 2026-11-25 (14:44) with every line commented out again, which turns the four hooks off (the same edit as on 2026-11-17). Not made by the Lead or an agent as far as known; left as found and not committed. While it stands the Stop gate and the Bash guard do not run: the Lead runs `scripts/gate.sh` by hand.
 - **Waiting on the owner:** the production decision for Phase 1; the action recorded for RF-050 (deferred by the owner; does not block development); approval to delete the `probe` function from production (RF-049); confirmation of the staging rule (RF-054); branch protection on `main`; merging the three pull requests (RF-059).
@@ -20,8 +21,8 @@ Requirements: `docs/SAAS_ARCHITECTURE_PROPOSAL.md`. How the work is run: `docs/s
 | 0 Preparation | `saas/phase-0-preparation` | Done; CI green; awaiting the owner's merge (after pull request 3) | https://github.com/michael-yilma-personal/water-well-manager/pull/4 |
 | 1 Tenancy in the database | `saas/phase-1-tenancy` | Done on staging; awaiting the owner's review. **Production migration not approved** | https://github.com/michael-yilma-personal/water-well-manager/pull/5 |
 | 2 Organization-aware apps | `saas/phase-2-org-apps` | Approved 2026-11-23; in progress on staging | — |
-| 3 Subscriptions and entitlements | — | Approved 2026-11-25 (staging only); starts after the Phase 2 gaps | — |
-| 4 Platform console and audit | — | Not approved | — |
+| 3 Subscriptions and entitlements | `saas/phase-3-subscriptions` | Done on staging; awaiting the owner's review. **Nothing on production** | pull request 7 |
+| 4 Platform console and audit | — | Approved 2026-11-25 (staging only); starts when Phase 3 is done | — |
 | 5 Onboarding polish and cleanup | — | Not approved | — |
 | 6 Extract the foundation | — | Not approved | — |
 
@@ -46,10 +47,10 @@ Not in this phase: the platform console and the audited platform functions that 
 
 | Id | Task | Status | Evidence |
 |---|---|---|---|
-| P3-1 | Reusable migration `saas_subscriptions`: `plans`, `subscriptions` (RLS on), `org_access(org)`, the user-limit trigger on `memberships`, `my_organizations()` returning access level and end date; a subscription row for every existing organization | Not started | — |
-| P3-2 | Drill migration `drill_subscriptions`: `org_access()` in the Drill policies and the photo bucket; a distinct error code for a write refused by the subscription; `saas-members` follows the "Manage members" column | Not started | — |
-| P3-3 | Apps: notices in both (grace, expired, suspended, canceled); the field app holds subscription-refused work in the queue and uploads it after renewal; the dashboard is read-only when expired | Not started | — |
-| P3-4 | Phase suite on staging: the three phase acceptance points with real sign-ins; the existing suites still pass; CI | Not started | — |
+| P3-1 | Reusable migration `saas_subscriptions`: `plans`, `subscriptions` (RLS on), `org_access(org)`, the user-limit trigger on `memberships`, `my_organizations()` returning access level and end date; a subscription row for every existing organization | **Done**: reviewed (SR21), findings fixed and tested; **applied to staging** | TEST_RESULTS 92, 94, 95, 98 |
+| P3-2 | Drill migration `drill_subscriptions`: `org_access()` in the Drill policies and the photo bucket; a distinct error code for a write refused by the subscription; `saas-members` follows the "Manage members" column | **Done**: reviewed (SR23), RF-144 to RF-146 fixed and tested; **applied to staging**, `saas-members` and `admin-users` redeployed there. Open from the review: RF-143 (build 1.1.7, production only) | TEST_RESULTS 95, 97, 98 |
+| P3-3 | Apps: notices in both (grace, expired, suspended, canceled); the field app holds subscription-refused work in the queue and uploads it after renewal; the dashboard is read-only when expired | **Done**: two review rounds (SR24, SR25), no blocking finding left; RF-149 to RF-154 fixed or decided; open for the owner: RF-152 | TEST_RESULTS 99, 101 |
+| P3-4 | Phase suite on staging: the three phase acceptance points with real sign-ins; the existing suites still pass; CI | **Done on staging**: the nine existing suites unchanged and green; the new suite 53 of 53 | TEST_RESULTS 100 to 102 |
 
 Criteria are written when each task starts.
 
@@ -61,6 +62,46 @@ Criteria are written when each task starts.
 | D3-2 | The user limit counts `active` and `invited` memberships; `deactivated` ones do not count. Re-activating a member is checked like adding one. |
 | D3-3 | The functions a platform administrator uses to change a subscription are written in Phase 4 with the console. In Phase 3 the tests set dates and statuses through the fixture. |
 | D3-4 | Feature flags (`plans.features`) are stored but nothing is gated by them in Phase 3: no plan differs in features yet. |
+| D3-5 | An organization without a subscription row has no user limit (its access is `none` anyway). |
+| D3-6 | One plan is seeded, `standard`, with `max_users` 100. The real plans and limits are the owner's to set. |
+| D3-7 | `plans` is on the allowlist of `schema_check.sql` (tables without `org_id`): it is a catalog shared by all organizations and holds no tenant data. |
+| D3-8 | Clients do not read `subscriptions` directly (it holds `notes` and overrides meant for the platform administrator). The apps get `access` and `ends_at` from `my_organizations()`, for active memberships only. This replaces the first half of P3-1 criterion 1. |
+| D3-9 | With an expired subscription an Administrator may list and deactivate members, nothing else (no removal, no badge change). A refusal for the subscription is HTTP 402; "not an Administrator" stays 403; the user limit is 409. |
+| D3-10 | The apps show one notice for suspended and canceled ("this organization's subscription is not active"): `my_organizations()` gives the access level, not the stored status. |
+
+#### P3-1 criteria (2026-11-25)
+
+1. `plans` and `subscriptions` as in proposal 5.1, RLS on; an active member reads their own organization's subscription and the plans; no write through the API; no read of another organization's subscription.
+2. `org_access(org)` returns `full`, `read_only` or `none` per section 8, and `none` without a row.
+3. The user-limit trigger refuses with SQLSTATE `SS001`; deactivated memberships do not count; two concurrent inserts cannot both take the last seat.
+4. `my_organizations()` also returns `access` and `ends_at`; existing callers unchanged.
+5. Every existing organization gets a `standard`, `active` subscription without end date.
+6. The existing database suite stays green; nothing is wired into a policy yet.
+7. A rollback restores the previous state exactly.
+
+#### P3-2 criteria (2026-11-25)
+
+1. Inserting or updating Drill records succeeds only when the organization's access is `full`; trial, active and within grace behave as today.
+2. A write refused by the subscription fails with SQLSTATE `SS002`, visible to the client as the error code; an ordinary permission refusal is still 42501.
+3. With `full` or `read_only` everything readable today stays readable; with `none` a member reads no Drill records of that organization.
+4. Photos: upload needs `full`; reading needs not `none`.
+5. Signing in always works: `my_organizations()` lists the organization with its access in every state, and the caller's own profile is readable.
+6. Managing members through `saas-members`: `full` as today; `read_only` only listing and deactivating; `none` nothing. The refusal is HTTP 402 with one sentence; "not an Administrator" stays 403.
+7. The user-limit refusal (`SS001`) reaches the dashboard as HTTP 409 saying the plan's user limit is reached.
+8. Records refused during a lapse are accepted unchanged after renewal.
+9. One organization's subscription state never affects another's members or records.
+10. The founding organization and every existing suite behave as before; the rollback restores the previous policies exactly; the reusable files stay free of Drill names.
+
+#### P3-3 criteria (2026-11-25)
+
+1. Both apps show a notice from the active organization's `access` and `ends_at`: past the end date but still `full` (grace) a renewal notice; `read_only` an expired notice; `none` a "subscription not active" screen with no data and a way to sign out or change organization. No notice for an organization in good standing.
+2. Field app: a write refused with `SS002` is held: it stays queued, is not parked and uses no attempt; capture keeps working during the lapse; the held work uploads after renewal with nothing lost.
+3. Field app: a photo refused while the organization's access is not `full` is held the same way, not parked.
+4. Field app: a soft delete made while the organization's access is `none` is not taken as sent; it applies after reactivation (RF-142).
+5. Dashboard, expired: reading and exporting work; editing records and adding, inviting, re-activating or changing members are not offered or show the server's sentence; deactivating a member works.
+6. Dashboard: the user-limit refusal shows the server's sentence.
+7. A device or browser that has no access level cached yet behaves as `full` until it has read one. The founding organization sees no change.
+8. Field app: work held for the subscription blocks Sign Out and an organization switch as pending work does, and is never discarded (RF-143).
 
 ### Phase 2 — Organization-aware apps (approved 2026-11-23; staging only)
 
@@ -442,6 +483,8 @@ Harden the enforcement after the security review (RF-010 to RF-024).
 
 | Date | Decision | By |
 |---|---|---|
+| 2026-11-25 | **No push to `main` after Phase 3** ("i will take your recommendation"): Phase 3 gets its own branch and pull request, Phase 4 continues from it, and `main` is updated together with the production migration, in the order database, functions, dashboard. | Owner |
+| 2026-11-25 | **Phase 4 approved, to start when Phase 3 is done** ("once you are done with phase 3, you can push it to main and continue on phase 4"). The Lead goes from task to task without asking. The push to `main` is not done by the Lead until the owner has answered the risk raised the same day: `main` would receive pull requests 3 to 6 unmerged-so-far in one step, and if Netlify builds from `main` the new dashboard would go live against a production database that has none of the migrations. | Owner |
 | 2026-11-25 | **Phase 3 approved, after the Phase 2 gaps** (answer "Both, gaps first" to the Lead's question). Staging only; production still needs the owner's approval of each specific action. The upgrade test on a real phone is done last. | Owner |
 | 2026-11-24 | **Keep test code minimal and do not bloat the code base.** From here each brief asks for the smallest set of tests that covers every criterion once, and the smallest implementation that meets it. Existing tests are not removed or weakened. | Owner |
 | 2026-11-23 | **Phase 2 approved** ("proceed with phase 2"). Staging only; production migrations, deployments and data changes still need the owner's approval of that specific action. | Owner |

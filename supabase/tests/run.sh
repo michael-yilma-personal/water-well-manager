@@ -48,6 +48,15 @@ MIG_SAAS_MEMBERS="$SUPA/migrations/20261123000000_saas_members.sql"
 MIG_DRILL_MEMBERS="$SUPA/migrations/20261123010000_drill_members.sql"
 RB_SAAS_MEMBERS="$SUPA/rollback/20261123000000_saas_members.sql"
 RB_DRILL_MEMBERS="$SUPA/rollback/20261123010000_drill_members.sql"
+# SaaS Phase 3, task P3-1: subscriptions. The timestamp is the Developer's.
+MIG_SAAS_SUBSCRIPTIONS="$(ls "$SUPA"/migrations/*_saas_subscriptions.sql 2>/dev/null | head -n 1)"
+MIG_SAAS_SUBSCRIPTIONS="${MIG_SAAS_SUBSCRIPTIONS:-$SUPA/migrations/<timestamp>_saas_subscriptions.sql}"
+RB_SAAS_SUBSCRIPTIONS="$SUPA/rollback/$(basename "$MIG_SAAS_SUBSCRIPTIONS")"
+# Task P3-2: Drill's use of them.
+MIG_DRILL_SUBSCRIPTIONS="$(ls "$SUPA"/migrations/*_drill_subscriptions.sql 2>/dev/null | head -n 1)"
+MIG_DRILL_SUBSCRIPTIONS="${MIG_DRILL_SUBSCRIPTIONS:-$SUPA/migrations/<timestamp>_drill_subscriptions.sql}"
+RB_DRILL_SUBSCRIPTIONS="$SUPA/rollback/$(basename "$MIG_DRILL_SUBSCRIPTIONS")"
+HAS_DRILL_SUBSCRIPTIONS=0; [ ! -f "$RB_DRILL_SUBSCRIPTIONS" ] || HAS_DRILL_SUBSCRIPTIONS=1
 
 LABEL="${RUN_LABEL:+[$RUN_LABEL] }"
 
@@ -93,6 +102,12 @@ fail() { total=$((total + 1)); failed=$((failed + 1)); echo "FAIL - ${LABEL}$1";
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/drill-dbtest.XXXXXX")"
 trap 'rm -rf "$TMP"' EXIT
 
+# P3-2: the guards try the Drill tenancy rollback on a database built from
+# every migration. As in a real rollback (newest first), Drill's use of the
+# subscriptions goes before it.
+RB_DRILL_NEWEST_FIRST="$TMP/rollback_drill_newest_first.sql"
+{ [ "$HAS_DRILL_SUBSCRIPTIONS" -eq 0 ] || echo "\\i '$RB_DRILL_SUBSCRIPTIONS'"; echo "\\i '$RB_DRILL'"; } >"$RB_DRILL_NEWEST_FIRST"
+
 # Run one test file and fold its lines into the totals.
 run_file() {
   local file="$1" name out err rc line checks=0 plan saw_done=0
@@ -106,6 +121,8 @@ run_file() {
     -v rollback_core="$RB_CORE" -v rollback_drill="$RB_DRILL" \
     -v mig_saas_members="$MIG_SAAS_MEMBERS" -v mig_drill_members="$MIG_DRILL_MEMBERS" \
     -v rollback_saas_members="$RB_SAAS_MEMBERS" -v rollback_drill_members="$RB_DRILL_MEMBERS" \
+    -v rollback_saas_subscriptions="$RB_SAAS_SUBSCRIPTIONS" \
+    -v rollback_drill_subscriptions="$RB_DRILL_SUBSCRIPTIONS" -v has_drill_subscriptions="$HAS_DRILL_SUBSCRIPTIONS" \
     -f "$file" >"$out" 2>"$err"
   rc=$?
 
@@ -333,6 +350,58 @@ for need in "$MIG_SAAS_MEMBERS" "$MIG_DRILL_MEMBERS" "$RB_DRILL_MEMBERS" "$RB_SA
   fi
 done
 
+# SaaS Phase 3, task P3-1: the reusable subscriptions migration and its
+# rollback script. Once they exist the rehearsals roll the migration back
+# first (sql/inc/roll_back_later.sql), so they wait on these two as well.
+for need in "$MIG_SAAS_SUBSCRIPTIONS" "$RB_SAAS_SUBSCRIPTIONS"; do
+  what="[P3-1] supabase/${need#"$SUPA"/} exists and contains no transaction control"
+  if [ ! -f "$need" ]; then
+    fail "$what :: file not found"
+  elif [ "$have_python" -eq 0 ] || has_txn_control "$need" || ! python3 "$SPLITTER" txn-control "$need" >/dev/null 2>&1; then
+    fail "$what :: $(python3 "$SPLITTER" txn-control "$need" 2>&1 | head -n 3 | tr '\n' ';')"
+    ready=0
+    ready_members=0
+  else
+    pass "$what"
+  fi
+done
+
+name="[P3-1] saas_subscriptions names no Drill table, column, role, function or bucket in its code"
+if [ -f "$MIG_SAAS_SUBSCRIPTIONS" ]; then
+  hits="$(sed -e 's/--.*$//' "$MIG_SAAS_SUBSCRIPTIONS" \
+    | grep -n -E -i '(^|[^a-z_])(boreholes|pipe_records|drilling_events|shift_logs|profiles|is_admin|is_reviewer|handle_new_user|drilling[-_]photos|created_by|is_founding|deactivated_by_ban)([^a-z_]|$)' || true)"
+  roles="$(sed -e 's/--.*$//' "$MIG_SAAS_SUBSCRIPTIONS" \
+    | grep -n -E '(Driller|Data Logger|Supervisor|Administrator)' || true)"
+  if [ -z "$hits$roles" ]; then
+    pass "$name"
+  else
+    fail "$name :: $(printf '%s\n%s' "$hits" "$roles" | grep -v '^$' | head -n 5 | tr '\n' ';')"
+  fi
+else
+  fail "$name :: file not found"
+fi
+# Criterion 3: the refusal's code is documented where the Edge Function's
+# author will look for it. SS001 is the tests' assumption (56_subscriptions.sql).
+name="[P3-1 c3] the migration documents the SQLSTATE of the user-limit refusal (SS001)"
+if grep -q 'SS001' "$MIG_SAAS_SUBSCRIPTIONS" 2>/dev/null; then pass "$name"; else fail "$name :: not found in the migration"; fi
+
+# Task P3-2: the Drill migration and its rollback script, and the code the
+# field app will look for (SS002 is the tests' assumption, 58_drill_subscriptions.sql).
+for need in "$MIG_DRILL_SUBSCRIPTIONS" "$RB_DRILL_SUBSCRIPTIONS"; do
+  what="[P3-2 c10] supabase/${need#"$SUPA"/} exists and contains no transaction control"
+  if [ ! -f "$need" ]; then
+    fail "$what :: file not found"
+  elif [ "$have_python" -eq 0 ] || has_txn_control "$need" || ! python3 "$SPLITTER" txn-control "$need" >/dev/null 2>&1; then
+    fail "$what :: $(python3 "$SPLITTER" txn-control "$need" 2>&1 | head -n 3 | tr '\n' ';')"
+    ready=0
+    ready_members=0
+  else
+    pass "$what"
+  fi
+done
+name="[P3-2 c2] the migration documents the SQLSTATE of a write refused by the subscription (SS002)"
+if grep -q 'SS002' "$MIG_DRILL_SUBSCRIPTIONS" 2>/dev/null; then pass "$name"; else fail "$name :: not found in the migration"; fi
+
 # P2-1 criterion 4: the last-administrator rule with two real sessions
 # (lib/members_concurrency.py says how). What it creates is committed and
 # deleted again; its last line says whether the database is as it was.
@@ -351,16 +420,16 @@ members_concurrency() {
       *)        echo "# members_concurrency.py: $line" ;;
     esac
   done <"$out"
-  # The tool's own check, nine cases, its end and the cleanup.
-  if [ "$n" -ne 12 ] || [ -s "$err" ]; then
-    fail "[harness] concurrency: lib/members_concurrency.py printed its twelve lines and nothing else :: $n line(s); $(head -n 1 "$err" | cut -c 1-200)"
+  # The tool's own check, nine cases, the last seat (P3-1), its end and the cleanup.
+  if [ "$n" -ne 13 ] || [ -s "$err" ]; then
+    fail "[harness] concurrency: lib/members_concurrency.py printed its thirteen lines and nothing else :: $n line(s); $(head -n 1 "$err" | cut -c 1-200)"
   fi
 }
 
 # Decision 31: the Drill rollback refuses when two organizations hold records.
 rollback_refuses() {
   local out="$TMP/guard.out" rc
-  psql -X -q -At -v ON_ERROR_STOP=1 -v rollback_drill="$RB_DRILL" \
+  psql -X -q -At -v ON_ERROR_STOP=1 -v rollback_drill="$RB_DRILL_NEWEST_FIRST" \
     -f "$HERE/guards/rollback_refuses.sql" >"$out" 2>"$TMP/guard.err"
   rc=$?
   if ! grep -q '^FIXTURE-READY$' "$out"; then
@@ -382,7 +451,7 @@ rollback_refuses() {
 # no records at all.
 rollback_refuses_members() {
   local out="$TMP/guard41.out" rc what="[c41] the Drill rollback refuses when a non-founding organization has a membership but no records"
-  psql -X -q -At -v ON_ERROR_STOP=1 -v rollback_drill="$RB_DRILL" \
+  psql -X -q -At -v ON_ERROR_STOP=1 -v rollback_drill="$RB_DRILL_NEWEST_FIRST" \
     -f "$HERE/guards/rollback_refuses_members.sql" >"$out" 2>"$TMP/guard41.err"
   rc=$?
   if ! grep -q '^FIXTURE-READY$' "$out"; then
@@ -409,7 +478,7 @@ rollback_unflagged() {
   local intact="select (to_regclass('public.organizations') is not null and exists (select 1 from pg_attribute where attrelid = 'public.boreholes'::regclass and attname = 'org_id' and not attisdropped) and (select count(*) from public.organizations where is_founding) = 1 and not exists (select 1 from public.organizations where name like 'Second company (no mark%'))::int"
 
   what="[c41] the Drill rollback refuses when no organization is marked founding and two organizations have members"
-  psql -X -q -At -v ON_ERROR_STOP=1 -v rollback_drill="$RB_DRILL" \
+  psql -X -q -At -v ON_ERROR_STOP=1 -v rollback_drill="$RB_DRILL_NEWEST_FIRST" \
     -f "$HERE/guards/rollback_unflagged_two.sql" >"$out" 2>"$TMP/guard41u.err"
   rc=$?
   if ! grep -q '^FIXTURE-READY$' "$out"; then
@@ -428,7 +497,7 @@ rollback_unflagged() {
   fi
 
   what="[c41] (Developer's reading) with no organization marked founding and members in one organization only, the Drill rollback runs"
-  psql -X -q -At -v ON_ERROR_STOP=1 -v rollback_drill="$RB_DRILL" \
+  psql -X -q -At -v ON_ERROR_STOP=1 -v rollback_drill="$RB_DRILL_NEWEST_FIRST" \
     -f "$HERE/guards/rollback_unflagged_one.sql" >"$out" 2>"$TMP/guard41u.err"
   rc=$?
   if ! grep -q '^FIXTURE-READY$' "$out"; then
@@ -472,7 +541,7 @@ rollback_refuses_c48() {
         *) label="$label (the founding organization holds records too)" ;;
       esac
       name="[c48] the Drill rollback refuses when $label"
-      psql -X -q -At -v ON_ERROR_STOP=1 -v rollback_drill="$RB_DRILL" -v what="$what" -v founding_empty="$empty" \
+      psql -X -q -At -v ON_ERROR_STOP=1 -v rollback_drill="$RB_DRILL_NEWEST_FIRST" -v what="$what" -v founding_empty="$empty" \
         -f "$HERE/guards/rollback_refuses_c48.sql" >"$out" 2>"$TMP/guard48.err"
       rc=$?
       if ! grep -q '^FIXTURE-READY$' "$out"; then
@@ -488,7 +557,7 @@ rollback_refuses_c48() {
   done
 
   name="[c48] the Drill rollback still runs when a second organization exists and everything stored belongs to the founding one (records in all four tables, a photo under its folder, a legacy photo)"
-  psql -X -q -At -v ON_ERROR_STOP=1 -v rollback_drill="$RB_DRILL" -v what="nothing" -v founding_empty="0" \
+  psql -X -q -At -v ON_ERROR_STOP=1 -v rollback_drill="$RB_DRILL_NEWEST_FIRST" -v what="nothing" -v founding_empty="0" \
     -f "$HERE/guards/rollback_refuses_c48.sql" >"$out" 2>"$TMP/guard48.err"
   rc=$?
   if ! grep -q '^FIXTURE-READY$' "$out"; then
@@ -526,7 +595,7 @@ rollback_guard_more() {
       lone_record)      name="[c48] the Drill rollback refuses when the founding organization holds nothing at all and another organization holds a borehole" ;;
       lone_photo)       name="[c48] the Drill rollback refuses when the founding organization holds nothing at all and another organization holds a photo" ;;
     esac
-    psql -X -q -At -v ON_ERROR_STOP=1 -v rollback_drill="$RB_DRILL" -v case="$c" \
+    psql -X -q -At -v ON_ERROR_STOP=1 -v rollback_drill="$RB_DRILL_NEWEST_FIRST" -v case="$c" \
       -f "$HERE/guards/rollback_guard_more.sql" >"$out" 2>"$TMP/guard51.err"
     rc=$?
     if ! grep -q '^FIXTURE-READY$' "$out"; then
@@ -541,7 +610,7 @@ rollback_guard_more() {
   done
 
   name="[c48] (Developer's reading) with no organization marked founding and everything (members, a borehole, a photo under its folder, a legacy photo) in one organization, the Drill rollback runs although a second, empty organization exists"
-  psql -X -q -At -v ON_ERROR_STOP=1 -v rollback_drill="$RB_DRILL" -v case="unflagged_one" \
+  psql -X -q -At -v ON_ERROR_STOP=1 -v rollback_drill="$RB_DRILL_NEWEST_FIRST" -v case="unflagged_one" \
     -f "$HERE/guards/rollback_guard_more.sql" >"$out" 2>"$TMP/guard51.err"
   rc=$?
   if ! grep -q '^FIXTURE-READY$' "$out"; then
@@ -577,7 +646,7 @@ rollback_refuses_c53() {
       orphan_upper) name="[c53] the Drill rollback refuses when a photo is stored at <UUID>/<uuid>/<file>, the first segment in upper case and the id of no organization" ;;
       orphan_deep)  name="[c53] the Drill rollback refuses when a photo is stored at <uuid>/<uuid>/a/b/<file> and its first segment is the id of no organization" ;;
     esac
-    psql -X -q -At -v ON_ERROR_STOP=1 -v rollback_drill="$RB_DRILL" -v case="$c" \
+    psql -X -q -At -v ON_ERROR_STOP=1 -v rollback_drill="$RB_DRILL_NEWEST_FIRST" -v case="$c" \
       -f "$HERE/guards/rollback_refuses_c53.sql" >"$out" 2>"$TMP/guard53.err"
     rc=$?
     if ! grep -q '^FIXTURE-READY$' "$out"; then
@@ -596,7 +665,7 @@ rollback_refuses_c53() {
       legacy)         name="[c53] the Drill rollback still runs when the only photos are legacy paths <user id>/<file> (of a member, of an account that no longer exists, one whose file name is a uuid) and a new-path photo under the founding organization" ;;
       founding_upper) name="[c53] the Drill rollback still runs when the only photo is a new-path photo under the founding organization's id spelled in upper case" ;;
     esac
-    psql -X -q -At -v ON_ERROR_STOP=1 -v rollback_drill="$RB_DRILL" -v case="$c" \
+    psql -X -q -At -v ON_ERROR_STOP=1 -v rollback_drill="$RB_DRILL_NEWEST_FIRST" -v case="$c" \
       -f "$HERE/guards/rollback_refuses_c53.sql" >"$out" 2>"$TMP/guard53.err"
     rc=$?
     if ! grep -q '^FIXTURE-READY$' "$out"; then

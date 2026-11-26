@@ -3,6 +3,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+import * as orgContext from './orgContext';
 import { mayActivate, rememberOrg, rememberedOrg, resolveActiveOrg } from './orgContext';
 
 type Status = 'invited' | 'active' | 'deactivated';
@@ -73,4 +74,33 @@ test('src/saas imports nothing from the rest of src and names nothing of Drill',
     }
     for (const name of drill) assert.ok(!text.includes(name), `${file} names ${name}`);
   }
+});
+
+// --- P3-3: the subscription notice (criteria 1, 7) ----------------------------
+// Assumed, in src/saas/orgContext.ts:
+//   subscriptionNotice(access: 'full' | 'read_only' | 'none' | null | undefined,
+//                      endsAt: string | null | undefined, now: number /* epoch ms */)
+//     : 'grace' | 'expired' | 'inactive' | null
+// Read through the namespace so this file type-checks before the function exists.
+type Notice = 'grace' | 'expired' | 'inactive' | null;
+const subscriptionNotice = (access: string | null | undefined, endsAt: string | null | undefined, now: number): Notice =>
+  (orgContext as unknown as { subscriptionNotice: (a: typeof access, e: typeof endsAt, n: number) => Notice })
+    .subscriptionNotice(access, endsAt, now);
+
+const NOW = Date.parse('2026-11-25T12:00:00Z');
+const PAST = '2026-11-20T00:00:00Z';
+const FUTURE = '2026-12-20T00:00:00Z';
+
+test('the notice follows the access level and the end date, and good standing has none', () => {
+  assert.equal(subscriptionNotice('full', null, NOW), null);
+  assert.equal(subscriptionNotice('full', FUTURE, NOW), null);
+  assert.equal(subscriptionNotice('full', PAST, NOW), 'grace');
+  assert.equal(subscriptionNotice('read_only', PAST, NOW), 'expired');
+  assert.equal(subscriptionNotice('none', PAST, NOW), 'inactive');
+  assert.equal(subscriptionNotice('none', null, NOW), 'inactive', 'suspended with no end date');
+});
+
+test('no access level read yet is treated as full: no notice', () => {
+  assert.equal(subscriptionNotice(null, null, NOW), null);
+  assert.equal(subscriptionNotice(undefined, undefined, NOW), null);
 });

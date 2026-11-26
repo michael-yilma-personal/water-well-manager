@@ -96,6 +96,18 @@ insert into t.outsiders values
 
 grant select on all tables in schema t to public;
 
+-- Sets an organization's subscription (the fixture of decision D3-3).
+-- plpgsql, so that it loads where there is no subscriptions table.
+create function t.sub(org uuid, st text, ends timestamptz, grace int default 7, lim int default null, plan text default 'standard')
+returns void language plpgsql as $f$
+begin
+  insert into public.subscriptions (org_id, plan_id, status, ends_at, grace_days, max_users_override)
+  values (org, plan, st, ends, grace, lim)
+  on conflict (org_id) do update set plan_id = excluded.plan_id, status = excluded.status, ends_at = excluded.ends_at,
+    grace_days = excluded.grace_days, max_users_override = excluded.max_users_override;
+end
+$f$;
+
 do $fx$
 declare
   s record;
@@ -104,6 +116,13 @@ begin
   insert into public.organizations (id, name) values
     (t.uid('org_a'), 'Org A'),
     (t.uid('org_b'), 'Org B');
+
+  -- SaaS Phase 3, task P3-2: without a subscription an organization has no
+  -- access (D3-1), so A and B get what the founding organization has.
+  if to_regclass('public.subscriptions') is not null then
+    perform t.sub(t.uid('org_a'), 'active', null);
+    perform t.sub(t.uid('org_b'), 'active', null);
+  end if;
 
   insert into auth.users (id, email)
     select t.uid(actor), actor || '@db-test.invalid' from t.accounts;

@@ -15,7 +15,8 @@
 
 create temporary view schema_check_violations as
 with allowlist (table_name) as (
-  values ('profiles'), ('organizations'), ('memberships'), ('platform_admins'), ('audit_log')
+  values ('profiles'), ('organizations'), ('memberships'), ('platform_admins'), ('audit_log'),
+         ('plans')   -- SaaS P3-1: the plan catalogue is the same for every organization (proposal 5.1)
 ),
 tables as (
   select c.oid, c.relname::text as table_name, c.relrowsecurity

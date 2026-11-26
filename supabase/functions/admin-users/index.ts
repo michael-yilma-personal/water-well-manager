@@ -17,8 +17,12 @@
  * and refuses one that also belongs to another organization: a ban or a
  * deletion acts on the whole account. The decisions are in ./policy.ts.
  *
- * Needs the tenancy migrations (memberships, founding_org_id()): deploy it
- * after them, never before.
+ * It follows the founding organization's subscription like saas-members:
+ * expired (read-only access), only listing and removing or deactivating;
+ * suspended or canceled, nothing. The answer is then 402.
+ *
+ * Needs the tenancy migrations (memberships, founding_org_id()) and the
+ * subscriptions migration (org_access()): deploy it after them, never before.
  *
  * Deletion is deliberately not always a delete. A driller who has logged pipe
  * records is deactivated rather than removed: their rows carry created_by, and
@@ -222,6 +226,17 @@ Deno.serve(async (req) => {
   const { admin, callerId, founding } = auth;
 
   try {
+    // The founding organization's subscription, read before anything is
+    // written. An answer this does not know is no access.
+    const { data: access, error: accessErr } = await admin.rpc('org_access', { org: founding });
+    if (accessErr) throw new LookupError('subscription of the founding organization', accessErr);
+    if (access !== 'full' && access !== 'read_only') {
+      return json({ error: "The organization's subscription is suspended or canceled" }, 402);
+    }
+    if (access === 'read_only' && req.method !== 'GET' && req.method !== 'DELETE') {
+      return json({ error: "The organization's subscription has expired: until it is renewed, members can only be listed and deactivated" }, 402);
+    }
+
     // --- list the crew ----------------------------------------------------
     if (req.method === 'GET') {
       // The crew is the founding organization's members, whatever their
