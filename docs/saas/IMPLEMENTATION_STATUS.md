@@ -442,6 +442,7 @@ Harden the enforcement after the security review (RF-010 to RF-024).
 
 | Date | Decision | By |
 |---|---|---|
+| 2026-11-25 | **No push to `main` after Phase 3** ("i will take your recommendation"): Phase 3 gets its own branch and pull request, Phase 4 continues from it, and `main` is updated together with the production migration, in the order database, functions, dashboard. | Owner |
 | 2026-11-25 | **Phase 4 approved, to start when Phase 3 is done** ("once you are done with phase 3, you can push it to main and continue on phase 4"). The Lead goes from task to task without asking. The push to `main` is not done by the Lead until the owner has answered the risk raised the same day: `main` would receive pull requests 3 to 6 unmerged-so-far in one step, and if Netlify builds from `main` the new dashboard would go live against a production database that has none of the migrations. | Owner |
 | 2026-11-25 | **Phase 3 approved, after the Phase 2 gaps** (answer "Both, gaps first" to the Lead's question). Staging only; production still needs the owner's approval of each specific action. The upgrade test on a real phone is done last. | Owner |
 | 2026-11-24 | **Keep test code minimal and do not bloat the code base.** From here each brief asks for the smallest set of tests that covers every criterion once, and the smallest implementation that meets it. Existing tests are not removed or weakened. | Owner |
