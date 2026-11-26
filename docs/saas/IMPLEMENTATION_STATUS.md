@@ -100,6 +100,7 @@ Criteria are written when each task starts.
 5. Dashboard, expired: reading and exporting work; editing records and adding, inviting, re-activating or changing members are not offered or show the server's sentence; deactivating a member works.
 6. Dashboard: the user-limit refusal shows the server's sentence.
 7. A device or browser that has no access level cached yet behaves as `full` until it has read one. The founding organization sees no change.
+8. Field app: work held for the subscription blocks Sign Out and an organization switch as pending work does, and is never discarded (RF-143).
 
 ### Phase 2 — Organization-aware apps (approved 2026-11-23; staging only)
 
