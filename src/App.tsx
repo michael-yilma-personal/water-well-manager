@@ -50,6 +50,7 @@ import { createCompositeTransport, createPhotoTransport } from './services/photo
 import { getSupabase, isSupabaseConfigured } from './services/supabaseClient';
 import {
   getCachedOrgId,
+  getCachedUserId,
   getCurrentUserId,
   isProvisioned,
   sessionLost,
@@ -681,6 +682,13 @@ export default function App() {
   // Manual cloud sync
   const handleManualSync = async () => {
     if (isSyncing) return;
+    // Nothing can be sent without a session (RF-132): ask for the sign-in
+    // instead of re-arming refused work and reporting a sync.
+    if (await sessionLost()) {
+      setSignedIn(false);
+      setSkippedSignIn(false);
+      return;
+    }
     setIsSyncing(true);
     try {
       // Tapping the badge is the driller asking for another go, so give parked
@@ -706,6 +714,11 @@ export default function App() {
     }
   };
 
+  // A linked device whose session is gone (RF-130). If its account can never
+  // sign in again, waiting sends nothing: Sign Out is then offered over unsent
+  // work too, behind the confirmation that names what is discarded.
+  const sessionGone = !signedIn && isProvisioned();
+
   /**
    * Hand the phone to another driller.
    *
@@ -717,12 +730,15 @@ export default function App() {
   const handleSignOut = async () => {
     // Only retryable work blocks. Parked work can never be uploaded by this
     // account, so blocking on it would leave no way out of the account at all.
-    if (DrillingStorage.getPendingSyncCount() > 0) return;
+    if (DrillingStorage.getPendingSyncCount() > 0 && !sessionGone) return;
     syncWorker.stop();
     await signOut();
+    // The person confirmed that the unsent work is discarded (RF-130).
+    if (sessionGone) getOutbox().clear();
     DrillingStorage.clearForAccountSwitch();
     setAccount(null);
     setSignedIn(false);
+    setSkippedSignIn(false);
     setDataVersion((v) => v + 1);
   };
 
@@ -837,7 +853,13 @@ export default function App() {
   if (!signedIn && !skippedSignIn) {
     return (
       <SignInScreen
-        onSignedIn={async () => {
+        onSignedIn={async (previousId) => {
+          // Another account than the one this device was linked to (RF-131):
+          // it must not see that account's records or inherit its watermark.
+          if (previousId && previousId !== getCachedUserId()) {
+            DrillingStorage.clearForAccountSwitch();
+          }
+
           // A linked device belongs to a real crew, so the seeded sample job
           // is just a confusing fake borehole on the rig. Anything actually
           // recorded before linking is kept and will still sync.
@@ -855,7 +877,7 @@ export default function App() {
           // must not open for an account whose organization is unknown.
           const outcome = await refreshAccount().catch(() => 'unread' as const);
           if (outcome !== 'ok') {
-            await undoSignIn();
+            await undoSignIn(previousId);
             throw new Error(
               outcome === 'no-profile'
                 ? 'This account has no profile. Ask an Administrator.'
@@ -1148,8 +1170,8 @@ export default function App() {
         organizations={activeOrgs}
         activeOrgId={activeOrgId}
         onSwitchOrg={chooseOrg}
-        pendingCount={pendingSync}
-        parkedCount={parkedSync}
+        pendingCount={sessionGone ? 0 : pendingSync}
+        parkedCount={sessionGone ? pendingSync + parkedSync : parkedSync}
         onResetDemoData={handleResetDemoData}
         onDeleteCurrentProject={() => {
           if (activeBorehole) {

@@ -72,19 +72,18 @@ export function setCachedOrgId(orgId: string): void {
   localStorage.setItem(CACHED_ORG_ID_KEY, orgId);
 }
 
-/** The cached id as it was before the last `signIn`, for `undoSignIn`. */
-let idBeforeSignIn: string | null = null;
-
 /**
  * `holdsUnsentWork`: the outbox has pending or parked work. Another account
  * may then not sign in over the one this device is linked to (RF-124): the
  * author is stamped at upload, so the work would become theirs or be refused.
+ *
+ * `previousId` in the answer is the account the device was linked to before.
  */
 export async function signIn(
   email: string,
   password: string,
   holdsUnsentWork = false
-): Promise<AuthProfile> {
+): Promise<AuthProfile & { previousId: string | null }> {
   const client = getSupabase();
   if (!client) throw new Error('This build is not connected to a Supabase project');
 
@@ -93,8 +92,8 @@ export async function signIn(
   const user = data.user;
   if (!user) throw new Error('Sign-in returned no user');
 
-  idBeforeSignIn = localStorage.getItem(CACHED_USER_ID_KEY);
-  if (holdsUnsentWork && idBeforeSignIn && idBeforeSignIn !== user.id) {
+  const previousId = localStorage.getItem(CACHED_USER_ID_KEY);
+  if (holdsUnsentWork && previousId && previousId !== user.id) {
     // Only this device's new session: the cached identity and the queue stay.
     await client.auth.signOut({ scope: 'local' });
     throw new Error(
@@ -104,6 +103,7 @@ export async function signIn(
 
   localStorage.setItem(CACHED_USER_ID_KEY, user.id);
   return {
+    previousId,
     id: user.id,
     email: user.email ?? undefined,
     name: (user.user_metadata?.name as string) ?? undefined,
@@ -130,10 +130,10 @@ export async function signOut(): Promise<void> {
  * linked only the new session goes: the identity and organization it had stay
  * with its queued work (RF-127). A first link is signed out as before.
  */
-export async function undoSignIn(): Promise<void> {
-  if (!idBeforeSignIn) return signOut();
+export async function undoSignIn(previousId: string | null): Promise<void> {
+  if (!previousId) return signOut();
   await getSupabase()?.auth.signOut({ scope: 'local' });
-  localStorage.setItem(CACHED_USER_ID_KEY, idBeforeSignIn);
+  localStorage.setItem(CACHED_USER_ID_KEY, previousId);
 }
 
 /**
