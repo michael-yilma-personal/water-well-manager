@@ -287,8 +287,11 @@ export class Outbox {
         result.sent++;
       } catch (err) {
         item.lastError = err instanceof Error ? err.message : String(err);
+        // The subscription refuses everything behind it too, and a record sent
+        // without its held borehole would be refused for good: stop here.
+        if (err instanceof SubscriptionHeldError) break;
         result.failed++;
-        if (err instanceof NoSessionError || err instanceof SubscriptionHeldError) continue;
+        if (err instanceof NoSessionError) continue;
         item.attempts++;
         if (isPermanent(err) || item.attempts >= MAX_ATTEMPTS) {
           item.parked = true;

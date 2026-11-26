@@ -70,6 +70,9 @@ import { NO_ORG_MESSAGE, OrgScreen } from './components/OrgScreen';
 import { SPRING_DEFAULT, CROSSFADE } from './ui/springs';
 import { useReducedMotion } from './ui/prefs';
 
+/** Unsent work on this phone waits for the subscription, as last read. */
+const heldForSubscription = () => (getCachedAccess() ?? 'full') !== 'full';
+
 export default function App() {
   // Storage instance
   const [storage] = useState(() => new DrillingStorage());
@@ -178,6 +181,19 @@ export default function App() {
     });
   });
 
+  // The access level as the server gives it now, for the transports. A failed
+  // read rejects, and the transport then holds the work.
+  const refreshAccess = async () => {
+    if (noOrgBackend.current) return null;
+    const memberships = await saas.fetchMyOrganizations();
+    const access =
+      memberships.find((m) => m.orgId === getCachedOrgId() && m.status === 'active')?.access ?? null;
+    setCachedAccess(access);
+    // The notice follows without a restart.
+    setAccount((a) => a && { ...a, memberships });
+    return access;
+  };
+
   const [syncWorker] = useState(
     () =>
       new SyncWorker({
@@ -189,11 +205,13 @@ export default function App() {
             getClient: getSupabase,
             getUserId: getCurrentUserId,
             getAccess: getCachedAccess,
+            refreshAccess,
           }),
           createPhotoTransport({
             getClient: getSupabase,
             getUserId: getCurrentUserId,
             getAccess: getCachedAccess,
+            refreshAccess,
           })
         ),
         hasSession: async () => {
@@ -202,9 +220,12 @@ export default function App() {
           if (await sessionLost()) setSignedIn(false);
           return false;
         },
-        onChange: () => {
+        onChange: (result) => {
           setPendingSync(DrillingStorage.getPendingSyncCount());
           setParkedSync(DrillingStorage.getParkedSyncCount());
+          // Something went through although the last level read was not full:
+          // the subscription was renewed, so the notice must go by itself.
+          if (result.sent > 0 && heldForSubscription()) void refreshAccess().catch(() => {});
         },
         pull: pullRunner,
         onPulled: () => setDataVersion((v) => v + 1),
@@ -308,7 +329,9 @@ export default function App() {
     });
     if (decision === 'ignore') return '';
     if (decision === 'refuse-pending') {
-      return `${pending} record(s) still uploading. Wait until they are sent.`;
+      return heldForSubscription()
+        ? `${pending} record(s) are kept on this phone until the subscription is renewed.`
+        : `${pending} record(s) still uploading. Wait until they are sent.`;
     }
     if (
       decision === 'confirm-then-clear' &&
@@ -390,6 +413,8 @@ export default function App() {
     let orgId: string | null = null;
     if (cached) {
       if (mayActivate(cached, memberships)) orgId = cached;
+      // No longer a member: refusals are then permission errors, not the subscription's.
+      else setCachedAccess(null);
     } else {
       const resolved = resolveActiveOrg(memberships, rememberedOrg(localStorage, profile.id));
       if (resolved.kind === 'active') orgId = resolved.orgId;
@@ -398,6 +423,15 @@ export default function App() {
     if (m) activateOrg(m, who, false);
     return 'ok';
   };
+
+  // Coming back to the app: the subscription may have changed meanwhile.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') setOrgReload((k) => k + 1);
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, []);
 
   // On every launch, and again when signal returns: a role, a badge or a
   // membership changed in the office must reach a device that is already linked.
@@ -711,8 +745,8 @@ export default function App() {
       const result = await syncWorker.syncNow();
       setPendingSync(storage.getPendingSyncCount());
       setParkedSync(storage.getParkedSyncCount());
-      // Work held for the subscription is explained by the notice, not as an error.
-      if (result.failed > 0 && result.sent === 0 && (getCachedAccess() ?? 'full') === 'full') {
+      // Work held for the subscription is not counted as failed: the notice explains it.
+      if (result.failed > 0 && result.sent === 0) {
         // Silence here would look identical to a successful upload, which is
         // the failure mode this whole feature exists to remove.
         const parked = getOutbox().parked();
@@ -945,6 +979,7 @@ export default function App() {
           void handleSignOut();
         }}
         pendingCount={pendingSync}
+        heldForSubscription={heldForSubscription()}
       />
     );
   }
@@ -1204,6 +1239,7 @@ export default function App() {
         activeOrgId={activeOrgId}
         onSwitchOrg={chooseOrg}
         pendingCount={sessionGone ? 0 : pendingSync}
+        heldForSubscription={heldForSubscription()}
         parkedCount={sessionGone ? pendingSync + parkedSync : parkedSync}
         onResetDemoData={handleResetDemoData}
         onDeleteCurrentProject={() => {
