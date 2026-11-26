@@ -147,16 +147,10 @@ function SignIn({ onIn }: { onIn: () => void }) {
 }
 
 /** Opened by a password-reset link: only the new password, nothing of the dashboard (D5-2). */
-export function Recovery({ client }: { client: SupabaseClient }) {
+export function Recovery({ client, session }: { client: SupabaseClient; session: Promise<boolean> }) {
   const [state, setState] = useState<'checking' | 'ready' | 'expired'>('checking');
-  useEffect(() => {
-    // The session comes from the address only: this client keeps nothing.
-    const { data } = client.auth.onAuthStateChange((event, session) => {
-      if (session && (event === 'PASSWORD_RECOVERY' || event === 'INITIAL_SESSION')) setState('ready');
-      else if (event === 'INITIAL_SESSION') setState((s) => (s === 'ready' ? s : 'expired'));
-    });
-    return () => data.subscription.unsubscribe();
-  }, [client]);
+  // The session comes from the link's tokens only: this client keeps nothing.
+  useEffect(() => { void session.then((ok) => setState(ok ? 'ready' : 'expired')); }, [session]);
   return (
     <div className="min-h-screen bg-slate-950 text-white flex items-center justify-center p-6">
       <div className="w-full max-w-sm flex flex-col gap-3">

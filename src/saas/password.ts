@@ -41,11 +41,11 @@ export async function changePassword(client: Client, email: string, current: str
 
 const RESET_SENT = 'If an account uses this address, an email with a link to set a new password is on its way.';
 
-/** Sends the reset email. The answer never says whether the address has an account. */
+/** Sends the reset email. The answer is the same whatever the server said (RF-167): it never tells known addresses apart. */
 export async function requestReset(client: Client, email: string, redirectTo: string): Promise<string> {
   if (!email.trim()) return 'Enter your email address.';
-  const { error } = await client.auth.resetPasswordForEmail(email.trim(), { redirectTo });
-  return error?.status === 429 ? 'Too many requests, try again later.' : RESET_SENT;
+  await client.auth.resetPasswordForEmail(email.trim(), { redirectTo });
+  return RESET_SENT;
 }
 
 /** Sets the new password of a password-recovery session: the same rules, no current password. */

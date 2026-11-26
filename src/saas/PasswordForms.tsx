@@ -20,9 +20,9 @@ const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 type Fields = Record<string, { label: string; autoComplete: string; type?: string }>;
 
-function Block({ fields, values, onChange, submit, busy, error, done, action }: {
+function Block({ fields, values, onChange, submit, busy, error, done, action, note }: {
   fields: Fields; values: Record<string, string>; onChange: (v: Record<string, string>) => void;
-  submit: () => void; busy: boolean; error: string | null; done: string | null; action: string;
+  submit: () => void; busy: boolean; error: string | null; done: string | null; action: string; note?: string;
 }) {
   return (
     <div className="flex flex-col gap-2" onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); submit(); } }}>
@@ -30,6 +30,7 @@ function Block({ fields, values, onChange, submit, busy, error, done, action }: 
         <input key={key} type={f.type ?? 'password'} aria-label={f.label} placeholder={f.label} autoComplete={f.autoComplete}
                value={values[key] ?? ''} onChange={(e) => onChange({ ...values, [key]: e.target.value })} className={input} />
       ))}
+      {note && <p className="text-[11px] font-semibold text-slate-400">{note}</p>}
       {error && <p className={errorText}>{error}</p>}
       {done && <p className={okText}>{done}</p>}
       <button type="button" disabled={busy} onClick={submit} className={button}>{busy ? 'Please wait…' : action}</button>
@@ -64,7 +65,8 @@ export function ChangePassword({ client }: { client: SupabaseClient | null }) {
     return 'Your password has been changed.';
   });
   return (
-    <Block {...state} values={v} onChange={setV} submit={submit} action="Change password" fields={{
+    <Block {...state} values={v} onChange={setV} submit={submit} action="Change password"
+           note="Other devices signed in to this account will ask to sign in again." fields={{
       current: { label: 'Current password', autoComplete: 'current-password' },
       next: { label: 'New password', autoComplete: 'new-password' },
       repeat: { label: 'New password again', autoComplete: 'new-password' },
