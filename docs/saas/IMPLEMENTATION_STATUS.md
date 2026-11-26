@@ -4,8 +4,9 @@ Requirements: `docs/SAAS_ARCHITECTURE_PROPOSAL.md`. How the work is run: `docs/s
 
 ## Current state
 
-- **Phase:** Phase 4 — Platform console and audit (approved by the owner on 2026-11-25, to start when Phase 3 is done). Staging only; nothing may reach production without the owner approving that specific action. No push to `main` (owner, 2026-11-25): `main` is updated together with the production migration.
-- **Branch:** `saas/phase-4-platform`, from `saas/phase-3-subscriptions`. Pull requests 3 (tooling), 4 (Phase 0), 5 (Phase 1), 6 (Phase 2) and 7 (Phase 3) are open, each based on the one before, awaiting the owner's merge in that order.
+- **Phase:** Phases 3 and 4 are done on staging (approved 2026-11-25). Phase 5 (onboarding polish and cleanup) and Phase 6 are **not approved**. Nothing from Phases 1 to 4 is on production. No push to `main` (owner, 2026-11-25): `main` is updated together with the production migration.
+- **Branches:** pull requests 3 (tooling), 4 (Phase 0), 5 (Phase 1), 6 (Phase 2), 7 (Phase 3) and 8 (Phase 4), each based on the one before, await the owner's merge in that order.
+- **Phase 4 is done on staging** (TEST_RESULTS 103 to 116): `saas_platform` applied, `saas-members` deployed, the console at `platform.html`; reviews SR26 and SR27, no blocking finding left. Open for the owner: which account is the platform administrator on production (D4-2; remove its founding membership after creating it, RF-160) and where the console is hosted (not on the Hostinger field-app site, RF-162).
 - **Phase 3 is done on staging** (TEST_RESULTS 92 to 102): tasks P3-1 to P3-4; both migrations applied to staging, `saas-members` and `admin-users` redeployed there; five reviews (SR21, SR23, SR24, SR25 and the session-loss rounds), no blocking finding left. Not run for Phase 3: the APK on a device or emulator. The field app's version is still 1.2.0.
 - **Open for the owner from Phase 3:** RF-143 (phones on 1.1.7 can lose records captured during a lapse: update the phones or accept it before any organization gets an end date); RF-152 (held work that will never be renewed leaves no exit: export and discard, or keep blocking); the real plans and user limits (D3-6 seeds one plan of 100 users). The upgrade test on a real phone is last (owner, 2026-11-25).
 - **Next step:** plan Phase 4 and run its tasks one after the other without asking (owner, 2026-11-25).
@@ -23,7 +24,7 @@ Requirements: `docs/SAAS_ARCHITECTURE_PROPOSAL.md`. How the work is run: `docs/s
 | 1 Tenancy in the database | `saas/phase-1-tenancy` | Done on staging; awaiting the owner's review. **Production migration not approved** | https://github.com/michael-yilma-personal/water-well-manager/pull/5 |
 | 2 Organization-aware apps | `saas/phase-2-org-apps` | Approved 2026-11-23; in progress on staging | — |
 | 3 Subscriptions and entitlements | `saas/phase-3-subscriptions` | Done on staging; awaiting the owner's review. **Nothing on production** | https://github.com/michael-yilma-personal/water-well-manager/pull/7 |
-| 4 Platform console and audit | `saas/phase-4-platform` | Approved 2026-11-25; in progress on staging | — |
+| 4 Platform console and audit | `saas/phase-4-platform` | Done on staging; awaiting the owner's review. **Nothing on production** | pull request 8 |
 | 5 Onboarding polish and cleanup | — | Not approved | — |
 | 6 Extract the foundation | — | Not approved | — |
 
@@ -48,10 +49,10 @@ Not in this phase: email invitations, password change and reset, removing the co
 
 | Id | Task | Status | Evidence |
 |---|---|---|---|
-| P4-1 | Reusable migration `saas_platform`: the platform administrator's SQL functions (create an organization with its subscription; change a subscription: start trial, activate, extend, change plan, override the user limit, suspend, reactivate, cancel), each checking `is_platform_admin()` and writing its audit row in the same transaction; the read paths the console needs (organizations with subscription and member counts, members of an organization, audit history) | Implemented (migration 196 lines: four functions, no table or policy; rollback 10); local database suite green; review pending; not yet on staging | TEST_RESULTS 103, 106 |
-| P4-2 | Creating an organization's first Administrator through the Edge Function (the one step that needs the service role), for platform administrators only, audited | Implemented (16 lines in the function); unit 345 of 345; gate green; review with P4-1; not yet deployed to staging | TEST_RESULTS 104, 105 |
-| P4-3 | The console: `platform.html` (third Vite entry) and `src/platform/`: sign-in, organizations list, create organization and first Administrator, members and dates, subscription actions, audit history | Implemented (`platform.html`, `src/platformMain.tsx`, `src/platform/api.ts` 123 lines, `PlatformApp.tsx` 457 lines; third Vite entry); unit 358 of 358; gate green; driven with stubbed answers and read-only on staging; review pending | TEST_RESULTS 108, 112 |
-| P4-4 | Phase suite on staging: onboarding end to end from the console, the audit trail, non-platform accounts shut out; the existing suites still pass; CI | New suite done on staging (33 of 33); the existing suites that use `driller1` wait on the owner's test set-up | TEST_RESULTS 114 |
+| P4-1 | Reusable migration `saas_platform`: the platform administrator's SQL functions (create an organization with its subscription; change a subscription: start trial, activate, extend, change plan, override the user limit, suspend, reactivate, cancel), each checking `is_platform_admin()` and writing its audit row in the same transaction; the read paths the console needs (organizations with subscription and member counts, members of an organization, audit history) | **Done**: reviewed (SR26), RF-157 and RF-158 fixed and tested; **applied to staging** | TEST_RESULTS 103, 106, 109, 111 |
+| P4-2 | Creating an organization's first Administrator through the Edge Function (the one step that needs the service role), for platform administrators only, audited | **Done**: reviewed (SR26), first Administrator only (D4-6); **deployed to staging** | TEST_RESULTS 104, 105, 110, 111 |
+| P4-3 | The console: `platform.html` (third Vite entry) and `src/platform/`: sign-in, organizations list, create organization and first Administrator, members and dates, subscription actions, audit history | **Done**: `platform.html`, `src/platformMain.tsx`, `src/platform/api.ts`, `PlatformApp.tsx`; reviewed (SR27), RF-162 to RF-164 fixed; driven on staging by the suite | TEST_RESULTS 108, 112 |
+| P4-4 | Phase suite on staging: onboarding end to end from the console, the audit trail, non-platform accounts shut out; the existing suites still pass; CI | **Done on staging**: new suite 33 of 33; existing suites green apart from tenant isolation, held while the owner's test company exists | TEST_RESULTS 114, 115, 116 |
 
 Criteria are written when each task starts.
 
