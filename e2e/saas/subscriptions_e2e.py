@@ -135,6 +135,43 @@ def browser(s_well):
         check('renewed: the notice is gone',
               f.waited(page, f"() => !document.body.innerText.includes('{EXPIRED}')", timeout=20000))
 
+        # RF-149: a NEW borehole with a pipe on it, captured during a lapse.
+        subscription('active', -30)
+        ctx.set_offline(True)
+        page.get_by_text(s_well, exact=False).first.click()
+        page.click('button:has-text("New Borehole")')
+        page.fill('input[placeholder*="BH-2026-08"]', f'TISO {fx.run} lapse well')
+        page.fill('input[placeholder*="Rift Valley"]', 'subscriptions e2e')
+        page.get_by_text('CREATE BOREHOLE SITE').click()
+        page.get_by_text('START PIPE', exact=True).click()
+        page.wait_for_timeout(700)
+        page.get_by_text('END PIPE', exact=True).click()
+        page.get_by_text('SAVE PIPE RECORD').click()
+        well = page.evaluate("(n) => (JSON.parse(localStorage.getItem('wwdm_boreholes') || '[]')"
+                             ".find(b => b.name === n) || {}).id || null", f'TISO {fx.run} lapse well')
+        ctx.set_offline(False)
+        page.evaluate("() => window.dispatchEvent(new Event('online'))")
+        noticed = seen(page, EXPIRED)
+        parked = f.waited(page, f.PARKED, timeout=15000)
+        queue = f.stored(page, 'wwdm_outbox')
+        pipes = [o['entityId'] for o in queue if o['entity'] == 'pipeRecord']
+        m.made.extend(pipes + [well] if well else pipes)
+        check('expired: a new borehole and its pipe both stay queued, neither parked, neither on the server (RF-149)',
+              noticed and not parked and well and len(pipes) == 1 and 'Not Sent' not in page.inner_text('body')
+              and any(o['entity'] == 'borehole' and o['entityId'] == well for o in queue)
+              and not fx.record_state(pipes + [well]),
+              m.short([(o['entity'], o.get('parked'), o.get('lastError')) for o in queue], 300))
+        # Renewed, and then nothing: no reload, no badge tap, no signal change.
+        subscription('active')
+        drained = f.waited(page, f.DRAINED, timeout=90000)
+        rows = fx.record_state(pipes + [well]) if well else {}
+        check('renewed: on the worker\'s own retry both are on the server, the pipe under that borehole',
+              drained and well in rows and len(pipes) == 1
+              and ((rows.get(pipes[0]) or {}).get('row') or {}).get('borehole_id') == well,
+              m.short(f.stored(page, 'wwdm_outbox'), 300))
+        check('renewed: the expired notice clears by itself once the held work has uploaded',
+              f.waited(page, f"() => !document.body.innerText.includes('{EXPIRED}')", timeout=10000))
+
         subscription('active', -1)
         page.reload(wait_until='networkidle')
         check('within grace: the field app shows the renewal notice', seen(page, GRACE))

@@ -4,10 +4,11 @@ Requirements: `docs/SAAS_ARCHITECTURE_PROPOSAL.md`. How the work is run: `docs/s
 
 ## Current state
 
-- **Phase:** Phase 2 — Organization-aware apps (approved by the owner on 2026-11-23). Staging only; nothing in it may reach production without the owner approving that specific action.
-- **Branch:** `saas/phase-2-org-apps`, branched from `saas/phase-1-tenancy` at `3715f99`. Pull requests 3 (workflow tooling), 4 (Phase 0) and 5 (Phase 1) are open with green CI, awaiting the owner's merge, in that order.
-- **In progress:** Phase 2 tasks P2-1 to P2-7 are done on staging and on the emulator (TEST_RESULTS 84 to 88); the gate is green; the eighteenth review has no blocking finding. Open and not blocking: RF-123 (a device without a session shows unsent work and no way to link again; unconfirmed), the upgrade from 1.1.7 on a real device, and the deferred items of the production checklist (RF-101, RF-105, RF-106, RF-109, RF-111, RF-121).
-- **Next step:** (owner, 2026-11-25) close the open Phase 2 gaps first (reproduce RF-123; drive in a browser the screens not yet driven), then start Phase 3, which the owner approved on 2026-11-25 for staging only. The upgrade from 1.1.7 on a real phone is moved to last (the owner has no phone at hand). Still the owner's: merging pull requests 3, 4, 5 and 6 in that order; the production decisions for Phases 1 and 2. Pull request 6 (Phase 2) is open with green CI (TEST_RESULTS 89).
+- **Phase:** Phase 4 — Platform console and audit (approved by the owner on 2026-11-25, to start when Phase 3 is done). Staging only; nothing may reach production without the owner approving that specific action. No push to `main` (owner, 2026-11-25): `main` is updated together with the production migration.
+- **Branch:** `saas/phase-4-platform`, from `saas/phase-3-subscriptions`. Pull requests 3 (tooling), 4 (Phase 0), 5 (Phase 1), 6 (Phase 2) and 7 (Phase 3) are open, each based on the one before, awaiting the owner's merge in that order.
+- **Phase 3 is done on staging** (TEST_RESULTS 92 to 102): tasks P3-1 to P3-4; both migrations applied to staging, `saas-members` and `admin-users` redeployed there; five reviews (SR21, SR23, SR24, SR25 and the session-loss rounds), no blocking finding left. Not run for Phase 3: the APK on a device or emulator. The field app's version is still 1.2.0.
+- **Open for the owner from Phase 3:** RF-143 (phones on 1.1.7 can lose records captured during a lapse: update the phones or accept it before any organization gets an end date); RF-152 (held work that will never be renewed leaves no exit: export and discard, or keep blocking); the real plans and user limits (D3-6 seeds one plan of 100 users). The upgrade test on a real phone is last (owner, 2026-11-25).
+- **Next step:** plan Phase 4 and run its tasks one after the other without asking (owner, 2026-11-25).
 - **Phase 1** is done on staging; its production migration is **not approved**. **Do not check out `main` or any branch that predates the tooling until the pull requests are merged (RF-059).**
 - `.claude/settings.json`: found on 2026-11-25 (14:44) with every line commented out again, which turns the four hooks off (the same edit as on 2026-11-17). Not made by the Lead or an agent as far as known; left as found and not committed. While it stands the Stop gate and the Bash guard do not run: the Lead runs `scripts/gate.sh` by hand.
 - **Waiting on the owner:** the production decision for Phase 1; the action recorded for RF-050 (deferred by the owner; does not block development); approval to delete the `probe` function from production (RF-049); confirmation of the staging rule (RF-054); branch protection on `main`; merging the three pull requests (RF-059).
@@ -20,7 +21,7 @@ Requirements: `docs/SAAS_ARCHITECTURE_PROPOSAL.md`. How the work is run: `docs/s
 | 0 Preparation | `saas/phase-0-preparation` | Done; CI green; awaiting the owner's merge (after pull request 3) | https://github.com/michael-yilma-personal/water-well-manager/pull/4 |
 | 1 Tenancy in the database | `saas/phase-1-tenancy` | Done on staging; awaiting the owner's review. **Production migration not approved** | https://github.com/michael-yilma-personal/water-well-manager/pull/5 |
 | 2 Organization-aware apps | `saas/phase-2-org-apps` | Approved 2026-11-23; in progress on staging | — |
-| 3 Subscriptions and entitlements | — | Approved 2026-11-25 (staging only); starts after the Phase 2 gaps | — |
+| 3 Subscriptions and entitlements | `saas/phase-3-subscriptions` | Done on staging; awaiting the owner's review. **Nothing on production** | pull request 7 |
 | 4 Platform console and audit | — | Approved 2026-11-25 (staging only); starts when Phase 3 is done | — |
 | 5 Onboarding polish and cleanup | — | Not approved | — |
 | 6 Extract the foundation | — | Not approved | — |
@@ -49,7 +50,7 @@ Not in this phase: the platform console and the audited platform functions that 
 | P3-1 | Reusable migration `saas_subscriptions`: `plans`, `subscriptions` (RLS on), `org_access(org)`, the user-limit trigger on `memberships`, `my_organizations()` returning access level and end date; a subscription row for every existing organization | **Done**: reviewed (SR21), findings fixed and tested; **applied to staging** | TEST_RESULTS 92, 94, 95, 98 |
 | P3-2 | Drill migration `drill_subscriptions`: `org_access()` in the Drill policies and the photo bucket; a distinct error code for a write refused by the subscription; `saas-members` follows the "Manage members" column | **Done**: reviewed (SR23), RF-144 to RF-146 fixed and tested; **applied to staging**, `saas-members` and `admin-users` redeployed there. Open from the review: RF-143 (build 1.1.7, production only) | TEST_RESULTS 95, 97, 98 |
 | P3-3 | Apps: notices in both (grace, expired, suspended, canceled); the field app holds subscription-refused work in the queue and uploads it after renewal; the dashboard is read-only when expired | **Done**: two review rounds (SR24, SR25), no blocking finding left; RF-149 to RF-154 fixed or decided; open for the owner: RF-152 | TEST_RESULTS 99, 101 |
-| P3-4 | Phase suite on staging: the three phase acceptance points with real sign-ins; the existing suites still pass; CI | In progress on staging | — |
+| P3-4 | Phase suite on staging: the three phase acceptance points with real sign-ins; the existing suites still pass; CI | **Done on staging**: the nine existing suites unchanged and green; the new suite 53 of 53 | TEST_RESULTS 100 to 102 |
 
 Criteria are written when each task starts.
 
