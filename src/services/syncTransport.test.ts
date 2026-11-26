@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createSupabaseTransport } from './syncTransport';
-import type { OutboxItem } from './outbox';
+import { NoSessionError, type OutboxItem } from './outbox';
 import type { PipeRecord } from '../types';
 
 const UID = '11111111-2222-3333-4444-555555555555';
@@ -116,6 +116,7 @@ test('no session is a transient failure - the driller logged offline for days', 
 
   await assert.rejects(send(item()), (err: Error) => {
     assert.match(err.message, /no active session/);
+    assert.ok(err instanceof NoSessionError, 'not counted as an attempt (RF-125)');
     assert.notEqual((err as { permanent?: boolean }).permanent, true, 'must retry, not park');
     return true;
   });

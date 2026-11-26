@@ -79,6 +79,12 @@ export class PermanentSyncError extends Error {
   }
 }
 
+/**
+ * Nothing was sent: the device has no session. Not counted as an attempt
+ * (RF-125), or a device waiting for a sign-in would give up on its queue.
+ */
+export class NoSessionError extends Error {}
+
 function isPermanent(err: unknown): boolean {
   return (err as { permanent?: boolean } | null)?.permanent === true;
 }
@@ -273,15 +279,16 @@ export class Outbox {
         this.items = this.items.filter((i) => i.id !== item.id);
         result.sent++;
       } catch (err) {
-        item.attempts++;
         item.lastError = err instanceof Error ? err.message : String(err);
+        result.failed++;
+        if (err instanceof NoSessionError) continue;
+        item.attempts++;
         if (isPermanent(err) || item.attempts >= MAX_ATTEMPTS) {
           item.parked = true;
           result.parked++;
         } else {
           item.nextAttemptAt = now + backoffFor(item.attempts);
         }
-        result.failed++;
       }
     }
 

@@ -6,6 +6,7 @@
 import React, { useState } from 'react';
 import { LogIn, WifiOff } from 'lucide-react';
 import { signIn } from '../services/auth';
+import { getOutbox } from '../services/storage';
 import { isSupabaseConfigured } from '../services/supabaseClient';
 
 /**
@@ -35,7 +36,8 @@ export function SignInScreen({
     setBusy(true);
     setError(null);
     try {
-      await signIn(email.trim(), password);
+      const outbox = getOutbox();
+      await signIn(email.trim(), password, outbox.depth() + outbox.parked().length > 0);
       await onSignedIn();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));

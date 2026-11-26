@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createCompositeTransport, createPhotoTransport } from './photoTransport';
-import type { OutboxItem } from './outbox';
+import { NoSessionError, type OutboxItem } from './outbox';
 
 function item(entity: OutboxItem['entity']): OutboxItem {
   return {
@@ -79,4 +79,14 @@ test('a photo queued before the update uploads to the legacy <user>/<file> path'
   const paths = await uploadedPaths();
   assert.equal(paths.length, 2);
   for (const p of paths) assert.match(p, new RegExp(`^${UID}/[^/]+$`));
+});
+
+test('a photo without a session is not uploaded and is not counted as an attempt (RF-125)', async () => {
+  let asked = 0;
+  const send = createPhotoTransport({
+    getClient: () => ({ storage: { from: () => (asked++, {}) } }) as never,
+    getUserId: async () => null,
+  });
+  await assert.rejects(send({ ...item('photo'), payload: { photoId: 'p1' } }), NoSessionError);
+  assert.equal(asked, 0);
 });

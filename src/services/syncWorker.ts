@@ -48,6 +48,8 @@ const PULL_INTERVAL_MS = 5 * 60_000;
 export interface SyncWorkerDeps {
   outbox: Outbox;
   transport: OutboxTransport;
+  /** False when there is no session to send with: the drain is then skipped. */
+  hasSession?: () => Promise<boolean>;
   /** Notified after every drain so the UI can refresh its pending count. */
   onChange?: (result: DrainResult) => void;
   /**
@@ -184,6 +186,7 @@ export class SyncWorker {
 
     const status = await Network.getStatus().catch(() => ({ connected: true }));
     if (!status.connected) return idle;
+    if (this.deps.hasSession && !(await this.deps.hasSession())) return idle;
 
     this.draining = true;
     try {
