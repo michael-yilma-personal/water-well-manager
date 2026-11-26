@@ -41,6 +41,28 @@ Requirements: `docs/SAAS_ARCHITECTURE_PROPOSAL.md`. How the work is run: `docs/s
 | WF-4 | Harden the enforcement after the security review (RF-010 to RF-024) | Done; follow-ups in WF-5 | TEST_RESULTS 10 to 12 |
 | WF-5 | Final fix round: validation failures and second-review findings (RF-025 to RF-037) | Done: verified by the third review | TEST_RESULTS 13, 14 |
 
+### Phase 5 — Onboarding polish (first half approved 2026-11-26; staging only)
+
+Requirement: proposal section 7 (onboarding) and the Phase 5 entry of section 12. Acceptance for this half, from the proposal: a user can change their own password; and a user who forgot it can set a new one without their Administrator.
+
+Not in this half: email invitations (waiting for the owner's choice of sender); removing the compatibility triggers, `profiles.role`, `profiles.badge_number` and `admin-users` (stops build 1.1.7: only after every crew phone runs the new build); the README.
+
+| Id | Task | Status | Evidence |
+|---|---|---|---|
+| P5-1 | Change your own password: in the field app (Rig Settings), the dashboard and the console | Not started | — |
+| P5-2 | Password reset: "Forgot password?" on the sign-in screens; the emailed link opens a page that sets a new password | Not started | — |
+| P5-3 | Phase suite on staging; the existing suites still pass; CI | Not started | — |
+
+Criteria are written when each task starts.
+
+#### Decisions taken by the Lead for Phase 5 where the proposal left it open (2026-11-26; each can be changed)
+
+| Id | Decision |
+|---|---|
+| D5-1 | Changing a password asks for the current one, checked by signing in with it, and the new one twice. The person stays signed in on that device; nothing else is signed out. |
+| D5-2 | The reset link from any app opens one page on the dashboard's site, which sets the new password; the person then signs in again in the app they use (the APK cannot receive the link itself). The sign-in screens never say whether an address has an account. |
+| D5-3 | On staging, reset emails are not sent to real inboxes: the suites take the link from the Auth admin API. Production needs the dashboard's address in the Auth redirect list and a working sender (production checklist). |
+
 ### Phase 4 — Platform console and audit (approved 2026-11-25; staging only)
 
 Requirement: proposal sections 4, 6, 7, 8 ("Platform administrator actions"), 10 and the Phase 4 entry of section 12. Phase acceptance, from the proposal: a new company can be onboarded end to end from the console with no SQL; every administrative action appears in the audit log with actor, time and details; non-platform accounts cannot open or call any of it.
