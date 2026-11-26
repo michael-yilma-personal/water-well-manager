@@ -48,7 +48,7 @@ Not in this phase: email invitations, password change and reset, removing the co
 | Id | Task | Status | Evidence |
 |---|---|---|---|
 | P4-1 | Reusable migration `saas_platform`: the platform administrator's SQL functions (create an organization with its subscription; change a subscription: start trial, activate, extend, change plan, override the user limit, suspend, reactivate, cancel), each checking `is_platform_admin()` and writing its audit row in the same transaction; the read paths the console needs (organizations with subscription and member counts, members of an organization, audit history) | Tests written (red as intended); with the Developer | TEST_RESULTS 103 |
-| P4-2 | Creating an organization's first Administrator through the Edge Function (the one step that needs the service role), for platform administrators only, audited | Tests written (three red as intended); with the Developer | TEST_RESULTS 104 |
+| P4-2 | Creating an organization's first Administrator through the Edge Function (the one step that needs the service role), for platform administrators only, audited | Implemented (16 lines in the function); unit 345 of 345; gate green; review with P4-1; not yet deployed to staging | TEST_RESULTS 104, 105 |
 | P4-3 | The console: `platform.html` (third Vite entry) and `src/platform/`: sign-in, organizations list, create organization and first Administrator, members and dates, subscription actions, audit history | Not started | — |
 | P4-4 | Phase suite on staging: onboarding end to end from the console, the audit trail, non-platform accounts shut out; the existing suites still pass; CI | Not started | — |
 

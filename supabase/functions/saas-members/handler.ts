@@ -21,6 +21,8 @@ export type Ports = {
   callerId(authorization: string | null): Promise<string | null>;
   adminRoles(): Promise<string[]>;
   roles(): Promise<string[]>;
+  /** Whether the account is a platform administrator (a row of platform_admins). */
+  isPlatformAdmin(userId: string): Promise<boolean>;
   membershipsOf(userId: string): Promise<Membership[]>;
   membersOf(orgId: string): Promise<Membership[]>;
   recordCount(orgId: string, userId: string): Promise<number>;
@@ -99,7 +101,11 @@ export async function handle(req: Request, ports: Ports): Promise<Response> {
     const adminRoles = await ports.adminRoles();
     const mayAdminister = (await ports.membershipsOf(caller)).some(
       (m) => sameId(m.orgId, org) && m.status === 'active' && adminRoles.includes(m.role));
-    if (!mayAdminister) return json({ error: 'Organization administrators only' }, 403);
+    // A platform administrator who is not one of them may do one thing: add a
+    // member with an administrator role (the organization's first administrator).
+    const mayAddAdmin = mayAdminister || (req.method === 'POST'
+      && adminRoles.includes(String(body.role ?? '')) && await ports.isPlatformAdmin(caller));
+    if (!mayAddAdmin) return json({ error: 'Organization administrators only' }, 403);
 
     // The subscription: full access allows everything, read-only access the
     // list and deactivating a member, anything else nothing.

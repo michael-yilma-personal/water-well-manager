@@ -72,6 +72,14 @@ const ports: Ports = {
 
   adminRoles: async () => (await rpc('saas_admin_roles')) ?? [],
   roles: async () => (await rpc('saas_roles')) ?? [],
+
+  // A read that fails throws: nobody is taken for a platform administrator by mistake.
+  async isPlatformAdmin(userId) {
+    const { data, error } = await admin.from('platform_admins').select('user_id').eq('user_id', userId);
+    if (error) fail('platform_admins', error);
+    return (data ?? []).length > 0;
+  },
+
   membershipsOf: (userId) => memberships('user_id', userId),
   membersOf: (orgId) => memberships('org_id', orgId),
 

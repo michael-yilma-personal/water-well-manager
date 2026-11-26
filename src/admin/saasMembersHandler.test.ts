@@ -34,6 +34,7 @@ function world(opts: Opts = {}) {
     orgAccess: async (orgId: string) => opts.access?.[orgId.toLowerCase()] ?? 'full',
     adminRoles: async () => ['admin'],
     roles: async () => ['admin', 'member'],
+    isPlatformAdmin: async (userId) => same(userId, PLATFORM), // P4-2
     membershipsOf: async (userId) => memberships.filter((m) => same(m.userId, userId)),
     membersOf: async (orgId) => memberships.filter((m) => same(m.orgId, orgId)),
     recordCount: async (orgId, userId) => (same(orgId, ORG_A) && same(userId, MEMBER_A) ? 3 : 0),
@@ -62,8 +63,6 @@ function world(opts: Opts = {}) {
       return { data: fn === 'saas_remove_member' ? 'deactivated' : null };
     },
   };
-  // P4-2, ASSUMED: isPlatformAdmin(userId): Promise<boolean>. Attached until the port exists; then it moves into the literal.
-  (ports as any).isPlatformAdmin = async (userId: string) => same(userId, PLATFORM);
   if (opts.fail) (ports as any)[opts.fail] = async () => { throw new Error('connection refused at db.internal'); };
   const before = JSON.stringify(memberships);
   const send = async (method: string, body: Record<string, unknown> = {}, query = '') => {
