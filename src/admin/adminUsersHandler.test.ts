@@ -107,6 +107,8 @@ type World = {
   pageCap: number;
   /** The listing never ends: every page, however far, holds accounts. */
   endless?: boolean;
+  /** What org_access answers for the founding organization; 'full' when unset. */
+  access?: string;
 };
 
 /** The most accounts the stand-in's listing puts in one answer, whatever `perPage` asks for. */
@@ -380,6 +382,7 @@ function createClient(url: string, key: string, options?: Row) {
     from: fromTable,
     async rpc(name: string) {
       world.events.push(`rpc:${name}`);
+      if (name === 'org_access') return { data: world.access ?? 'full', error: null };
       if (name !== 'founding_org_id') return { data: null, error: { message: `the stand-in has no function ${name}` } };
       if (world.fail.founding) return { data: null, error: failure('founding_org_id could not be called') };
       return { data: world.founding, error: null };
@@ -1418,6 +1421,34 @@ test('a body that is not JSON, or is JSON but no object, is refused and writes n
       assert.deepEqual(world.events.filter((e) => e.startsWith('write:')), [], label);
       // Nothing of the runtime's own error text either.
       if (res.status === 500) assert.deepEqual(JSON.parse(text), fixed, label);
+    }
+  }
+});
+
+// ---------------------------------------------------------------------------
+// RF-144: the founding organization's subscription
+// ---------------------------------------------------------------------------
+
+test('with read-only access creating, changing a role and reactivating are 402 and write nothing; listing and deleting still work', async () => {
+  const readOnly = (w: World) => { w.access = 'read_only'; };
+  for (const [name, method, body] of REQUESTS(FRESH)) {
+    const a = await call(method, 'token-admin', body, readOnly);
+    if (method === 'GET' || method === 'DELETE') {
+      assert.equal(a.status, 200, name);
+    } else {
+      assert.equal(a.status, 402, name);
+      assert.deepEqual(a.writes, [], name);
+    }
+  }
+  assert.ok(!world.users.some((u) => u.id === FRESH), 'the delete was carried out');
+});
+
+test('with no access, or an answer the function does not know, every request is 402 and nothing is written', async () => {
+  for (const access of ['none', 'something-new']) {
+    for (const [name, method, body] of REQUESTS(FRESH)) {
+      const a = await call(method, 'token-admin', body, (w) => { w.access = access; });
+      assert.equal(a.status, 402, `${name} under ${access}`);
+      assert.deepEqual(a.writes, [], `${name} under ${access}`);
     }
   }
 });
