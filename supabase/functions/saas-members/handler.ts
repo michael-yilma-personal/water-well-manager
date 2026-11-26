@@ -101,11 +101,13 @@ export async function handle(req: Request, ports: Ports): Promise<Response> {
     const adminRoles = await ports.adminRoles();
     const mayAdminister = (await ports.membershipsOf(caller)).some(
       (m) => sameId(m.orgId, org) && m.status === 'active' && adminRoles.includes(m.role));
-    // A platform administrator who is not one of them may do one thing: add a
-    // member with an administrator role (the organization's first administrator).
-    const mayAddAdmin = mayAdminister || (req.method === 'POST'
-      && adminRoles.includes(String(body.role ?? '')) && await ports.isPlatformAdmin(caller));
-    if (!mayAddAdmin) return json({ error: 'Organization administrators only' }, 403);
+    // A platform administrator who is not one of them may do one thing: add the
+    // organization's first administrator, never themselves. Once it has an
+    // active administrator, nothing is open to them here.
+    const mayAddFirstAdmin = mayAdminister || (req.method === 'POST'
+      && typeof body.role === 'string' && adminRoles.includes(body.role) && await ports.isPlatformAdmin(caller)
+      && !(await ports.membersOf(org)).some((m) => m.status === 'active' && adminRoles.includes(m.role)));
+    if (!mayAddFirstAdmin) return json({ error: 'Organization administrators only' }, 403);
 
     // The subscription: full access allows everything, read-only access the
     // list and deactivating a member, anything else nothing.
@@ -154,6 +156,9 @@ export async function handle(req: Request, ports: Ports): Promise<Response> {
       // An existing account is only invited: nothing of the account is touched
       // and the password sent is ignored. Being a member already is SM003.
       const existing = await ports.accountIdByEmail(email);
+      if (existing && !mayAdminister && sameId(existing, caller)) {
+        return json({ error: 'Organization administrators only' }, 403);
+      }
       if (existing) {
         const added = await ports.call('saas_add_member',
           { org, member: existing.toLowerCase(), role, badge, status: 'invited', actor: caller });
