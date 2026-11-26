@@ -21,7 +21,7 @@ export function SignInScreen({
   onSkip,
 }: {
   /** May reject: linking is not finished until this has settled. */
-  onSignedIn: () => void | Promise<void>;
+  onSignedIn: (previousId: string | null) => void | Promise<void>;
   onSkip: () => void;
 }) {
   const [email, setEmail] = useState('');
@@ -37,8 +37,12 @@ export function SignInScreen({
     setError(null);
     try {
       const outbox = getOutbox();
-      await signIn(email.trim(), password, outbox.depth() + outbox.parked().length > 0);
-      await onSignedIn();
+      const { previousId } = await signIn(
+        email.trim(),
+        password,
+        outbox.depth() + outbox.parked().length > 0
+      );
+      await onSignedIn(previousId);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
