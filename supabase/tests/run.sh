@@ -57,6 +57,11 @@ MIG_DRILL_SUBSCRIPTIONS="$(ls "$SUPA"/migrations/*_drill_subscriptions.sql 2>/de
 MIG_DRILL_SUBSCRIPTIONS="${MIG_DRILL_SUBSCRIPTIONS:-$SUPA/migrations/<timestamp>_drill_subscriptions.sql}"
 RB_DRILL_SUBSCRIPTIONS="$SUPA/rollback/$(basename "$MIG_DRILL_SUBSCRIPTIONS")"
 HAS_DRILL_SUBSCRIPTIONS=0; [ ! -f "$RB_DRILL_SUBSCRIPTIONS" ] || HAS_DRILL_SUBSCRIPTIONS=1
+# SaaS Phase 4, task P4-1: the platform administrator's functions.
+MIG_SAAS_PLATFORM="$(ls "$SUPA"/migrations/*_saas_platform.sql 2>/dev/null | head -n 1)"
+MIG_SAAS_PLATFORM="${MIG_SAAS_PLATFORM:-$SUPA/migrations/<timestamp>_saas_platform.sql}"
+RB_SAAS_PLATFORM="$SUPA/rollback/$(basename "$MIG_SAAS_PLATFORM")"
+HAS_SAAS_PLATFORM=0; [ ! -f "$RB_SAAS_PLATFORM" ] || HAS_SAAS_PLATFORM=1
 
 LABEL="${RUN_LABEL:+[$RUN_LABEL] }"
 
@@ -123,6 +128,7 @@ run_file() {
     -v rollback_saas_members="$RB_SAAS_MEMBERS" -v rollback_drill_members="$RB_DRILL_MEMBERS" \
     -v rollback_saas_subscriptions="$RB_SAAS_SUBSCRIPTIONS" \
     -v rollback_drill_subscriptions="$RB_DRILL_SUBSCRIPTIONS" -v has_drill_subscriptions="$HAS_DRILL_SUBSCRIPTIONS" \
+    -v rollback_saas_platform="$RB_SAAS_PLATFORM" -v has_saas_platform="$HAS_SAAS_PLATFORM" \
     -f "$file" >"$out" 2>"$err"
   rc=$?
 
@@ -401,6 +407,35 @@ for need in "$MIG_DRILL_SUBSCRIPTIONS" "$RB_DRILL_SUBSCRIPTIONS"; do
 done
 name="[P3-2 c2] the migration documents the SQLSTATE of a write refused by the subscription (SS002)"
 if grep -q 'SS002' "$MIG_DRILL_SUBSCRIPTIONS" 2>/dev/null; then pass "$name"; else fail "$name :: not found in the migration"; fi
+
+# SaaS Phase 4, task P4-1 (criterion 7): the reusable platform migration and
+# its rollback script, which the rehearsals run first (sql/inc/roll_back_later.sql).
+for need in "$MIG_SAAS_PLATFORM" "$RB_SAAS_PLATFORM"; do
+  what="[P4-1 c7] supabase/${need#"$SUPA"/} exists and contains no transaction control"
+  if [ ! -f "$need" ]; then
+    fail "$what :: file not found"
+  elif [ "$have_python" -eq 0 ] || has_txn_control "$need" || ! python3 "$SPLITTER" txn-control "$need" >/dev/null 2>&1; then
+    fail "$what :: $(python3 "$SPLITTER" txn-control "$need" 2>&1 | head -n 3 | tr '\n' ';')"
+    ready=0
+    ready_members=0
+  else
+    pass "$what"
+  fi
+done
+name="[P4-1 c7] saas_platform names no Drill table, column, role, function or bucket in its code"
+if [ -f "$MIG_SAAS_PLATFORM" ]; then
+  hits="$(sed -e 's/--.*$//' "$MIG_SAAS_PLATFORM" \
+    | grep -n -E -i '(^|[^a-z_])(boreholes|pipe_records|drilling_events|shift_logs|profiles|is_admin|is_reviewer|handle_new_user|drilling[-_]photos|created_by|is_founding|deactivated_by_ban)([^a-z_]|$)' || true)"
+  roles="$(sed -e 's/--.*$//' "$MIG_SAAS_PLATFORM" \
+    | grep -n -E '(Driller|Data Logger|Supervisor|Administrator)' || true)"
+  if [ -z "$hits$roles" ]; then
+    pass "$name"
+  else
+    fail "$name :: $(printf '%s\n%s' "$hits" "$roles" | grep -v '^$' | head -n 5 | tr '\n' ';')"
+  fi
+else
+  fail "$name :: file not found"
+fi
 
 # P2-1 criterion 4: the last-administrator rule with two real sessions
 # (lib/members_concurrency.py says how). What it creates is committed and
