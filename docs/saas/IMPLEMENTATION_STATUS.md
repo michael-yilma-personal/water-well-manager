@@ -4,12 +4,13 @@ Requirements: `docs/SAAS_ARCHITECTURE_PROPOSAL.md`. How the work is run: `docs/s
 
 ## Current state
 
-- **Phase:** Phase 0 — Preparation (approved). Phase 1 is approved to start after Phase 0, on staging only; its production migration is not approved.
-- **Branch:** `saas/phase-1-tenancy`, branched from `saas/phase-0-preparation` at `8d07755`. Pull requests 3 (workflow tooling) and 4 (Phase 0) are open with green CI, awaiting the owner's merge, in that order.
-- **In progress:** nothing. **Phase 1's tasks are done on staging**: P1-1, P1-2 and P1-4 passed the thirteenth security review; the migrations are applied to staging (TEST_RESULTS 61); the 21 existing suites pass unchanged (62); `admin-users` is deployed there (63); the tenant-isolation suite passes 1,273 of 1,273 (64). No open Critical, High or Medium finding in Phase 1. Pull request 5 holds the work.
-- **Next step:** the owner reviews pull request 5 (after 3 and 4) and decides on the production migration, which is **not approved**. Phase 2 is not approved. **Do not check out `main` or any branch that predates the tooling until the pull requests are merged (RF-059).**
-- **For the owner to look at:** `.claude/settings.json` was edited on 2026-11-17 at 20:38 (the guard hook commented out, which also makes the file invalid JSON). Not made by the Lead or an agent as far as can be told; left as found and not committed.
-- **Waiting on the owner:** the action recorded for RF-050 (deferred by the owner; does not block development); approval to delete the `probe` function from production (RF-049); confirmation of the staging rule (RF-054); branch protection on `main`; merging the workflow and Phase 0 pull requests so `main` stops carrying the production link files (RF-059).
+- **Phase:** Phase 2 — Organization-aware apps (approved by the owner on 2026-11-23). Staging only; nothing in it may reach production without the owner approving that specific action.
+- **Branch:** `saas/phase-2-org-apps`, branched from `saas/phase-1-tenancy` at `3715f99`. Pull requests 3 (workflow tooling), 4 (Phase 0) and 5 (Phase 1) are open with green CI, awaiting the owner's merge, in that order.
+- **In progress:** Phase 2 tasks P2-1 to P2-7 are done on staging and on the emulator (TEST_RESULTS 84 to 88); the gate is green; the eighteenth review has no blocking finding. Open and not blocking: RF-123 (a device without a session shows unsent work and no way to link again; unconfirmed), the upgrade from 1.1.7 on a real device, and the deferred items of the production checklist (RF-101, RF-105, RF-106, RF-109, RF-111, RF-121).
+- **Next step:** (owner, 2026-11-25) close the open Phase 2 gaps first (reproduce RF-123; drive in a browser the screens not yet driven), then start Phase 3, which the owner approved on 2026-11-25 for staging only. The upgrade from 1.1.7 on a real phone is moved to last (the owner has no phone at hand). Still the owner's: merging pull requests 3, 4, 5 and 6 in that order; the production decisions for Phases 1 and 2. Pull request 6 (Phase 2) is open with green CI (TEST_RESULTS 89).
+- **Phase 1** is done on staging; its production migration is **not approved**. **Do not check out `main` or any branch that predates the tooling until the pull requests are merged (RF-059).**
+- `.claude/settings.json`: found on 2026-11-25 (14:44) with every line commented out again, which turns the four hooks off (the same edit as on 2026-11-17). Not made by the Lead or an agent as far as known; left as found and not committed. While it stands the Stop gate and the Bash guard do not run: the Lead runs `scripts/gate.sh` by hand.
+- **Waiting on the owner:** the production decision for Phase 1; the action recorded for RF-050 (deferred by the owner; does not block development); approval to delete the `probe` function from production (RF-049); confirmation of the staging rule (RF-054); branch protection on `main`; merging the three pull requests (RF-059).
 
 ## Phases
 
@@ -18,8 +19,8 @@ Requirements: `docs/SAAS_ARCHITECTURE_PROPOSAL.md`. How the work is run: `docs/s
 | Workflow setup | `chore/agent-workflow` | Done; CI green; awaiting the owner's merge | https://github.com/michael-yilma-personal/water-well-manager/pull/3 |
 | 0 Preparation | `saas/phase-0-preparation` | Done; CI green; awaiting the owner's merge (after pull request 3) | https://github.com/michael-yilma-personal/water-well-manager/pull/4 |
 | 1 Tenancy in the database | `saas/phase-1-tenancy` | Done on staging; awaiting the owner's review. **Production migration not approved** | https://github.com/michael-yilma-personal/water-well-manager/pull/5 |
-| 2 Organization-aware apps | — | Not approved | — |
-| 3 Subscriptions and entitlements | — | Not approved | — |
+| 2 Organization-aware apps | `saas/phase-2-org-apps` | Approved 2026-11-23; in progress on staging | — |
+| 3 Subscriptions and entitlements | — | Approved 2026-11-25 (staging only); starts after the Phase 2 gaps | — |
 | 4 Platform console and audit | — | Not approved | — |
 | 5 Onboarding polish and cleanup | — | Not approved | — |
 | 6 Extract the foundation | — | Not approved | — |
@@ -36,6 +37,158 @@ Requirements: `docs/SAAS_ARCHITECTURE_PROPOSAL.md`. How the work is run: `docs/s
 | DEMO-1 | Static migration check: every table created in `supabase/migrations/` has RLS enabled | Done: RF-001 to RF-006 fixed and verified by the second review | TEST_RESULTS 8, 11 |
 | WF-4 | Harden the enforcement after the security review (RF-010 to RF-024) | Done; follow-ups in WF-5 | TEST_RESULTS 10 to 12 |
 | WF-5 | Final fix round: validation failures and second-review findings (RF-025 to RF-037) | Done: verified by the third review | TEST_RESULTS 13, 14 |
+
+### Phase 3 — Subscriptions and entitlements (approved 2026-11-25; staging only; starts after the Phase 2 gaps)
+
+Requirement: proposal sections 5.1, 5.2, 8 and the Phase 3 entry of section 12. Phase acceptance, from the proposal: each state in the section 8 table behaves as listed, verified by tests that set dates and statuses; records captured offline during a lapse upload after renewal with nothing lost; the user limit cannot be exceeded.
+
+Not in this phase: the platform console and the audited platform functions that change a subscription (Phase 4, where they are first used); payments (never). On staging a subscription is set by the test fixture.
+
+| Id | Task | Status | Evidence |
+|---|---|---|---|
+| P3-1 | Reusable migration `saas_subscriptions`: `plans`, `subscriptions` (RLS on), `org_access(org)`, the user-limit trigger on `memberships`, `my_organizations()` returning access level and end date; a subscription row for every existing organization | Not started | — |
+| P3-2 | Drill migration `drill_subscriptions`: `org_access()` in the Drill policies and the photo bucket; a distinct error code for a write refused by the subscription; `saas-members` follows the "Manage members" column | Not started | — |
+| P3-3 | Apps: notices in both (grace, expired, suspended, canceled); the field app holds subscription-refused work in the queue and uploads it after renewal; the dashboard is read-only when expired | Not started | — |
+| P3-4 | Phase suite on staging: the three phase acceptance points with real sign-ins; the existing suites still pass; CI | Not started | — |
+
+Criteria are written when each task starts.
+
+#### Decisions taken by the Lead for Phase 3 where the proposal left it open (2026-11-25; each can be changed)
+
+| Id | Decision |
+|---|---|
+| D3-1 | An organization without a subscription row has access `none` (fail closed). The migration gives every existing organization a row: plan `standard`, status `active`, no end date, so nothing changes for the founding organization. |
+| D3-2 | The user limit counts `active` and `invited` memberships; `deactivated` ones do not count. Re-activating a member is checked like adding one. |
+| D3-3 | The functions a platform administrator uses to change a subscription are written in Phase 4 with the console. In Phase 3 the tests set dates and statuses through the fixture. |
+| D3-4 | Feature flags (`plans.features`) are stored but nothing is gated by them in Phase 3: no plan differs in features yet. |
+
+### Phase 2 — Organization-aware apps (approved 2026-11-23; staging only)
+
+Requirement: proposal sections 4, 6, 7, 11 and the Phase 2 entry of section 12. Phase acceptance, from the proposal: an Administrator sees and manages only their organization's members; a user in two organizations can switch and data never crosses; deactivating a member in one organization leaves their other membership working; offline capture → sync still passes on a device (`test:apk`).
+
+Not in this phase: plans, user limits and subscription state (Phase 3); the platform console and creating organizations from an app (Phase 4); email invitations (Phase 5). On staging a second organization is still created by the test fixture.
+
+| Id | Task | Status | Evidence |
+|---|---|---|---|
+| P2-1 | Database support for member management: reusable migration `saas_members` and Drill migration `drill_members` | **Done**: every criterion has a passing check; the re-review (SR15) has no blocking finding; RF-105 deferred with the reviewer's agreement; **applied to staging** | TEST_RESULTS 66 to 77 |
+| P2-2 | Edge Function `saas-members` with `_shared/saas`; handler tests in the gate; deployed to staging; authorization suite on staging | In progress: implemented (`handler.ts` 189 lines, `index.ts` 130), RF-110 to RF-112 fixed and tested; **deployed to staging** and answering correctly in a first live check; the staging suite (criterion 9) is being written | TEST_RESULTS 73 to 77 |
+| P2-3 | Client foundation `src/saas` (`api.ts`, `orgContext.ts`) and the boundary test | Implemented (110 lines), unit tests and gate green; read by the Lead. Not yet used by an app: its validation and review happen with P2-4, its first use | TEST_RESULTS 71 |
+| P2-4 | Dashboard: organization switcher, records and photos of the active organization, Crew view on `saas-members`, accepting an invitation | Implemented; full gate green (type check and build); not yet run in a browser: the staging suites are being written | TEST_RESULTS 77 |
+| P2-5 | Field app: active organization, `org_id` on boreholes and queued work, new photo path, switching rules, role from the membership | Implemented; RF-114 to RF-116 verified fixed by the re-review; RF-119 fixed and tested; no open High or Medium. **Not yet run in a browser or on a device**: the staging suites (P2-6) and the device suite (P2-7) are what prove the screens | TEST_RESULTS 78 to 83 |
+| P2-6 | Phase suites on staging: the four phase acceptance points with real sign-ins; the existing suites; a legacy-client suite standing in for build 1.1.7 | **Done on staging**: criteria 1 to 7 met, no product defect | TEST_RESULTS 86 |
+| P2-7 | Version 1.2.0, a staging build of the APK, `test:apk` on a device or emulator | **Done on the emulator** (fresh install). Not shown: an upgrade from 1.1.7 with queued work on a real device | TEST_RESULTS 87, 88 |
+
+Criteria for P2-2 to P2-7 are written when each starts.
+
+#### Decisions taken by the Lead for Phase 2 where the proposal left it open (2026-11-23; each can be changed)
+
+- **D2-1 (proposal Decision 9, changed from its recommendation).** Adding a person who already has an account creates an `invited` membership, which gives nothing until that person accepts it themselves after signing in. Reason: a second active membership makes an installed 1.1.7 build's new boreholes fail (it sends no `org_id`, and with two active memberships the database refuses to guess, Phase 1 criterion 8). If an Administrator of any organization could activate a membership for somebody else's account, they could stop another company's crew from working. A brand-new account created by the Administrator is `active` at once, as the proposal says.
+- **D2-2.** Member changes are audited now (`audit_log`), not from Phase 4: the table exists and each write is one transaction with its audit row.
+- **D2-3.** For the founding organization only, a membership's role and badge are copied back to `profiles`, so installed 1.1.7 builds (which read `profiles.role`) keep showing the right role once the dashboard manages memberships.
+- **D2-4.** `admin-users` stays deployed and unchanged until Phase 5; the dashboard stops calling it.
+- **D2-5.** Deactivating through `saas-members` never bans the account, in the founding organization too. An account-wide ban remains possible only through `admin-users`.
+
+#### P2-1 acceptance criteria — database support for member management
+
+Two new migrations, later than `20261116010000`, each safe to apply twice, each with a rollback script under `supabase/rollback/`, both covered by `supabase/tests/` (run by `supabase/tests/run.sh`, so by CI). The static migration check, the schema check and the existing database tests stay green and unchanged.
+
+**A. `saas_members` (reusable; names no Drill table, column, role or bucket)**
+
+1. `saas_roles()` returns the role names a membership may carry. The foundation's default is `array['admin','member']`, created only when absent so that an application's replacement survives a re-application. `stable`, `security definer`, `set search_path = public`; executable by `authenticated` and `service_role`, not by `anon`.
+2. `saas_member_record_count(org uuid, member uuid) returns bigint`: how many records the member authored in that organization. The foundation's default returns 0, created only when absent. Executable by `service_role` only.
+3. Member management functions, executable by `service_role` only (the Edge Function is their one caller; `anon` and `authenticated` cannot execute them). Each takes the acting user's id, does its checks and its write and inserts one `audit_log` row (`actor_id`, `org_id`, `action`, `target` = the member's user id, `details`) in the same transaction, and raises an exception with a distinguishable error code or message for each refusal, changing nothing:
+   - `saas_add_member(org, member, role, badge, status, actor)`: inserts a membership with status `active` or `invited`. Refused when the organization does not exist, the role is not in `saas_roles()`, or a membership of that user in that organization already exists (whatever its status).
+   - `saas_set_member_role(org, member, role, actor)`: refused for an unknown role, for a member with no membership in `org`, when `member = actor`, and when it would leave the organization without an **active** member holding one of `saas_admin_roles()`.
+   - `saas_set_member_badge(org, member, badge, actor)`.
+   - `saas_set_member_status(org, member, status, actor)` with `active` or `deactivated`: refused when `member = actor`, when the membership is `invited` (an invitation is accepted or removed, not activated by someone else), and when it would leave the organization without an active administrator.
+   - `saas_remove_member(org, member, actor)`: refused when `member = actor` or when it would leave no active administrator. When `saas_member_record_count(org, member)` is 0 the membership row is deleted and the function returns `'removed'`; otherwise the membership becomes `deactivated` and it returns `'deactivated'`. The auth account is never touched.
+4. The last-administrator rule holds under concurrency: two requests that each remove, deactivate or demote a different one of an organization's two active administrators cannot both succeed.
+5. Invitations, callable by `authenticated` (not `anon`), acting only on the caller's **own** membership: `accept_membership(org uuid)` turns the caller's `invited` membership in `org` into `active`; `decline_membership(org uuid)` deletes it. With no `invited` membership of the caller in `org` each raises `42501` and changes nothing: it cannot activate a `deactivated` membership or touch anyone else's. Each writes an audit row with the caller as actor.
+6. None of the functions in 3 trusts the actor argument for authorization (that is the Edge Function's job, P2-2); they only record it and apply the self rules. They do not check that the actor is an administrator.
+
+**B. `drill_members` (Drill)**
+
+7. `saas_roles()` returns the four Drill roles. `saas_member_record_count` counts the member's rows (`created_by`) in the four record tables **of that organization only**, soft-deleted rows included.
+8. An account created for an organization other than the founding one never has a founding membership: when the auth account is created with `app_metadata` (a field only the service role can set) naming the organization it is created for, the legacy enrolment of Phase 1 (criterion 27) does not enrol its profile in the founding organization, at no committed moment. An account created without that marker (the legacy path, `admin-users`) is enrolled in the founding organization exactly as before. `user_metadata`, which a user can edit, has no influence on this.
+9. Copy-back for the founding organization only (D2-3): a change of role or badge on a **founding** membership is copied to that user's `profiles.role` / `badge_number`; a change on a membership in any other organization never touches `profiles`. The Phase 1 mirror (profile → founding membership) keeps working, and the two do not loop or fight: after any single change on either side, both sides hold the new value, and a badge change never writes a role nor a role change a badge (criterion 26 still holds).
+10. A membership's status changed by the functions in 3 clears the ban mark as Phase 1 criterion 40 says; nothing in this migration bans or unbans an account.
+11. Privileges stay as Phase 1 criterion 25 states them: no new table privilege for `anon` or `authenticated`; clients still cannot insert, update or delete in `memberships`, `organizations` or `audit_log` directly.
+12. Isolation: none of this lets a member of one organization read or change another organization's memberships, and an organization administrator still reads only their own organization's `audit_log` rows.
+13. Rollback scripts: `drill_members` first, then `saas_members`; after both, the schema and behaviour are those of Phase 1 (its database tests pass). Tested on a local database only.
+
+**C. Settled after the tests were written (2026-11-24)**
+
+14. The marker of criterion 8 is the key `saas_org` in `app_metadata`. An account that carries the key at all, whatever its value (the founding organization's id, an unknown id, text that is no id), is never enrolled by the legacy path; its memberships come only from `saas_add_member`. A re-application or reconciliation of `drill_tenancy` (Phase 1 criteria 39, 45, 49) does not enrol a marked account either; this is the one change allowed to the Phase 1 migration file.
+15. Copy-back (criterion 9) applies to changes made through the member functions, `saas_add_member` into the founding organization included. A direct write to `memberships` is not copied (the existing test `25_mirroring.sql` requires that). `saas_members` still names nothing of Drill's, so Drill attaches its copy-back through a hook the foundation leaves open.
+16. Rollback order is members first, then tenancy. The existing Phase 1 rollback tests run unchanged with the member migrations applied, so `drill_members` adds no trigger that survives the tenancy rollback.
+17. For a user with no membership in the organization, every function of criterion 3 except `saas_add_member` raises and changes nothing. An `invited` membership cannot be deactivated through `saas_set_member_status`; it can be removed. `saas_set_member_badge` on oneself is allowed. `saas_add_member` takes only `active` or `invited`.
+18. The last-administrator rule refuses only a change that takes an organization from one or more active administrators to none. Changes to other members of an organization that already has none are allowed.
+
+19. When an Administrator deactivates or removes, through the member functions, a founding membership that a ban had already deactivated, the ban mark is cleared: lifting the ban later does not bring that member back.
+20. Nothing is copied to `profiles` for a membership that is `invited`, whichever change it is (add, role or badge), and nothing is copied when it is accepted: the invited account may belong to another company.
+21. Accepted as they are, and to be listed in the production checklist: the member functions rely on the default isolation level (READ COMMITTED), which is what the API uses; the rollback scripts assume the documented order (members before tenancy); re-applying the `drill_tenancy` file on its own after `drill_members` puts the Phase 1 enrolment function back, so `drill_members` must be applied again after it (RF-101).
+
+22. (Replaces the last sentence of criterion 8; RF-102.) The auth server creates an account in two steps inside one transaction: the row is inserted with the request's `user_metadata` and without its `app_metadata`, which is added by an update afterwards. So the enrolment, which runs at the insert, must see the marker there: an account created with `saas_org` in its `user_metadata` **or** its `app_metadata` at the insert is not enrolled in the founding organization. This is safe in the direction that matters: at that moment the key can only withhold a membership, never grant one, and after the insert `user_metadata` has no influence on anything. A reconciliation (criterion 14) still looks at `app_metadata` only, which a user cannot edit. `saas-members` sets the key in both. Proved with the real auth server on staging (P2-2 criterion 9).
+
+**D. After the fourteenth review (2026-11-24)**
+
+23. An `invited` membership of the target gives the inviting organization nothing: `shares_org_as` does not count it, so a profile is readable by another organization's Supervisor or Administrator only once its owner is, or has been, a member (active or deactivated) (RF-103).
+24. `drill_members` states the privileges of every function it creates or replaces in the same statement, so they are right whatever was there before (RF-104).
+25. (Deferred, RF-105.) The tenancy rollback would give access back to members removed or deactivated through the member functions, because the pre-tenancy rules read only the account ban. A refusal in the rollback script was written and withdrawn: three existing Phase 1 rollback tests run it on fixtures it would refuse, and those tests are not to be changed for this. Instead it is a step of the rollback procedure (see "Needs the owner"): before the tenancy rollback, ban every account that is not banned and has no active founding membership.
+26. `accept_membership` and `decline_membership` take the same organization lock as the member functions (RF-107).
+
+#### P2-2 acceptance criteria — Edge Function `saas-members` (drafted 2026-11-23; final when P2-1 is done). Owner's instruction applies: the smallest function and the smallest set of tests that cover each criterion once
+
+`supabase/functions/saas-members/` (`handler.ts`, `index.ts`). Reusable: it names no Drill table, column, role or bucket (`profiles` and the record tables included); a test checks it. `admin-users` is not changed.
+
+1. A request needs a valid session (otherwise 401) and names one organization: `org_id` as a query parameter on GET, as a body field otherwise; missing or not a uuid is 400. The caller needs an **active** membership in that organization with a role in `saas_admin_roles()`; otherwise 403, the same answer whether the organization exists or not. Being a platform administrator gives nothing here. `profiles.role` is not consulted.
+2. GET answers `{ members: [...] }`: every membership of that organization, whatever its status, and nobody else. Each: `id`, `email`, `name`, `role`, `badgeNumber`, `status`, `createdAt`, `lastSignInAt`, `records` (from `saas_member_record_count`), `isSelf`. Name and email come from the auth account; for an `invited` membership `name` is empty and `lastSignInAt` is null until the person accepts (RF-110). The list is complete however many accounts the project holds.
+3. POST `{ org_id, email, name, role, badgeNumber, password }` adds a person. A role outside `saas_roles()` is 400 before anything is created.
+   - No account has that email: `password` is required, under the same rule `admin-users` applies; the account is created confirmed, carrying the `app_metadata` marker of P2-1 criterion 8, and gets an `active` membership. 201 `{ id, outcome: 'created' }`. If the membership cannot be created the new account is deleted again; nothing is left behind.
+   - An account has that email and that email was confirmed (RF-111) (compared without regard to case, found reliably however many accounts exist): an `invited` membership and nothing else. That account's password, metadata and ban state are not touched and the request's `password` is ignored. 201 `{ id, outcome: 'invited' }` (D2-1).
+   - Already a member of this organization, whatever the status: 409, nothing changed.
+4. (A member may change their own badge; the self rule covers role, status and removal.) PATCH `{ org_id, id, action }` with `setRole` (`role`), `setBadge` (`badgeNumber`), `deactivate`, `reactivate`. DELETE `{ org_id, id }` answers `{ action: 'removed' | 'deactivated', records }`. The target must have a membership in **that** organization: any other id, existing or not, a member elsewhere or not, gets 404 "No such member", indistinguishable, and nothing is changed. Acting on oneself is 400; leaving the organization without an active administrator is 409; reactivating an `invited` membership is 409.
+5. A target who also belongs to other organizations is managed normally: only the membership in the named organization changes. No request ever bans, unbans, deletes or changes the password of an existing account (D2-5).
+6. Every membership write goes through the functions of P2-1 criterion 3, so each has its audit row; the function never writes `memberships` directly.
+7. Shape, chosen to keep the code and its tests small (2026-11-24): the whole request logic, authorization included, is `handle(req, ports)` in `handler.ts`, which imports nothing from a URL and uses no Deno global, so the gate's unit tests import it directly. Everything it needs from outside comes through `ports` (who the caller is, memberships, role lists, accounts, the P2-1 functions). `index.ts` only builds the ports with the service-role client and serves `handle`; it has no decisions of its own and is proved on staging (criterion 9). No `policy.ts` and no `_shared/saas` until a second function needs one. The unit tests cover, once each: 401, 400, 403; the list; the three POST outcomes and the clean-up when the membership cannot be created; the 404 for a target outside the organization with nothing written; the mapping of criterion 10; 500 on a failed read with nothing written; ids compared after normalising case.
+8. A failed read ends the request with 500 and one fixed message before anything is written; the cause goes to the log only. Unknown methods are 405; CORS as `admin-users`.
+10. The refusals of the P2-1 functions are mapped by their code, never by matching message text: `SM002` and `SM008` → 400; `SM003`, `SM006`, `SM007` → 409; `SM004` → 404 "No such member"; `SM005` → 400; anything else → 500 with the fixed message.
+9. Deployed to staging after the P2-1 migrations. A suite `e2e/saas/members_e2e.py` proves on staging, with real sign-ins and two organizations: every verb by each Administrator against the other organization is refused and changes nothing; Driller, Data Logger, Supervisor, a deactivated Administrator and an invited Administrator are refused; an account created for the second organization has no founding membership; adding an existing account gives `invited`, which reads nothing until `accept_membership`; deactivating a member of both organizations in one leaves the other working.
+
+#### P2-3 acceptance criteria — client foundation `src/saas` (drafted 2026-11-24)
+
+Reusable: files under `src/saas/` import nothing from the rest of `src/` and name no Drill table, role or bucket. A test in the gate checks both. Everything is unit-tested in the gate with injected dependencies (the Supabase client, `fetch`, storage); no network.
+
+1. `api.ts`: `fetchMyOrganizations()` returns the caller's memberships from `my_organizations()` as `{ orgId, name, role, status }[]`; `acceptMembership(orgId)` and `declineMembership(orgId)` call the functions of P2-1 criterion 5; `listMembers(orgId)`, `addMember(orgId, input)`, `setMemberRole`, `setMemberBadge`, `deactivateMember`, `reactivateMember`, `removeMember` call `saas-members` with the session's token and always send the organization they were given. A non-2xx answer becomes an `Error` carrying the function's message and its status.
+2. `orgContext.ts`, pure: given the memberships and the remembered choice it returns the active organization or why there is none. Only an `active` membership can be the active organization. The remembered one is kept while it is still active; with exactly one active membership that one is chosen without asking; with several and nothing valid remembered the answer is "must choose"; with none it says which of `no-membership`, `invited-only`, `deactivated` applies. The choice is remembered per signed-in user, so a second person signing in on the same browser never inherits the first one's organization.
+3. Switching: `mayActivate(orgId, memberships)` is true only for an `active` membership of the caller; the client can never make an organization active that `my_organizations()` did not return as `active`.
+
+#### P2-4 acceptance criteria — dashboard (2026-11-24)
+
+Smallest change to `src/admin/` that meets these; it uses `src/saas` and adds no second copy of its logic. Tests: the `.tsx` changes are proved by the build and by the dashboard suites on staging (P2-6), which need `saas-members` deployed, so for this task the suites are written while the backend is deployed, not before the code.
+
+1. After sign-in the dashboard reads `my_organizations()` and settles the active organization with `resolveActiveOrg`, remembering the choice per user. One active membership: no switcher. Several: a switcher in the header; choosing reloads everything shown. Nothing remembered and several active: the user picks first. No active membership: a screen that says why (no organization, deactivated, or an invitation waiting) with Sign out, and no records.
+2. An `invited` membership is shown as a notice naming the organization, with Accept and Decline (`accept_membership`, `decline_membership`); after accepting, that organization can be made active.
+3. The signed-in person's role is the role of the **active membership**, not `profiles.role`: the Crew button (Administrator) and the correction rights (Supervisor, Administrator) follow it.
+4. Lists show the active organization only: boreholes and ongoing pauses are filtered by its `org_id` (pipe records and events come by borehole). A person in two organizations never sees a row of the other one while one is active. The database still enforces isolation; this is about not mixing two of one's own organizations.
+5. Photos: a signed URL is asked for the new path `<org_id>/<author>/<file>` and, when that object does not exist, for the legacy path `<author>/<file>`.
+6. The Crew view manages memberships of the active organization through `src/saas` (`saas-members`); nothing in the dashboard calls `admin-users` any more and `crewApi.ts` goes. It shows each member's status (active, invited, deactivated); adding a person who already has an account says they were invited and must accept; removing says what happened (removed, or deactivated because they have records) and no longer claims the person cannot sign in; role change, deactivate and reactivate as today. A member can edit nobody's password.
+7. Sign-out and sign-in as another person on the same browser never carries the first person's organization over.
+
+#### P2-5 acceptance criteria — field app (2026-11-25)
+
+Smallest change that meets these. A device works for one organization at a time (proposal section 6). Nothing here changes what an installed 1.1.7 build sends or needs.
+
+1. **Active organization.** When signed in and online the app reads `my_organizations()` and settles the active organization with `resolveActiveOrg` (`src/saas`), remembered per user. One active membership: silently. Several and none remembered: the person chooses before the main screen. None: a screen that says why (as the dashboard's), showing any invitation with Accept and Decline, and Sign out. The active organization's id and the role in it are cached on the device (`getCachedOrgId()` in `src/services/auth.ts`, next to the cached user id), so the app works offline exactly as today; nothing on the write path calls the network.
+2. **Role.** The person's role in the app is the role of the active membership, not `profiles.role`; name and badge still come from the profile.
+3. **Queued work carries its organization.** `OutboxItem` gains `orgId?: string`, stamped at enqueue from the cached active organization and never changed afterwards. The record transport sends a borehole with `org_id` equal to the item's `orgId`; children are sent as today (the database takes their organization from the borehole). An item with no `orgId` (queued before the update) is sent exactly as today, with no `org_id`. Nothing is ever sent under an organization other than the one it was captured in.
+4. **Photos.** An item with an `orgId` uploads to `<org_id>/<user_id>/<file>`; one without uploads to the legacy path as today.
+5. **Pull.** The pull asks for the caller's own rows **of the active organization** (`org_id` filter added to the existing `created_by` filter), so a device never holds another organization's records, not even the same person's.
+6. **Switching.** Offered only with more than one active membership. Refused while unsent work is queued, by the same rule as signing out; it clears the local records exactly as signing out does (`clearForAccountSwitch`), then pulls the new organization's.
+7. **Losing access.** When a refresh finds no active membership, the screen of criterion 1 is shown; queued work is not destroyed. Uploads the database refuses are parked as today.
+8. Unit tests, in the existing test files, once each: the borehole row carries the item's `org_id`, and none when the item has none; the photo path for both cases; the pull filter; enqueue stamps the cached organization. The screens are proved by the build, the existing offline-sync suite on staging and the device suite (P2-7).
+
+9. (After the sixteenth review.) The app never changes the active organization by itself: when the cached one is no longer an active membership the organization screen is shown, whatever other memberships exist. Local records and parked work are cleared only from sign-out or from a choice the person made, and with parked work only after the existing confirmation (RF-114). No pull runs while no organization is settled; the first settlement on a device that holds anything, for an account with several active memberships, clears it under the same rules (RF-115). Decisions taken: an empty device with a remembered choice activates silently; a sign-in whose organizations cannot be read fails on the sign-in form and is retried there; against a backend without `my_organizations()` (`PGRST202`) the build behaves as before the change.
 
 ### Phase 1 — Tenancy in the database (approved to start 2026-11-15; production migration NOT approved)
 
@@ -289,6 +442,9 @@ Harden the enforcement after the security review (RF-010 to RF-024).
 
 | Date | Decision | By |
 |---|---|---|
+| 2026-11-25 | **Phase 3 approved, after the Phase 2 gaps** (answer "Both, gaps first" to the Lead's question). Staging only; production still needs the owner's approval of each specific action. The upgrade test on a real phone is done last. | Owner |
+| 2026-11-24 | **Keep test code minimal and do not bloat the code base.** From here each brief asks for the smallest set of tests that covers every criterion once, and the smallest implementation that meets it. Existing tests are not removed or weakened. | Owner |
+| 2026-11-23 | **Phase 2 approved** ("proceed with phase 2"). Staging only; production migrations, deployments and data changes still need the owner's approval of that specific action. | Owner |
 | 2026-11-15 | Workflow tooling goes on its own branch and pull request, separate from the SaaS phases. | Lead |
 | 2026-11-15 | The existing e2e suites are treated as production-targeting and are gated behind owner approval until Phase 0 repoints them. | Lead |
 | 2026-11-15 | Dependency audit runs in CI as informational, not blocking, until the owner decides how to handle existing advisories. | Lead |
@@ -313,11 +469,33 @@ Harden the enforcement after the security review (RF-010 to RF-024).
 - **Phase 1, before production** (nothing below has been done; each is the owner's decision):
   - Approve, or not, applying the two migrations to production and deploying `admin-users` after them. Order: `saas_core`, `drill_tenancy`, then the function. Apply in a quiet window, each file as one transaction; on `deadlock detected`, apply again. Create, ban or re-role no account while it runs. Afterwards run the consistency queries in the description of pull request 5; they must return nothing.
   - First check on production: accounts with no profile and accounts banned today (they end with no active membership); objects in `drilling-photos` shaped `<uuid>/<uuid>/…` (any would make a rollback refuse); that public signup is disabled (every new account becomes an active Driller of the founding organization).
+  - **Before any tenancy rollback once Phase 2 is applied (RF-105):** ban every account that is not banned and has no active membership in the founding organization (`select u.id, u.email from auth.users u where not coalesce(u.banned_until > now(), false) and not exists (select 1 from memberships m where m.org_id = founding_org_id() and m.user_id = u.id and m.status = 'active')`); otherwise people removed or deactivated in the dashboard get their access back. Roll back in the order `drill_members`, `saas_members`, `drill_tenancy`, `saas_core`, with `saas-members` undeployed first (RF-109). After any re-application of `drill_tenancy`, apply `drill_members` again (RF-101). Only `saas-members` may create accounts for another organization (RF-106).
   - Rollback: both scripts together; it needs the migration history repaired by hand and the previous `admin-users` redeployed. It has been proved on local databases only. Running it once on staging needs the owner's go-ahead.
+  - **Before a second organization exists on production (RF-111):** email changes must require confirmation (needs a mail sender, Phase 5) or be closed to users. Today a user can change their own email unconfirmed, and an invitation goes to whoever holds the address.
   - Rename "Founding organization" (Decision 8). Create no second organization before Phase 2's member management.
   - To run the tenant-isolation suite in CI: two more repository secrets for staging (a database URL and the service-role key), and a `test:tenant-isolation` line in `package.json`.
   - The decisions the Lead took where the criteria were silent (18 to 53) can each be changed before production.
-- `.claude/settings.json`: confirm the edit of 2026-11-17 20:38 (see "For the owner to look at").
+- `.claude/settings.json`: found on 2026-11-25 (14:44) with every line commented out again, which turns the four hooks off (the same edit as on 2026-11-17). Not made by the Lead or an agent as far as known; left as found and not committed. While it stands the Stop gate and the Bash guard do not run: the Lead runs `scripts/gate.sh` by hand.
 - **Branch protection on `main`** (require a pull request and passing CI; no force-push; no deletion). `main` is unprotected today. This is the only real control behind "agents never push to or merge into main". It also changes how the owner pushes, so it is the owner's call.
 - **The repository is public.** Consider making it private before Phase 1: it will hold the source of a commercial product and a record of its security findings.
 - Decisions 1–12 in section 14 of the proposal; Decisions 2, 3, 4 and 8 are needed before Phase 1 can finish.
+
+### P2-6 criteria (written 2026-11-25)
+
+All on staging, with real sign-ins; smallest test code, one check per rule, in the fewest files.
+
+1. The 21 suites of `npm run test:e2e` pass with the Phase 2 clients (the field app and dashboard of this branch). A suite is changed only where a recorded decision changed the behaviour it asserts, and the change is listed.
+2. `e2e/saas/members_e2e.py`, `dashboard_orgs_e2e.py` and `tenant_isolation_e2e.py` pass again after the redeploy of `saas-members`.
+3. Field app, a person with one membership: nothing new is asked; work entered offline uploads with the organization on the borehole and the photo under `<org>/<user>/`.
+4. Field app, a person active in two organizations: they must choose; they then see and upload only that organization's work; a switch is refused while work is unsent, and after a switch nothing of the first organization is on the device.
+5. A stand-in for build 1.1.7 (requests shaped as that build sends them: no `org_id`, the old photo path): a person with one membership keeps working unchanged; with two active memberships a new borehole is refused and nothing lands in the wrong organization.
+6. RF-118 live: an add for an address held by an unconfirmed account answers 409 and creates nothing.
+7. Staging ends as it was found.
+
+### P2-7 criteria (written 2026-11-25)
+
+1. The app is version 1.2.0: `package.json` 1.2.0, Android `versionName` 1.2.0 and `versionCode` 10, and wherever the app shows its own version. Nothing else in those files changes.
+2. A debug APK built from this branch with the staging project's address and publishable key installs on the emulator (`Medium_Phone`). No production address or key is in it.
+3. `npm run test:apk` and `npm run test:apk-photos` pass on the emulator against staging (the photo captured on the device lands under `<org>/<user>/`).
+4. Nothing is published: no store upload, no release signing, no web deploy.
+

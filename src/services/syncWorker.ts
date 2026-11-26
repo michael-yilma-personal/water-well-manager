@@ -48,6 +48,8 @@ const PULL_INTERVAL_MS = 5 * 60_000;
 export interface SyncWorkerDeps {
   outbox: Outbox;
   transport: OutboxTransport;
+  /** False when there is no session to send with: the drain is then skipped. */
+  hasSession?: () => Promise<boolean>;
   /** Notified after every drain so the UI can refresh its pending count. */
   onChange?: (result: DrainResult) => void;
   /**
@@ -68,6 +70,7 @@ export class SyncWorker {
   private ticker: ReturnType<typeof setInterval> | null = null;
   private pullTicker: ReturnType<typeof setInterval> | null = null;
   private pulling = false;
+  private pullAgain = false;
 
   constructor(deps: SyncWorkerDeps) {
     this.deps = deps;
@@ -137,7 +140,12 @@ export class SyncWorker {
    */
   async pullNow(): Promise<boolean> {
     if (!this.deps.pull) return false;
-    if (this.pulling) return false;
+    if (this.pulling) {
+      // What is in flight may be for the organization just left, and is then
+      // discarded: the one asked for now must still happen.
+      this.pullAgain = true;
+      return false;
+    }
 
     const status = await Network.getStatus().catch(() => ({ connected: true }));
     if (!status.connected) return false;
@@ -153,6 +161,10 @@ export class SyncWorker {
       return false;
     } finally {
       this.pulling = false;
+      if (this.pullAgain) {
+        this.pullAgain = false;
+        void this.pullNow();
+      }
     }
   }
 
@@ -174,6 +186,7 @@ export class SyncWorker {
 
     const status = await Network.getStatus().catch(() => ({ connected: true }));
     if (!status.connected) return idle;
+    if (this.deps.hasSession && !(await this.deps.hasSession())) return idle;
 
     this.draining = true;
     try {

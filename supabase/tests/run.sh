@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 #
-# Database tests for the tenancy work (SaaS Phase 1, criteria 1-12, 14, 16).
+# Database tests for the tenancy work (SaaS Phase 1, criteria 1-12, 14, 16)
+# and for member management (SaaS Phase 2, task P2-1, criteria 1-13; its
+# checks are named [P2-1 cN]).
 #
 #   supabase/tests/run.sh                 the whole suite
 #   supabase/tests/run.sh FILE.sql ...    only these test files
@@ -41,6 +43,11 @@ MIG_CORE="$SUPA/migrations/20261116000000_saas_core.sql"
 MIG_DRILL="$SUPA/migrations/20261116010000_drill_tenancy.sql"
 RB_CORE="$SUPA/rollback/20261116000000_saas_core.sql"
 RB_DRILL="$SUPA/rollback/20261116010000_drill_tenancy.sql"
+# SaaS Phase 2, task P2-1: member management.
+MIG_SAAS_MEMBERS="$SUPA/migrations/20261123000000_saas_members.sql"
+MIG_DRILL_MEMBERS="$SUPA/migrations/20261123010000_drill_members.sql"
+RB_SAAS_MEMBERS="$SUPA/rollback/20261123000000_saas_members.sql"
+RB_DRILL_MEMBERS="$SUPA/rollback/20261123010000_drill_members.sql"
 
 LABEL="${RUN_LABEL:+[$RUN_LABEL] }"
 
@@ -97,6 +104,8 @@ run_file() {
     -v ON_ERROR_STOP=0 -v ON_ERROR_ROLLBACK=on -v VERBOSITY=terse \
     -v mig_core="$MIG_CORE" -v mig_drill="$MIG_DRILL" \
     -v rollback_core="$RB_CORE" -v rollback_drill="$RB_DRILL" \
+    -v mig_saas_members="$MIG_SAAS_MEMBERS" -v mig_drill_members="$MIG_DRILL_MEMBERS" \
+    -v rollback_saas_members="$RB_SAAS_MEMBERS" -v rollback_drill_members="$RB_DRILL_MEMBERS" \
     -f "$file" >"$out" 2>"$err"
   rc=$?
 
@@ -159,6 +168,33 @@ if [ -f "$MIG_CORE" ]; then
   hits="$(sed -e 's/--.*$//' "$MIG_CORE" \
     | grep -n -E -i '(^|[^a-z_])(boreholes|pipe_records|drilling_events|shift_logs|profiles|is_admin|is_reviewer|handle_new_user|drilling[-_]photos)([^a-z_]|$)' || true)"
   roles="$(sed -e 's/--.*$//' "$MIG_CORE" \
+    | grep -n -E '(Driller|Data Logger|Supervisor|Administrator)' || true)"
+  if [ -z "$hits$roles" ]; then
+    pass "$name"
+  else
+    fail "$name :: $(printf '%s\n%s' "$hits" "$roles" | grep -v '^$' | head -n 5 | tr '\n' ';')"
+  fi
+else
+  fail "$name :: file not found"
+fi
+
+# 2b. SaaS Phase 2, task P2-1: the two member migrations and their rollback
+#     scripts exist under the agreed names, and the reusable one names nothing
+#     of Drill's (its section A). Beyond the list above: created_by is a
+#     column of Drill's record tables, and is_founding and deactivated_by_ban
+#     are columns the Drill migration adds to the foundation's tables.
+for pair in "the reusable member migration:$MIG_SAAS_MEMBERS" "the Drill member migration:$MIG_DRILL_MEMBERS" \
+            "the Drill member rollback script:$RB_DRILL_MEMBERS" "the reusable member rollback script:$RB_SAAS_MEMBERS"; do
+  what="${pair%%:*}"; need="${pair#*:}"
+  [ -f "$need" ] && pass "[P2-1] $what exists: supabase/${need#"$SUPA"/}" \
+                 || fail "[P2-1] $what exists: supabase/${need#"$SUPA"/} :: file not found"
+done
+
+name="[P2-1 A] saas_members names no Drill table, column, role, function or bucket in its code"
+if [ -f "$MIG_SAAS_MEMBERS" ]; then
+  hits="$(sed -e 's/--.*$//' "$MIG_SAAS_MEMBERS" \
+    | grep -n -E -i '(^|[^a-z_])(boreholes|pipe_records|drilling_events|shift_logs|profiles|is_admin|is_reviewer|handle_new_user|drilling[-_]photos|created_by|is_founding|deactivated_by_ban)([^a-z_]|$)' || true)"
+  roles="$(sed -e 's/--.*$//' "$MIG_SAAS_MEMBERS" \
     | grep -n -E '(Driller|Data Logger|Supervisor|Administrator)' || true)"
   if [ -z "$hits$roles" ]; then
     pass "$name"
@@ -273,6 +309,53 @@ for need in "$MIG_CORE" "$MIG_DRILL" "$RB_DRILL" "$RB_CORE"; do
     pass "$what"
   fi
 done
+
+# The same for the four files of P2-1, kept apart so that the Phase 1
+# rehearsals do not wait on them: 95_members_rollback.sql runs them inside a
+# transaction it rolls back.
+ready_members=1
+for need in "$MIG_SAAS_MEMBERS" "$MIG_DRILL_MEMBERS" "$RB_DRILL_MEMBERS" "$RB_SAAS_MEMBERS"; do
+  what="[P2-1] supabase/${need#"$SUPA"/} contains no transaction control"
+  if [ ! -f "$need" ]; then
+    fail "$what :: file not found"
+    ready_members=0
+  elif [ "$have_python" -eq 0 ]; then
+    fail "$what :: not checked, python3 is not on PATH"
+    ready_members=0
+  elif has_txn_control "$need"; then
+    fail "$what :: $(python3 "$SPLITTER" txn-control "$need" | head -n 3 | tr '\n' ';')"
+    ready_members=0
+  elif ! python3 "$SPLITTER" txn-control "$need" >/dev/null 2>&1; then
+    fail "$what :: the detector itself failed"
+    ready_members=0
+  else
+    pass "$what"
+  fi
+done
+
+# P2-1 criterion 4: the last-administrator rule with two real sessions
+# (lib/members_concurrency.py says how). What it creates is committed and
+# deleted again; its last line says whether the database is as it was.
+members_concurrency() {
+  local out="$TMP/conc.out" err="$TMP/conc.err" line n=0
+  if [ "$have_python" -eq 0 ]; then
+    fail "[P2-1 c4] the last-administrator rule under concurrency :: not checked, python3 is not on PATH"
+    return
+  fi
+  python3 "$HERE/lib/members_concurrency.py" >"$out" 2>"$err"
+  while IFS= read -r line; do
+    case "$line" in
+      "ok	"*)   n=$((n + 1)); pass "${line#ok	}" ;;
+      "FAIL	"*) n=$((n + 1)); fail "${line#FAIL	}" ;;
+      "")       ;;
+      *)        echo "# members_concurrency.py: $line" ;;
+    esac
+  done <"$out"
+  # The tool's own check, nine cases, its end and the cleanup.
+  if [ "$n" -ne 12 ] || [ -s "$err" ]; then
+    fail "[harness] concurrency: lib/members_concurrency.py printed its twelve lines and nothing else :: $n line(s); $(head -n 1 "$err" | cut -c 1-200)"
+  fi
+}
 
 # Decision 31: the Drill rollback refuses when two organizations hold records.
 rollback_refuses() {
@@ -624,9 +707,21 @@ for f in "$HERE"/sql/[0-9]*.sql; do
         fail "[c14] rollback rehearsal not run :: see the transaction-control checks above"
       fi
       ;;
+    95_members_rollback.sql)
+      if [ "$ready" -eq 1 ] && [ "$ready_members" -eq 1 ]; then
+        run_file "$f"
+      else
+        fail "[P2-1 c13] rollback of the member migrations not tried :: a migration or rollback file is missing or contains transaction control, see the checks above"
+        fail "[P2-1] second application of the member migrations not tried :: see the checks above"
+      fi
+      ;;
     *) run_file "$f" ;;
   esac
 done
+
+# 6. P2-1 criterion 4. Last, and outside any test file: it needs two sessions
+#    and committed rows, which it removes.
+members_concurrency
 
 echo "# ${LABEL}total: $total checks, $passed passed, $failed failed"
 [ "$failed" -eq 0 ]

@@ -5,25 +5,22 @@
 
 import React, { useCallback, useEffect, useState } from 'react';
 import { ArrowLeft, RefreshCw, RotateCcw, UserPlus, UserX } from 'lucide-react';
-import {
-  addCrewMember,
-  fetchCrew,
-  reactivateCrewMember,
-  changeCrewRole,
-  removeCrewMember,
-  type CrewMember,
-} from './crewApi';
+import { saas } from './saas';
+import type { Member } from '../saas/api';
 
 /**
- * Add and remove crew accounts.
+ * Add and remove the members of the active organization.
  *
- * Removing someone who has logged work deactivates them instead of deleting:
- * their pipe records name them, and erasing the account would destroy the
- * record of who drilled. The table shows the record count so the outcome is
- * predictable before the button is pressed.
+ * Removing someone who has logged work deactivates their membership instead of
+ * removing it: their pipe records name them. The table shows the record count
+ * so the outcome is predictable before the button is pressed. None of this
+ * touches the person's account: they may belong to other organizations.
  */
 
-const ROLES: CrewMember['role'][] = ['Driller', 'Data Logger', 'Supervisor', 'Administrator'];
+const ROLES = ['Driller', 'Data Logger', 'Supervisor', 'Administrator'];
+
+/** An invited person has no name here until they accept. */
+const label = (m: Member) => m.name || m.email;
 
 const ROLE_HELP: Record<string, string> = {
   Driller: 'Logs pipes on a rig. Sees only their own boreholes.',
@@ -35,7 +32,7 @@ const ROLE_HELP: Record<string, string> = {
     'Reads every crew\'s records and manages accounts. Cannot log field data.',
 };
 
-function AddForm({ onAdded }: { onAdded: () => void }) {
+function AddForm({ orgId, onAdded }: { orgId: string; onAdded: (notice: string) => void }) {
   const [open, setOpen] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -50,10 +47,15 @@ function AddForm({ onAdded }: { onAdded: () => void }) {
     setBusy(true);
     setError(null);
     try {
-      await addCrewMember({ email: email.trim(), password, name: name.trim(), role, badgeNumber: badge.trim() });
+      const added = email.trim();
+      const { outcome } = await saas.addMember(orgId, {
+        email: added, password, name: name.trim(), role, badgeNumber: badge.trim(),
+      });
       setEmail(''); setPassword(''); setName(''); setBadge(''); setRole('Driller');
       setOpen(false);
-      onAdded();
+      onAdded(outcome === 'invited'
+        ? `${added} already has an account, so they were invited. They must sign in and accept before they can see anything here. Their password was not changed.`
+        : 'Account created.');
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -117,7 +119,9 @@ function AddForm({ onAdded }: { onAdded: () => void }) {
 
       <p className="mt-3 text-[11px] text-slate-500 font-semibold">
         Give them this password directly. They sign in once on their phone where
-        there is signal, and the device stays linked afterwards.
+        there is signal, and the device stays linked afterwards. If the email
+        already has an account, the person is invited instead and keeps their
+        own password.
       </p>
 
       <div className="mt-3 flex gap-2">
@@ -134,40 +138,40 @@ function AddForm({ onAdded }: { onAdded: () => void }) {
   );
 }
 
-export function CrewView({ onBack }: { onBack: () => void }) {
-  const [crew, setCrew] = useState<CrewMember[] | null>(null);
+export function CrewView({ orgId, onBack }: { orgId: string; onBack: () => void }) {
+  const [crew, setCrew] = useState<Member[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
 
   const load = useCallback(() => {
     setBusy(true);
-    fetchCrew()
+    saas.listMembers(orgId)
       .then((c) => { setCrew(c); setError(null); })
       .catch((e) => setError(e instanceof Error ? e.message : String(e)))
       .finally(() => setBusy(false));
-  }, []);
+  }, [orgId]);
 
   useEffect(load, [load]);
 
-  const remove = async (m: CrewMember) => {
+  const remove = async (m: Member) => {
     const willDeactivate = m.records > 0;
     const message = willDeactivate
-      ? `${m.name} has logged ${m.records} record(s).\n\nTheir account will be disabled so they can no longer sign in, but their records and their name stay in the drilling log. Continue?`
-      : `${m.name} has logged nothing yet, so their account will be deleted outright. Continue?`;
+      ? `${label(m)} has logged ${m.records} record(s).\n\nTheir membership will be deactivated, so they lose access to this organization, but their records and their name stay in the drilling log. Continue?`
+      : `${label(m)} has logged nothing here, so they will be removed from this organization. Continue?`;
     if (!window.confirm(message)) return;
     try {
-      const r = await removeCrewMember(m.id);
+      const r = await saas.removeMember(orgId, m.id);
       setNotice(r.action === 'deactivated'
-        ? `${m.name} can no longer sign in. Their ${r.records} record(s) are untouched.`
-        : `${m.name} was removed.`);
+        ? `${label(m)} was deactivated in this organization because they have ${r.records} record(s) here. The records are untouched.`
+        : `${label(m)} was removed from this organization.`);
       load();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
   };
 
-  const changeRole = async (m: CrewMember, role: CrewMember['role']) => {
+  const changeRole = async (m: Member, role: string) => {
     if (role === m.role) return;
     // Administrator is the one role that changes access, in both directions,
     // so say what is about to happen before it does.
@@ -177,23 +181,23 @@ export function CrewView({ onBack }: { onBack: () => void }) {
         : m.role === 'Administrator'
           ? `\n\nThey will lose access to other crews' records and to this dashboard.`
           : `\n\nTheir access does not change, and their existing records are untouched.`;
-    if (!window.confirm(`Change ${m.name} from ${m.role} to ${role}?${warning}`)) return;
+    if (!window.confirm(`Change ${label(m)} from ${m.role} to ${role}?${warning}`)) return;
     try {
-      await changeCrewRole(m.id, role);
+      await saas.setMemberRole(orgId, m.id, role);
       // The crew list takes seconds to reload (it counts every account's
       // records); until then the select would snap back to the old role.
       setCrew((c) => c?.map((x) => (x.id === m.id ? { ...x, role } : x)) ?? c);
-      setNotice(`${m.name} is now ${role === 'Administrator' ? 'an' : 'a'} ${role}. It takes effect the next time they open the app.`);
+      setNotice(`${label(m)} is now ${role === 'Administrator' ? 'an' : 'a'} ${role}. It takes effect the next time they open the app.`);
       load();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
   };
 
-  const reactivate = async (m: CrewMember) => {
+  const reactivate = async (m: Member) => {
     try {
-      await reactivateCrewMember(m.id);
-      setNotice(`${m.name} can sign in again.`);
+      await saas.reactivateMember(orgId, m.id);
+      setNotice(`${label(m)} is active in this organization again.`);
       load();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -229,7 +233,7 @@ export function CrewView({ onBack }: { onBack: () => void }) {
           </div>
         )}
 
-        <AddForm onAdded={() => { setNotice('Account created.'); load(); }} />
+        <AddForm orgId={orgId} onAdded={(text) => { setNotice(text); load(); }} />
 
         <div className="overflow-x-auto rounded-lg border border-slate-800">
           <table className="w-full text-sm">
@@ -242,17 +246,17 @@ export function CrewView({ onBack }: { onBack: () => void }) {
             </thead>
             <tbody className="divide-y divide-slate-800">
               {(crew ?? []).map((m) => (
-                <tr key={m.id} className={m.deactivated ? 'opacity-50' : 'hover:bg-slate-900/60'}>
+                <tr key={m.id} className={m.status === 'deactivated' ? 'opacity-50' : 'hover:bg-slate-900/60'}>
                   <td className="p-3 font-black whitespace-nowrap">
-                    {m.name}{m.isSelf && <span className="ml-2 text-[10px] text-slate-500">(you)</span>}
+                    {m.name || '—'}{m.isSelf && <span className="ml-2 text-[10px] text-slate-500">(you)</span>}
                   </td>
                   <td className="p-3">{m.email}</td>
                   <td className="p-3 whitespace-nowrap">
-                    {m.isSelf || m.deactivated ? (
+                    {m.isSelf || m.status === 'deactivated' ? (
                       m.role
                     ) : (
-                      <select value={m.role} aria-label={`Role for ${m.name}`}
-                              onChange={(e) => changeRole(m, e.target.value as CrewMember['role'])}
+                      <select value={m.role} aria-label={`Role for ${label(m)}`}
+                              onChange={(e) => changeRole(m, e.target.value)}
                               className="bg-slate-900 border border-slate-700 rounded px-2 py-1 text-sm font-bold">
                         {ROLES.map((r) => <option key={r}>{r}</option>)}
                       </select>
@@ -264,21 +268,23 @@ export function CrewView({ onBack }: { onBack: () => void }) {
                     {m.lastSignInAt ? new Date(m.lastSignInAt).toLocaleString() : 'never'}
                   </td>
                   <td className="p-3 whitespace-nowrap text-xs font-black">
-                    {m.deactivated
+                    {m.status === 'deactivated'
                       ? <span className="text-amber-400">Disabled</span>
-                      : <span className="text-emerald-400">Active</span>}
+                      : m.status === 'invited'
+                        ? <span className="text-blue-300">Invited</span>
+                        : <span className="text-emerald-400">Active</span>}
                   </td>
                   <td className="p-3 text-right whitespace-nowrap">
                     {m.isSelf ? (
                       <span className="text-slate-600 text-xs">—</span>
-                    ) : m.deactivated ? (
+                    ) : m.status === 'deactivated' ? (
                       <button onClick={() => reactivate(m)}
                               className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded border border-emerald-500/40 text-emerald-300 text-xs font-black uppercase">
                         <RotateCcw className="w-3.5 h-3.5" /> Restore
                       </button>
                     ) : (
                       <button onClick={() => remove(m)}
-                              title={m.records > 0 ? 'Disables sign-in; records are kept' : 'Deletes the account'}
+                              title={m.records > 0 ? 'Deactivates the membership; records are kept' : 'Removes them from this organization'}
                               className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded border border-rose-500/40 text-rose-300 text-xs font-black uppercase">
                         <UserX className="w-3.5 h-3.5" /> {m.records > 0 ? 'Disable' : 'Delete'}
                       </button>
@@ -295,8 +301,8 @@ export function CrewView({ onBack }: { onBack: () => void }) {
 
         <p className="text-[11px] text-slate-500 font-semibold max-w-3xl">
           Someone who has logged work is disabled rather than deleted: their pipe
-          records name them, and removing the account would erase the record of
-          who drilled. Disabling is reversible.
+          records name them. Disabling is reversible. Neither changes the
+          person&apos;s account or password, or their place in any other organization.
         </p>
       </div>
     </div>

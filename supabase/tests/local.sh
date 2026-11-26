@@ -103,6 +103,23 @@
 #             deactivated, the unbanned ones active and able to insert a
 #             borehole (criterion 52).
 #
+#   member migrations (SaaS Phase 2, task P2-1; checks named [P2-1 ...])
+#             in the upgrade phase above, saas_members and drill_members are
+#             applied on top of the tenancy migrations and the legacy data
+#             before the whole suite runs, and rolled back (drill_members
+#             first) before the tenancy rollbacks, so the comparison with the
+#             pre-tenancy database covers them too.
+#   member rollback (hosted)
+#             legacy data and the tenancy migrations; then the two member
+#             migrations, twice (a second application changes nothing); then
+#             their rollback scripts, drill_members first. The catalog and
+#             the data must equal what was there before them, and the whole
+#             Phase 1 suite must pass on the result (P2-1 criterion 13).
+#   core, members
+#             saas_core and saas_members alone, nothing of Drill's: the
+#             member functions with the foundation's own roles (P2-1 section
+#             A, criteria 1 and 2), a second application, and the rollback.
+#
 # Output and exit status are as for run.sh: one line per check, a total,
 # non-zero when anything failed.
 
@@ -121,6 +138,14 @@ MIG_CORE="$MIGRATIONS/20261116000000_saas_core.sql"
 MIG_DRILL="$MIGRATIONS/20261116010000_drill_tenancy.sql"
 RB_CORE="$SUPA/rollback/20261116000000_saas_core.sql"
 RB_DRILL="$SUPA/rollback/20261116010000_drill_tenancy.sql"
+
+# The member migrations of SaaS Phase 2 (task P2-1) and their rollback
+# scripts. Everything that sorts before the first is "Phase 1 or older".
+FIRST_MEMBERS="20261123000000"
+MIG_SAAS_MEMBERS="$MIGRATIONS/20261123000000_saas_members.sql"
+MIG_DRILL_MEMBERS="$MIGRATIONS/20261123010000_drill_members.sql"
+RB_SAAS_MEMBERS="$SUPA/rollback/20261123000000_saas_members.sql"
+RB_DRILL_MEMBERS="$SUPA/rollback/20261123010000_drill_members.sql"
 
 for tool in initdb pg_ctl postgres psql python3; do
   command -v "$tool" >/dev/null 2>&1 || { echo "local.sh: $tool is not on PATH (brew install postgresql@17)." >&2; exit 2; }
@@ -290,7 +315,7 @@ phase_fresh() {
 # --- upgrade: legacy data first, then the tenancy migrations, then rollback ---
 
 phase_upgrade() {
-  local world="$1" db="upgrade_$1" f d s tbl what migrated rolled_back
+  local world="$1" db="upgrade_$1" f d s tbl what migrated rolled_back members_saas members_drill
   PHASE="$world, upgrade"
   new_db "$db"
   load_stub "$db" "$world" || fail "[harness] the Supabase stand-in loads :: $(first_error)"
@@ -333,10 +358,43 @@ phase_upgrade() {
     fi
   done
 
+  # SaaS Phase 2, task P2-1: the member migrations, on top of the tenancy
+  # migrations and the legacy data. The suite below holds their tests.
+  members_saas=0
+  members_drill=0
+  if [ "$migrated" -eq 1 ]; then
+    apply_checked "$db" "$MIG_SAAS_MEMBERS"  "[P2-1] saas_members applies on top of existing data" && members_saas=1
+    apply_checked "$db" "$MIG_DRILL_MEMBERS" "[P2-1] drill_members applies on top of existing data" && members_drill=1
+  else
+    fail "[P2-1] saas_members applies on top of existing data :: not run, the tenancy migrations did not apply"
+    fail "[P2-1] drill_members applies on top of existing data :: not run, the tenancy migrations did not apply"
+  fi
+  what="[P2-1] the member migrations kept every existing row, account and photo unchanged"
+  if [ "$members_saas" -eq 1 ] && [ "$members_drill" -eq 1 ] && digest "$db" "$WORK/digest.members"; then
+    d="$(diff "$WORK/digest.before" "$WORK/digest.members")"
+    if [ -z "$d" ]; then pass "$what"; else fail "$what :: $(printf '%s' "$d" | grep '^[<>]' | tr '\n' ';')"; fi
+  else
+    fail "$what :: not checked, the member migrations did not apply"
+  fi
+
   # The whole suite again, now with the legacy data underneath it.
   PHASE="$world, upgrade, full suite"
   suite "$db"
   PHASE="$world, upgrade"
+
+  # P2-1 criterion 13: the member migrations are rolled back first, the Drill
+  # one before the reusable one. What follows (criterion 14) then compares
+  # with the pre-tenancy database, so anything they leave behind shows there.
+  if [ "$members_drill" -eq 1 ]; then
+    apply_checked "$db" "$RB_DRILL_MEMBERS" "[P2-1 c13] the drill_members rollback script runs on the migrated database with its data"
+  else
+    fail "[P2-1 c13] the drill_members rollback script runs on the migrated database with its data :: not run, drill_members did not apply"
+  fi
+  if [ "$members_saas" -eq 1 ]; then
+    apply_checked "$db" "$RB_SAAS_MEMBERS" "[P2-1 c13] the saas_members rollback script runs after it"
+  else
+    fail "[P2-1 c13] the saas_members rollback script runs after it :: not run, saas_members did not apply"
+  fi
 
   # Criterion 14. Checking the state after a rollback proves nothing unless
   # the migrations were really applied and the rollback scripts really ran.
@@ -1448,7 +1506,123 @@ SQL
   if [ "$got" = "4 and 2 of 6" ]; then pass "$what"; else fail "$what :: found: $got"; fi
 }
 
+# --- member rollback: SaaS Phase 2, task P2-1, criterion 13 ---------------------
+#
+# "After both, the schema and behaviour are those of Phase 1 (its database
+# tests pass)." A database with legacy data and the tenancy migrations is
+# looked at before the member migrations and after their rollbacks, and the
+# Phase 1 test files (the ones run.sh ran before P2-1) are run on the result.
+# In between, the two migrations are applied a second time: "each safe to
+# apply twice".
+
+PHASE1_FILES="05_legacy_client 10_structure 15_privileges 20_triggers 25_mirroring 26_mirror_guards 27_ban_mark 30_core_access 40_records_matrix 45_profiles 60_storage 70_schema_check 80_reapply_in_transaction 85_drill_rollback_alone 86_reapply_after_drill_rollback 87_reapply_first_application 90_rollback_in_transaction"
+
+phase_members_rollback() {
+  local db="members_rb" f s what d ok=1 applied=1 twice=1 rolled=1 before after files=""
+  local rows="select coalesce(md5(string_agg(x, '|' order by x)), 'none') from (select 'o:' || o::text as x from public.organizations o union all select 'm:' || m::text from public.memberships m union all select 'p:' || p::text from public.profiles p) r"
+  PHASE="hosted, member rollback"
+  new_db "$db"
+  load_stub "$db" hosted || { fail "[harness] the Supabase stand-in loads :: $(first_error)"; ok=0; }
+  while IFS= read -r f; do
+    apply "$db" "$f" || { fail "[harness] $(basename "$f") applies :: $(first_error)"; ok=0; }
+  done < <(pre_tenancy_migrations)
+  apply "$db" "$HERE/upgrade/seed_legacy.sql" || { fail "[harness] the legacy data loads :: $(first_error)"; ok=0; }
+  for f in "$MIGRATIONS"/*.sql; do
+    if [ ! "$(basename "$f")" \< "$FIRST_TENANCY" ] && [ "$(basename "$f")" \< "$FIRST_MEMBERS" ]; then
+      apply "$db" "$f" || { fail "[harness] $(basename "$f") applies :: $(first_error)"; ok=0; }
+    fi
+  done
+  rm -f "$WORK"/members.*
+  snapshot "$db" "$WORK/members.before" || { fail "[harness] catalog snapshot before the member migrations :: $(head -n 1 "$WORK/snap.err")"; ok=0; }
+  digest "$db" "$WORK/members.digest.before" || { fail "[harness] data digest before the member migrations :: $(head -n 1 "$WORK/digest.err")"; ok=0; }
+  before="$(psql -X -q -At -d "$db" -c "$rows" 2>/dev/null)"
+
+  if [ "$ok" -eq 1 ]; then
+    apply_checked "$db" "$MIG_SAAS_MEMBERS"  "[P2-1] saas_members applies on a database with the tenancy migrations and data" || applied=0
+    apply_checked "$db" "$MIG_DRILL_MEMBERS" "[P2-1] drill_members applies after it" || applied=0
+  else
+    fail "[P2-1] saas_members applies on a database with the tenancy migrations and data :: not run, the database could not be prepared"
+    fail "[P2-1] drill_members applies after it :: not run, the database could not be prepared"
+    applied=0
+  fi
+
+  # A second application of each.
+  if [ "$applied" -eq 1 ]; then
+    snapshot "$db" "$WORK/members.1" || fail "[harness] catalog snapshot after the member migrations :: $(head -n 1 "$WORK/snap.err")"
+    apply_checked "$db" "$MIG_SAAS_MEMBERS"  "[P2-1] saas_members applies a second time without error" || twice=0
+    apply_checked "$db" "$MIG_DRILL_MEMBERS" "[P2-1] drill_members applies a second time without error" || twice=0
+  else
+    fail "[P2-1] saas_members applies a second time without error :: not run, the first application failed"
+    fail "[P2-1] drill_members applies a second time without error :: not run, the first application failed"
+    twice=0
+  fi
+  if [ "$twice" -eq 1 ] && snapshot "$db" "$WORK/members.2"; then
+    for s in $SECTIONS; do
+      same_section "$s" "$WORK/members.1" "$WORK/members.2" "[P2-1] a second application of the member migrations leaves the $s unchanged"
+    done
+  else
+    for s in $SECTIONS; do
+      fail "[P2-1] a second application of the member migrations leaves the $s unchanged :: not checked"
+    done
+  fi
+  what="[P2-1] applied twice, the member migrations changed no organization, membership or profile row, and no record, account or photo"
+  after="$(psql -X -q -At -d "$db" -c "$rows" 2>/dev/null)"
+  if [ "$twice" -eq 1 ] && digest "$db" "$WORK/members.digest.applied"; then
+    d="$(diff "$WORK/members.digest.before" "$WORK/members.digest.applied")"
+    if [ -z "$d" ] && [ -n "$before" ] && [ "$before" != "none" ] && [ "$before" = "$after" ]; then
+      pass "$what"
+    else
+      fail "$what :: $(printf '%s' "$d" | grep '^[<>]' | tr '\n' ';') organizations, memberships and profiles: $before before, $after after"
+    fi
+  else
+    fail "$what :: not checked, the member migrations did not apply twice"
+  fi
+
+  # Criterion 13: drill_members first, then saas_members.
+  if [ "$applied" -eq 1 ]; then
+    apply_checked "$db" "$RB_DRILL_MEMBERS" "[P2-1 c13] the drill_members rollback script runs" || rolled=0
+    apply_checked "$db" "$RB_SAAS_MEMBERS"  "[P2-1 c13] the saas_members rollback script runs after it" || rolled=0
+  else
+    fail "[P2-1 c13] the drill_members rollback script runs :: not run, the member migrations did not apply"
+    fail "[P2-1 c13] the saas_members rollback script runs after it :: not run, the member migrations did not apply"
+    rolled=0
+  fi
+  if [ "$rolled" -eq 1 ] && snapshot "$db" "$WORK/members.after"; then
+    for s in $SECTIONS; do
+      same_section "$s" "$WORK/members.before" "$WORK/members.after" "[P2-1 c13] after the two member rollbacks, the $s are exactly those of Phase 1"
+    done
+  else
+    for s in $SECTIONS; do
+      fail "[P2-1 c13] after the two member rollbacks, the $s are exactly those of Phase 1 :: not checked, there was no rollback to check"
+    done
+  fi
+  what="[P2-1 c13] after the two member rollbacks, every organization, membership, profile, record, account and photo is what it was before the member migrations"
+  after="$(psql -X -q -At -d "$db" -c "$rows" 2>/dev/null)"
+  if [ "$rolled" -eq 1 ] && digest "$db" "$WORK/members.digest.after"; then
+    d="$(diff "$WORK/members.digest.before" "$WORK/members.digest.after")"
+    if [ -z "$d" ] && [ -n "$before" ] && [ "$before" != "none" ] && [ "$before" = "$after" ]; then
+      pass "$what"
+    else
+      fail "$what :: $(printf '%s' "$d" | grep '^[<>]' | tr '\n' ';') organizations, memberships and profiles: $before before, $after after"
+    fi
+  else
+    fail "$what :: not checked, there was no rollback to check"
+  fi
+
+  # "Its database tests pass": the legacy data's own checks, then every
+  # Phase 1 test file, on the rolled-back database.
+  if [ "$rolled" -eq 1 ]; then
+    PHASE="hosted, member rollback, Phase 1 suite"
+    for f in $PHASE1_FILES; do files="$files $HERE/sql/$f.sql"; done
+    # shellcheck disable=SC2086
+    suite "$db" "$HERE/upgrade/after_migration.sql" $files
+  else
+    fail "[P2-1 c13] after the two member rollbacks, the Phase 1 database tests pass :: not run, there was no rollback to check"
+  fi
+}
+
 phase_statement_by_statement
+phase_members_rollback
 phase_rollback_statement_by_statement
 phase_rollback_guard
 phase_rollback_guard_members
@@ -1499,6 +1673,39 @@ else
   fail "[c4] a second application keeps existing rows :: not checked"
 fi
 suite core "$HERE/core/core_only.sql"
+
+# --- core, members: saas_members on the foundation alone (P2-1, section A) ----
+
+PHASE="core, members"
+if [ -s "$WORK/core.1" ] && apply_checked core "$MIG_SAAS_MEMBERS" "[P2-1 A] saas_members applies to a database with the foundation alone and nothing of Drill's"; then
+  snapshot core "$WORK/core.m1" || fail "[harness] catalog snapshot of the foundation with saas_members :: $(head -n 1 "$WORK/snap.err")"
+  if apply_checked core "$MIG_SAAS_MEMBERS" "[P2-1] saas_members applies a second time without error"; then
+    snapshot core "$WORK/core.m2" || fail "[harness] catalog snapshot after the second application :: $(head -n 1 "$WORK/snap.err")"
+    for s in $SECTIONS; do
+      same_section "$s" "$WORK/core.m1" "$WORK/core.m2" "[P2-1] a second application of saas_members leaves the $s unchanged"
+    done
+  else
+    for s in $SECTIONS; do
+      fail "[P2-1] a second application of saas_members leaves the $s unchanged :: not checked"
+    done
+  fi
+  suite core "$HERE/core/members_core_only.sql"
+  if apply_checked core "$RB_SAAS_MEMBERS" "[P2-1 c13] the saas_members rollback script runs on the foundation alone"; then
+    snapshot core "$WORK/core.m3" || fail "[harness] catalog snapshot after the saas_members rollback :: $(head -n 1 "$WORK/snap.err")"
+    for s in $SECTIONS; do
+      same_section "$s" "$WORK/core.1" "$WORK/core.m3" "[P2-1 c13] after the saas_members rollback, the foundation's $s are what they were"
+    done
+    PHASE="core, members rolled back"
+    suite core "$HERE/core/core_only.sql"
+  else
+    for s in $SECTIONS; do
+      fail "[P2-1 c13] after the saas_members rollback, the foundation's $s are what they were :: not checked"
+    done
+    fail "[P2-1 c13] after the saas_members rollback, the foundation alone behaves as before :: not checked"
+  fi
+else
+  fail "[P2-1 A] saas_members on the foundation alone :: not checked, saas_core or saas_members did not apply"
+fi
 
 # --- Result -------------------------------------------------------------------
 

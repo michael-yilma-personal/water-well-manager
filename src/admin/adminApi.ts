@@ -22,6 +22,9 @@ import { correctionRowFor, type PipeCorrection } from '../services/pipeCorrectio
  * every crew's rows, a driller's token sees only their own. The dashboard sends
  * no filter of its own for that, so a misconfigured role cannot leak data
  * through a forgotten `where` clause.
+ *
+ * The one filter it does send is the active organization: someone who belongs
+ * to two may read both, and the lists must not mix them.
  */
 
 function client() {
@@ -37,10 +40,11 @@ export interface AdminBorehole extends Borehole {
   receivedAt: string;
 }
 
-export async function fetchBoreholes(): Promise<AdminBorehole[]> {
+export async function fetchBoreholes(orgId: string): Promise<AdminBorehole[]> {
   const { data, error } = await client()
     .from('boreholes')
     .select('*')
+    .eq('org_id', orgId)
     .order('received_at', { ascending: false });
   if (error) throw new Error(error.message);
 
@@ -130,10 +134,11 @@ export function isOngoingPause(e: DrillingEvent & { deletedAt?: string | null })
  * details.resumedAt when they resume, end or cancel the pipe - so an open one
  * means the rig was still stopped when the phone last had signal.
  */
-export async function fetchOngoingPauses(): Promise<Map<string, AdminEvent>> {
+export async function fetchOngoingPauses(orgId: string): Promise<Map<string, AdminEvent>> {
   const { data, error } = await client()
     .from('drilling_events')
     .select('*')
+    .eq('org_id', orgId)
     .eq('type', 'Drilling Paused')
     .is('deleted_at', null)
     .is('details->>resumedAt', null)
@@ -173,19 +178,25 @@ export async function fetchProfiles(): Promise<Map<string, Profile>> {
  * is requested by default: it is roughly a thirtieth of the full image, and the
  * difference is what keeps a month of dashboard browsing inside the free tier's
  * egress allowance.
+ *
+ * Photos are stored under `<org>/<author>/<file>`; the ones uploaded before
+ * organizations existed (and by installed older builds) are under
+ * `<author>/<file>`, so that path is tried when the first has no object.
  */
 export async function signedPhotoUrl(
+  orgId: string,
   createdBy: string,
   fileName: string,
   variant: 'thumb' | 'full' = 'thumb'
 ): Promise<string | null> {
   const name =
     variant === 'thumb' ? fileName.replace(/\.jpg$/i, '_thumb.jpg') : fileName;
-  const { data, error } = await client()
-    .storage.from(PHOTO_BUCKET)
-    .createSignedUrl(`${createdBy}/${name}`, 3600);
-  if (error) return null;
-  return data?.signedUrl ?? null;
+  const bucket = client().storage.from(PHOTO_BUCKET);
+  for (const path of [`${orgId}/${createdBy}/${name}`, `${createdBy}/${name}`]) {
+    const { data, error } = await bucket.createSignedUrl(path, 3600);
+    if (!error && data?.signedUrl) return data.signedUrl;
+  }
+  return null;
 }
 
 /**

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createSupabaseTransport } from './syncTransport';
-import type { OutboxItem } from './outbox';
+import { NoSessionError, type OutboxItem } from './outbox';
 import type { PipeRecord } from '../types';
 
 const UID = '11111111-2222-3333-4444-555555555555';
@@ -116,6 +116,7 @@ test('no session is a transient failure - the driller logged offline for days', 
 
   await assert.rejects(send(item()), (err: Error) => {
     assert.match(err.message, /no active session/);
+    assert.ok(err instanceof NoSessionError, 'not counted as an attempt (RF-125)');
     assert.notEqual((err as { permanent?: boolean }).permanent, true, 'must retry, not park');
     return true;
   });
@@ -156,4 +157,41 @@ test('an unconfigured build fails without pretending to sync', async () => {
     getUserId: async () => UID,
   });
   await assert.rejects(send(item()), /not configured/);
+});
+
+// --- P2-5: queued work carries its organization ------------------------------
+
+const ORG = '99999999-0000-4000-8000-000000000001';
+
+async function sentRow(over: Partial<OutboxItem> & { orgId?: string }) {
+  const fake = fakeClient();
+  const send = createSupabaseTransport({
+    getClient: () => fake.client as never,
+    getUserId: async () => UID,
+  });
+  await send(item(over));
+  assert.equal(fake.calls.length, 1);
+  return fake.calls[0].arg as Record<string, unknown>;
+}
+
+const boreholeItem = {
+  entity: 'borehole' as const,
+  entityId: 'aaaaaaaa-0000-0000-0000-000000000001',
+  payload: { id: 'aaaaaaaa-0000-0000-0000-000000000001', name: 'BH-1' },
+};
+
+test('a borehole is sent under the organization it was captured in', async () => {
+  const row = await sentRow({ ...boreholeItem, orgId: ORG });
+  assert.equal(row.org_id, ORG);
+  assert.equal(row.created_by, UID, 'the author is still stamped');
+});
+
+test('a borehole queued before the update is sent with no org_id at all', async () => {
+  const row = await sentRow(boreholeItem);
+  assert.equal('org_id' in row, false, JSON.stringify(Object.keys(row)));
+});
+
+test('a child row never carries org_id, even when its item has an organization', async () => {
+  const row = await sentRow({ orgId: ORG });
+  assert.equal('org_id' in row, false, 'the database takes it from the borehole');
 });

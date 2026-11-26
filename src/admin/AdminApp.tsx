@@ -30,10 +30,13 @@ import {
   type AdminPipeRecord,
   type Profile,
 } from './adminApi';
-import { signIn, signOut, getSession, fetchMyProfile } from '../services/auth';
+import { signIn, signOut, getSession } from '../services/auth';
 import { EditPipeModal } from '../components/modals/EditPipeModal';
 import { CrewView } from './CrewView';
 import { isSupabaseConfigured } from '../services/supabaseClient';
+import { FORBIDDEN_EVENT, saas } from './saas';
+import type { Membership } from '../saas/api';
+import { mayActivate, rememberOrg, rememberedOrg, resolveActiveOrg } from '../saas/orgContext';
 import {
   generateBoreholeExcelReport,
   generateShiftReportPDF,
@@ -50,7 +53,10 @@ import {
  * both who and which columns; the Edit button only mirrors it.
  */
 
-/** Who is signed in to the dashboard, for deciding what to offer. */
+/**
+ * Who is signed in to the dashboard, for deciding what to offer. The role is
+ * the one held in the active organization, not the account-wide profile role.
+ */
 interface Me {
   id: string;
   role: string;
@@ -165,21 +171,21 @@ function PausedBadge({ pause }: { pause: AdminEvent }) {
   );
 }
 
-function EventPhoto({ event }: { event: AdminEvent }) {
+function EventPhoto({ event, orgId }: { event: AdminEvent; orgId: string }) {
   const [url, setUrl] = useState<string | null>(null);
   const [full, setFull] = useState<string | null>(null);
 
   useEffect(() => {
     let alive = true;
     if (event.photoPath) {
-      signedPhotoUrl(event.createdBy, event.photoPath, 'thumb').then((u) => {
+      signedPhotoUrl(orgId, event.createdBy, event.photoPath, 'thumb').then((u) => {
         if (alive) setUrl(u);
       });
     }
     return () => {
       alive = false;
     };
-  }, [event.photoPath, event.createdBy]);
+  }, [event.photoPath, event.createdBy, orgId]);
 
   if (!event.photoPath) return <span className="text-slate-600">—</span>;
   if (!url) return <span className="text-slate-500 text-xs">loading…</span>;
@@ -190,7 +196,7 @@ function EventPhoto({ event }: { event: AdminEvent }) {
         src={url}
         alt="Site photo"
         title="Click to view full size"
-        onClick={async () => setFull(await signedPhotoUrl(event.createdBy, event.photoPath!, 'full'))}
+        onClick={async () => setFull(await signedPhotoUrl(orgId, event.createdBy, event.photoPath!, 'full'))}
         className="h-12 w-16 object-cover rounded border border-slate-600 cursor-zoom-in"
       />
       {full && (
@@ -207,11 +213,13 @@ function EventPhoto({ event }: { event: AdminEvent }) {
 
 function BoreholeDetail({
   borehole,
+  orgId,
   profiles,
   me,
   onBack,
 }: {
   borehole: AdminBorehole;
+  orgId: string;
   profiles: Map<string, Profile>;
   me: Me | null;
   onBack: () => void;
@@ -462,7 +470,7 @@ function BoreholeDetail({
                   </td>
                   <td className="p-2.5 whitespace-nowrap">{e.operator}</td>
                   <td className="p-2.5">
-                    <EventPhoto event={e} />
+                    <EventPhoto event={e} orgId={orgId} />
                   </td>
                 </tr>
               ))}
@@ -482,11 +490,18 @@ function BoreholeDetail({
 }
 
 function BoreholeList({
+  orgId,
+  switcher,
+  notice,
   onOpen,
   profiles,
   onSignOut,
   onOpenCrew,
 }: {
+  /** The active organization: the only one whose rows are listed. */
+  orgId: string;
+  switcher?: React.ReactNode;
+  notice?: React.ReactNode;
   onOpen: (b: AdminBorehole) => void;
   profiles: Map<string, Profile>;
   onSignOut: () => void;
@@ -502,12 +517,12 @@ function BoreholeList({
   const load = useCallback(() => {
     setBusy(true);
     // A failed pause lookup must not hide the boreholes themselves.
-    fetchOngoingPauses().then(setPauses).catch(() => setPauses(new Map()));
-    fetchBoreholes()
+    fetchOngoingPauses(orgId).then(setPauses).catch(() => setPauses(new Map()));
+    fetchBoreholes(orgId)
       .then(setRows)
       .catch((e) => setError(String(e)))
       .finally(() => setBusy(false));
-  }, []);
+  }, [orgId]);
 
   useEffect(load, [load]);
 
@@ -528,6 +543,7 @@ function BoreholeList({
           Every borehole reported from the field
         </span>
         <div className="ml-auto flex items-center gap-2">
+          {switcher}
           <div className="relative">
             <Search className="w-4 h-4 absolute left-2.5 top-2.5 text-slate-500" />
             <input
@@ -567,6 +583,8 @@ function BoreholeList({
           {error}
         </div>
       )}
+
+      {notice && <div className="px-6 pt-6">{notice}</div>}
 
       <div className="p-6">
         <div className="overflow-x-auto rounded-lg border border-slate-800">
@@ -631,32 +649,239 @@ function BoreholeList({
   );
 }
 
+/** Invitations waiting for the signed-in person: nothing is shared until they accept. */
+function Invitations({
+  memberships,
+  onAnswer,
+}: {
+  memberships: Membership[];
+  onAnswer: (orgId: string, accept: boolean) => Promise<void>;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const invited = memberships.filter((m) => m.status === 'invited');
+  if (invited.length === 0) return null;
+
+  const answer = async (orgId: string, accept: boolean) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await onAnswer(orgId, accept);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="flex flex-col gap-2">
+      {invited.map((m) => (
+        <div
+          key={m.orgId}
+          className="p-3 rounded border border-blue-500/40 bg-blue-500/10 text-blue-200 text-sm font-bold flex items-center gap-3 flex-wrap"
+        >
+          <span>
+            You have been invited to join {m.name} as {m.role}.
+          </span>
+          <button
+            onClick={() => answer(m.orgId, true)}
+            disabled={busy}
+            className="px-3 py-1.5 rounded bg-[#FFD700] text-black text-xs font-black uppercase disabled:opacity-50"
+          >
+            Accept
+          </button>
+          <button
+            onClick={() => answer(m.orgId, false)}
+            disabled={busy}
+            className="px-3 py-1.5 rounded border border-slate-600 text-slate-300 text-xs font-black uppercase disabled:opacity-50"
+          >
+            Decline
+          </button>
+          <span className="basis-full text-xs font-semibold text-blue-200/80">
+            A phone still on app version 1.1.7 stops uploading new boreholes once you belong to two
+            organizations, until the app is updated.
+          </span>
+        </div>
+      ))}
+      {error && (
+        <p className="text-xs font-bold text-rose-400 bg-rose-500/10 border border-rose-500/30 rounded p-2">
+          {error}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** Shown instead of any record while no organization is active. */
+function OrgGate({
+  message,
+  choices,
+  onChoose,
+  invitations,
+  onSignOut,
+}: {
+  message: string;
+  choices: Membership[];
+  onChoose: (orgId: string) => void;
+  invitations?: React.ReactNode;
+  onSignOut: () => void;
+}) {
+  return (
+    <div className="min-h-screen bg-slate-950 text-white flex items-center justify-center p-6">
+      <div className="w-full max-w-md flex flex-col gap-3">
+        <h1 className="text-2xl font-black tracking-tight">Drilling Records</h1>
+        <p className="text-sm text-slate-400 font-semibold">{message}</p>
+        {choices.map((m) => (
+          <button
+            key={m.orgId}
+            onClick={() => onChoose(m.orgId)}
+            className="p-3 rounded-lg border-2 border-white/20 bg-black text-left font-black"
+          >
+            {m.name}
+            <span className="ml-2 text-xs text-slate-400 font-semibold">{m.role}</span>
+          </button>
+        ))}
+        {invitations}
+        <button
+          onClick={onSignOut}
+          className="self-start flex items-center gap-1.5 px-3 py-2 rounded bg-slate-800 border border-slate-700 text-xs font-black uppercase"
+        >
+          <LogOut className="w-4 h-4" /> Sign out
+        </button>
+      </div>
+    </div>
+  );
+}
+
+const NO_ORG_MESSAGE = {
+  'no-membership':
+    'This account does not belong to any organization. Ask an Administrator to add you.',
+  'invited-only':
+    'You have an invitation waiting. Accept it to see that organization\'s records.',
+  deactivated:
+    'Your membership has been deactivated. Ask an Administrator of your organization to restore it.',
+};
+
 export default function AdminApp() {
   const [session, setSession] = useSession();
   const [selected, setSelected] = useState<AdminBorehole | null>(null);
   const [showCrew, setShowCrew] = useState(false);
   const [profiles, setProfiles] = useState<Map<string, Profile>>(new Map());
-  const [me, setMe] = useState<Me | null>(null);
+  // The signed-in person's memberships, as the server returned them.
+  const [orgs, setOrgs] = useState<{ userId: string; memberships: Membership[] } | null>(null);
+  const [orgError, setOrgError] = useState<string | null>(null);
+  // The organization picked in this session; the stored choice is per user.
+  const [chosen, setChosen] = useState<string | null>(null);
+  const [orgReload, setOrgReload] = useState(0);
 
   useEffect(() => {
     if (session !== 'in') return;
-    fetchProfiles().then(setProfiles).catch(() => {});
-    fetchMyProfile()
-      .then((p) => setMe(p ? { id: p.id, role: p.role } : null))
-      .catch(() => setMe(null));
-  }, [session]);
+    let alive = true;
+    fetchProfiles().then((p) => alive && setProfiles(p)).catch(() => {});
+    (async () => {
+      try {
+        const s = await getSession();
+        if (!s) throw new Error('Your session has expired - sign in again');
+        const memberships = await saas.fetchMyOrganizations();
+        if (!alive) return;
+        setOrgs({ userId: s.user.id, memberships });
+        setOrgError(null);
+      } catch (e) {
+        if (alive) setOrgError(e instanceof Error ? e.message : String(e));
+      }
+    })();
+    // A result that arrives after sign-out must not reach the next person.
+    return () => {
+      alive = false;
+    };
+  }, [session, orgReload]);
+
+  // A refusal means the role or membership changed since sign-in: read them again.
+  useEffect(() => {
+    const reload = () => setOrgReload((k) => k + 1);
+    window.addEventListener(FORBIDDEN_EVENT, reload);
+    return () => window.removeEventListener(FORBIDDEN_EVENT, reload);
+  }, []);
+
+  const leave = async () => {
+    await signOut();
+    setOrgs(null);
+    setOrgError(null);
+    setChosen(null);
+    setSelected(null);
+    setShowCrew(false);
+    setProfiles(new Map());
+    setSession('out');
+  };
 
   if (session === 'checking') {
     return <div className="min-h-screen bg-slate-950 text-slate-500 grid place-items-center">Loading…</div>;
   }
   if (session === 'out') return <SignIn onIn={() => setSession('in')} />;
 
-  if (showCrew) return <CrewView onBack={() => setShowCrew(false)} />;
+  if (!orgs) {
+    return orgError ? (
+      <OrgGate message={orgError} choices={[]} onChoose={() => {}} onSignOut={leave} />
+    ) : (
+      <div className="min-h-screen bg-slate-950 text-slate-500 grid place-items-center">Loading…</div>
+    );
+  }
+
+  const resolved = resolveActiveOrg(
+    orgs.memberships,
+    chosen ?? rememberedOrg(localStorage, orgs.userId)
+  );
+  const active = orgs.memberships.filter((m) => m.status === 'active');
+  const current =
+    resolved.kind === 'active' ? active.find((m) => m.orgId === resolved.orgId) : undefined;
+
+  const choose = (orgId: string) => {
+    if (!mayActivate(orgId, orgs.memberships)) return;
+    rememberOrg(localStorage, orgs.userId, orgId);
+    setChosen(orgId);
+    setSelected(null);
+    setShowCrew(false);
+    setOrgReload((k) => k + 1);
+  };
+
+  const invitations = (
+    <Invitations
+      memberships={orgs.memberships}
+      onAnswer={async (orgId, accept) => {
+        // Accepting must not move the person out of the organization on screen.
+        if (current) setChosen(current.orgId);
+        await (accept ? saas.acceptMembership(orgId) : saas.declineMembership(orgId));
+        setOrgReload((k) => k + 1);
+      }}
+    />
+  );
+
+  if (!current) {
+    return (
+      <OrgGate
+        message={
+          resolved.kind === 'none' ? NO_ORG_MESSAGE[resolved.reason] : 'Choose an organization.'
+        }
+        choices={resolved.kind === 'choose' ? active : []}
+        onChoose={choose}
+        invitations={invitations}
+        onSignOut={leave}
+      />
+    );
+  }
+
+  const me: Me = { id: orgs.userId, role: current.role };
+
+  if (showCrew && me.role === 'Administrator') {
+    return <CrewView key={current.orgId} orgId={current.orgId} onBack={() => setShowCrew(false)} />;
+  }
 
   if (selected) {
     return (
       <BoreholeDetail
         borehole={selected}
+        orgId={current.orgId}
         profiles={profiles}
         me={me}
         onBack={() => setSelected(null)}
@@ -665,13 +890,29 @@ export default function AdminApp() {
   }
   return (
     <BoreholeList
+      key={current.orgId}
+      orgId={current.orgId}
+      switcher={
+        active.length > 1 && (
+          <select
+            aria-label="Organization"
+            value={current.orgId}
+            onChange={(e) => choose(e.target.value)}
+            className="px-3 py-2 rounded bg-slate-800 border border-slate-700 text-sm font-bold"
+          >
+            {active.map((m) => (
+              <option key={m.orgId} value={m.orgId}>
+                {m.name}
+              </option>
+            ))}
+          </select>
+        )
+      }
+      notice={orgs.memberships.some((m) => m.status === 'invited') ? invitations : undefined}
       profiles={profiles}
       onOpen={setSelected}
-      onOpenCrew={me?.role === 'Administrator' ? () => setShowCrew(true) : undefined}
-      onSignOut={async () => {
-        await signOut();
-        setSession('out');
-      }}
+      onOpenCrew={me.role === 'Administrator' ? () => setShowCrew(true) : undefined}
+      onSignOut={leave}
     />
   );
 }

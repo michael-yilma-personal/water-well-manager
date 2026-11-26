@@ -4,15 +4,16 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { PermanentSyncError, type OutboxItem } from './outbox';
+import { NoSessionError, PermanentSyncError, type OutboxItem } from './outbox';
 import { PHOTO_BUCKET } from './supabaseClient';
 import { deleteLocalPhoto, photoNames, readLocalPhoto } from './photos';
 
 /**
  * Upload a captured photo to Supabase Storage.
  *
- * Objects are keyed `<uid>/<filename>` because the bucket policy authorises on
- * the leading folder - that is what stops one crew reading another's photos.
+ * Objects are keyed `<org>/<uid>/<filename>` because the bucket policy
+ * authorises on the leading folders - that is what stops one crew reading
+ * another's photos. A photo queued before organizations keeps `<uid>/<filename>`.
  *
  * This runs as its own queued operation rather than as part of the record it
  * belongs to. A 300KB upload over a weak link can take minutes or fail
@@ -44,7 +45,7 @@ export function createPhotoTransport(deps: PhotoTransportDeps) {
     if (!client) throw new Error('Supabase is not configured on this build');
 
     const userId = await deps.getUserId();
-    if (!userId) throw new Error('no active session; will retry after sign-in');
+    if (!userId) throw new NoSessionError('no active session; will retry after sign-in');
 
     const payload = item.payload as PhotoUploadPayload;
     if (!payload?.photoId) {
@@ -52,6 +53,7 @@ export function createPhotoTransport(deps: PhotoTransportDeps) {
     }
 
     const { full, thumb } = photoNames(payload.photoId);
+    const folder = item.orgId ? `${item.orgId}/${userId}` : userId;
 
     for (const name of [thumb, full]) {
       // Thumbnail first: it is a tenth of the size, so on a marginal link the
@@ -68,7 +70,7 @@ export function createPhotoTransport(deps: PhotoTransportDeps) {
 
       const { error } = await client.storage
         .from(PHOTO_BUCKET)
-        .upload(`${userId}/${name}`, base64ToBytes(base64), {
+        .upload(`${folder}/${name}`, base64ToBytes(base64), {
           contentType: 'image/jpeg',
           // Replaying a queued upload must be harmless.
           upsert: true,

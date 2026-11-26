@@ -6,6 +6,7 @@
 import React, { useState } from 'react';
 import { LogIn, WifiOff } from 'lucide-react';
 import { signIn } from '../services/auth';
+import { getOutbox } from '../services/storage';
 import { isSupabaseConfigured } from '../services/supabaseClient';
 
 /**
@@ -19,7 +20,8 @@ export function SignInScreen({
   onSignedIn,
   onSkip,
 }: {
-  onSignedIn: () => void;
+  /** May reject: linking is not finished until this has settled. */
+  onSignedIn: (previousId: string | null) => void | Promise<void>;
   onSkip: () => void;
 }) {
   const [email, setEmail] = useState('');
@@ -34,8 +36,13 @@ export function SignInScreen({
     setBusy(true);
     setError(null);
     try {
-      await signIn(email.trim(), password);
-      onSignedIn();
+      const outbox = getOutbox();
+      const { previousId } = await signIn(
+        email.trim(),
+        password,
+        outbox.depth() + outbox.parked().length > 0
+      );
+      await onSignedIn(previousId);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {

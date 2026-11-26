@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { Outbox, MAX_ATTEMPTS, PermanentSyncError, type OutboxItem } from './outbox';
+import { Outbox, MAX_ATTEMPTS, NoSessionError, PermanentSyncError, type OutboxItem } from './outbox';
 
 
 /** Deterministic, valid UUIDs for fixtures - the outbox rejects other shapes. */
@@ -251,4 +251,49 @@ test('a device already online must not sit on queued work', async () => {
 
   assert.equal(result.sent, 2);
   assert.equal(ob.depth(), 0, 'nothing may be left pending after a successful drain');
+});
+
+// --- P2-5: queued work carries its organization ------------------------------
+
+const ORG = '99999999-0000-4000-8000-000000000001';
+
+test('enqueue stamps the cached active organization, and it survives a reload', () => {
+  harness().set('wwdm_active_org', ORG);
+  const queued = new Outbox().enqueue('upsert', 'borehole', uid('bh-1'), { name: 'Site' });
+
+  assert.equal((queued as { orgId?: string }).orgId, ORG);
+  assert.equal((new Outbox().pending()[0] as { orgId?: string }).orgId, ORG);
+});
+
+test('enqueue leaves the organization off when none is cached', () => {
+  harness();
+  const queued = new Outbox().enqueue('upsert', 'borehole', uid('bh-1'), { name: 'Site' });
+
+  assert.ok(queued);
+  assert.equal('orgId' in queued, false, 'no orgId key, so it is sent as an old item is');
+});
+
+// --- RF-125: a drain without a session is not an attempt ----------------------
+
+test('drains without a session never count, back off or park; the work goes once there is one', async () => {
+  harness();
+  const ob = new Outbox();
+  ob.enqueue('upsert', 'pipeRecord', uid('p-1'), { depth: 4.55 });
+  const before = ob.pending()[0].nextAttemptAt;
+  const now = Date.parse('2026-08-05T10:00:00Z');
+
+  for (let i = 0; i < MAX_ATTEMPTS + 2; i++) {
+    const r = await ob.drain(async () => {
+      throw new NoSessionError('no active session');
+    }, now);
+    assert.deepEqual(r, { sent: 0, failed: 1, parked: 0 });
+  }
+  const [held] = ob.pending();
+  assert.equal(held.attempts, 0);
+  assert.equal(held.nextAttemptAt, before);
+  assert.equal(ob.parked().length, 0);
+
+  const t = transportThatFails();
+  await ob.drain(t.send, now);
+  assert.deepEqual(t.sent, [uid('p-1')], 'sent at once, with no backoff to wait out');
 });

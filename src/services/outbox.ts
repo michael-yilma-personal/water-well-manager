@@ -20,6 +20,8 @@
  *    own attempt count and backoff.
  */
 
+import { getCachedOrgId } from './auth';
+
 const STORAGE_KEY = 'wwdm_outbox';
 
 const UUID_RE =
@@ -55,6 +57,11 @@ export interface OutboxItem {
   nextAttemptAt: number;
   /** Exhausted its retries; held for recovery rather than deleted. */
   parked?: boolean;
+  /**
+   * The organization the work was captured in. Set once at enqueue and never
+   * changed; absent on items queued by a build that knew no organizations.
+   */
+  orgId?: string;
 }
 
 export type OutboxTransport = (item: OutboxItem) => Promise<void>;
@@ -71,6 +78,12 @@ export class PermanentSyncError extends Error {
     this.name = 'PermanentSyncError';
   }
 }
+
+/**
+ * Nothing was sent: the device has no session. Not counted as an attempt
+ * (RF-125), or a device waiting for a sign-in would give up on its queue.
+ */
+export class NoSessionError extends Error {}
 
 function isPermanent(err: unknown): boolean {
   return (err as { permanent?: boolean } | null)?.permanent === true;
@@ -201,6 +214,8 @@ export class Outbox {
       enqueuedAt: new Date().toISOString(),
       nextAttemptAt: 0,
     };
+    const orgId = getCachedOrgId();
+    if (orgId) item.orgId = orgId;
     this.items.push(item);
     this.write();
     this.notify();
@@ -264,15 +279,16 @@ export class Outbox {
         this.items = this.items.filter((i) => i.id !== item.id);
         result.sent++;
       } catch (err) {
-        item.attempts++;
         item.lastError = err instanceof Error ? err.message : String(err);
+        result.failed++;
+        if (err instanceof NoSessionError) continue;
+        item.attempts++;
         if (isPermanent(err) || item.attempts >= MAX_ATTEMPTS) {
           item.parked = true;
           result.parked++;
         } else {
           item.nextAttemptAt = now + backoffFor(item.attempts);
         }
-        result.failed++;
       }
     }
 

@@ -11,12 +11,14 @@ import { getSupabase } from './supabaseClient';
  *
  * The driller signs in once where there is signal. Supabase then persists a
  * refresh token and the app keeps working indefinitely without a network round
- * trip. Crucially, nothing on the write path calls into this module: records
- * are stamped with the cached user id and queued, so a stale session delays an
- * upload but never blocks a driller from logging a pipe at the rig.
+ * trip. Crucially, nothing on the write path waits on a session: a record is
+ * queued with the cached organization, and its author is the account whose
+ * session uploads it. A stale session delays an upload but never blocks a
+ * driller from logging a pipe at the rig.
  */
 
 const CACHED_USER_ID_KEY = 'wwdm_auth_user_id';
+const CACHED_ORG_ID_KEY = 'wwdm_active_org';
 
 export interface AuthProfile {
   id: string;
@@ -26,32 +28,62 @@ export interface AuthProfile {
 }
 
 /**
- * The signed-in user's id, preferring the live session but falling back to the
- * last known value.
+ * The live session's user id, or null when there is no session to send with.
  *
- * The fallback matters: a device that has been offline long enough for the
- * access token to expire still knows who it is, so queued rows keep the correct
- * author instead of being stamped with nobody.
+ * Never the cached id (RF-123): a request sent without a session is refused by
+ * the server as a permission error, and queued work was given up on for it.
+ * This id becomes the author (`created_by`) of what is uploaded.
  */
 export async function getCurrentUserId(): Promise<string | null> {
   const client = getSupabase();
-  if (client) {
-    const { data } = await client.auth.getSession();
-    const id = data.session?.user?.id;
-    if (id) {
-      localStorage.setItem(CACHED_USER_ID_KEY, id);
-      return id;
-    }
-  }
-  return localStorage.getItem(CACHED_USER_ID_KEY);
+  if (!client) return null;
+  const { data } = await client.auth.getSession();
+  const id = data.session?.user?.id ?? null;
+  if (id) localStorage.setItem(CACHED_USER_ID_KEY, id);
+  return id;
 }
 
-/** Synchronous view of the cached identity, for stamping records on save. */
+/**
+ * True when this device holds no session at all, so only signing in again can
+ * upload. A session that merely cannot be refreshed right now (no network)
+ * answers with an error and is not lost.
+ */
+export async function sessionLost(): Promise<boolean> {
+  const client = getSupabase();
+  if (!client) return false;
+  const { data, error } = await client.auth.getSession();
+  return !data.session && !error;
+}
+
+/** The account this device was last linked to. It marks the device as linked; no record is stamped with it. */
 export function getCachedUserId(): string | null {
   return localStorage.getItem(CACHED_USER_ID_KEY);
 }
 
-export async function signIn(email: string, password: string): Promise<AuthProfile> {
+/**
+ * The organization this device is working for, as last settled online.
+ * Read synchronously when a record is queued, so the write path stays offline.
+ */
+export function getCachedOrgId(): string | null {
+  return localStorage.getItem(CACHED_ORG_ID_KEY);
+}
+
+export function setCachedOrgId(orgId: string): void {
+  localStorage.setItem(CACHED_ORG_ID_KEY, orgId);
+}
+
+/**
+ * `holdsUnsentWork`: the outbox has pending or parked work. Another account
+ * may then not sign in over the one this device is linked to (RF-124): the
+ * author is stamped at upload, so the work would become theirs or be refused.
+ *
+ * `previousId` in the answer is the account the device was linked to before.
+ */
+export async function signIn(
+  email: string,
+  password: string,
+  holdsUnsentWork = false
+): Promise<AuthProfile & { previousId: string | null }> {
   const client = getSupabase();
   if (!client) throw new Error('This build is not connected to a Supabase project');
 
@@ -60,8 +92,18 @@ export async function signIn(email: string, password: string): Promise<AuthProfi
   const user = data.user;
   if (!user) throw new Error('Sign-in returned no user');
 
+  const previousId = localStorage.getItem(CACHED_USER_ID_KEY);
+  if (holdsUnsentWork && previousId && previousId !== user.id) {
+    // Only this device's new session: the cached identity and the queue stay.
+    await client.auth.signOut({ scope: 'local' });
+    throw new Error(
+      'This device holds unsent work of another account, which must sign in first.'
+    );
+  }
+
   localStorage.setItem(CACHED_USER_ID_KEY, user.id);
   return {
+    previousId,
     id: user.id,
     email: user.email ?? undefined,
     name: (user.user_metadata?.name as string) ?? undefined,
@@ -80,6 +122,18 @@ export async function signOut(): Promise<void> {
   const client = getSupabase();
   if (client) await client.auth.signOut();
   localStorage.removeItem(CACHED_USER_ID_KEY);
+  localStorage.removeItem(CACHED_ORG_ID_KEY);
+}
+
+/**
+ * Undo a sign-in that could not be completed. On a device that was already
+ * linked only the new session goes: the identity and organization it had stay
+ * with its queued work (RF-127). A first link is signed out as before.
+ */
+export async function undoSignIn(previousId: string | null): Promise<void> {
+  if (!previousId) return signOut();
+  await getSupabase()?.auth.signOut({ scope: 'local' });
+  localStorage.setItem(CACHED_USER_ID_KEY, previousId);
 }
 
 /**
@@ -107,8 +161,10 @@ export async function fetchMyProfile(): Promise<{
     .from('profiles')
     .select('id, name, role, badge_number')
     .eq('id', uid)
-    .single();
-  if (error || !data) return null;
+    .maybeSingle();
+  // A failed read is not a missing profile, and the caller tells them apart.
+  if (error) throw new Error(error.message);
+  if (!data) return null;
   return {
     id: data.id as string,
     name: (data.name as string) ?? '',
