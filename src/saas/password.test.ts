@@ -61,7 +61,7 @@ test('changing the password with a refused new password calls nothing on the ser
   assert.deepEqual(calls, []);
 });
 
-test('changing the password checks the current one by signing in with the same email, then sets the new one, signing nothing out', async () => {
+test('changing the password checks the current one by signing in with the same email, then sets the new one; the app itself signs nothing out', async () => {
   const { changePassword } = await load();
   const { client, calls } = fake();
   await changePassword(client, 'a@example.com', 'old-pass-1', 'new-pass-1', 'new-pass-1');
@@ -98,11 +98,11 @@ test('a reset request sends the email with the redirect and shows the same sente
   assert.deepEqual(answers, [answers[0], answers[0], answers[0]]);
 });
 
-test('a rate-limited reset request resolves with that sentence or one saying to try again later', async () => {
+test('a rate-limited reset request shows the same sentence as every other answer (criterion 2 as changed)', async () => {
   const { requestReset } = await load();
   const same = await requestReset(fake().client, 'a@example.com', REDIRECT);
   const got = await requestReset(fake({ reset: { message: 'email rate limit exceeded', status: 429, code: 'over_email_send_rate_limit' } }).client, 'a@example.com', REDIRECT);
-  assert.ok(got === same || /try again later/i.test(got), got);
+  assert.equal(got, same);
 });
 
 test('the recovery page refuses non-matching or short passwords without calling the server, then sets the new one alone', async () => {
