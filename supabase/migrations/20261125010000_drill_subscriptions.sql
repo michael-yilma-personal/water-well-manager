@@ -48,8 +48,11 @@ begin
   $fn$;
 
   -- The access level of the organization a photo's path belongs to:
-  -- <org_id>/... is that organization's, the legacy path <user_id>/<file> the
-  -- founding organization's. Anything else belongs to none.
+  -- <org_id>/... is that organization's, also with one segment; any other
+  -- one-segment path is the legacy <user_id>/<file>, the founding
+  -- organization's. Anything else belongs to none. It answers only an active
+  -- member of that organization (the policies of drill_tenancy let nobody
+  -- else in anyway); everyone else is told 'none'.
   create or replace function public.drilling_photo_access(name text)
   returns text
   language sql
@@ -57,11 +60,20 @@ begin
   security definer
   set search_path = public
   as $fn$
-    select public.org_access(
-      case when array_length(storage.foldername(name), 1) = 1
-           then public.founding_org_id()
-           else public.uuid_or_null((storage.foldername(name))[1])
-      end);
+    select case when public.is_org_member(p.org) then public.org_access(p.org) else 'none' end
+    from (
+      select case
+               when array_length(storage.foldername(name), 1) = 1
+                    and not exists (
+                      select 1 from public.organizations o
+                      -- The function's name in front: organizations has a
+                      -- column called name too.
+                      where o.id = public.uuid_or_null(
+                        (storage.foldername(drilling_photo_access.name))[1]))
+               then public.founding_org_id()
+               else public.uuid_or_null((storage.foldername(name))[1])
+             end as org
+    ) p;
   $fn$;
 
   revoke execute on function public.subscription_write_guard()

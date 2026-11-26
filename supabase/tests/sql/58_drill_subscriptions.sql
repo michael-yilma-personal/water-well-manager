@@ -15,7 +15,7 @@
 --
 -- Organization A's subscription is set by the connecting role, state by
 -- state; organization B stays active throughout.
--- plan: 40
+-- plan: 45
 begin;
 \ir ../lib/helpers.sql
 \ir ../lib/fixture.sql
@@ -55,7 +55,8 @@ create function t.photo(path text) returns text language sql immutable as $$
 
 create table t.founding as select id from public.organizations where is_founding;
 insert into storage.objects (bucket_id, name, owner)
-  values ('drilling-photos', t.path('org_a', 'a_driller', 'p.jpg'), t.uid('a_driller'));
+  values ('drilling-photos', t.path('org_a', 'a_driller', 'p.jpg'), t.uid('a_driller')),
+         ('drilling-photos', t.path('org_a', 'x.jpg'), null);   -- under <A>/ with no user folder: A's (criterion 20)
 insert into auth.users (id, email) values (t.uid('f_driller'), 'f_driller@db-test.invalid');
 delete from public.memberships where user_id = t.uid('f_driller');
 insert into public.memberships (org_id, user_id, role, status) select id, t.uid('f_driller'), 'Driller', 'active' from t.founding;
@@ -98,6 +99,11 @@ select t.throws('[P3-2 c4] expired: a photo upload is refused', 'a_driller',
 select t.ok('[P3-2 c5] expired: my_organizations() lists the organization with access read_only', 'a_driller',
   format($$ select count(*) = 1 from public.my_organizations() where org_id = %L and access = 'read_only' $$, t.a()));
 
+select t.rows('[P3-2 c1] expired: the service role is not refused (a pipe record is corrected with the service key)', 'service',
+  format('update public.pipe_records set formation = ''Sand'' where id = %L', t.rid('pipe_records', 'a_driller')), 1);
+select t.ok('[P3-2 c4] a signed-in user who is not a founding member learns nothing of the founding organization from a legacy-path name: none', 'a_driller',
+  format('select public.drilling_photo_access(%L) = ''none''', t.path('f_driller', 'p.jpg')));
+
 select t.state('active');
 select t.rows(format('[P3-2 c8] renewed: the write refused during the lapse is accepted unchanged (%s)', what), actor, q, 1) from t.w order by k;
 
@@ -111,11 +117,14 @@ select t.state('active', (select id from t.founding));
 -- ---------------------------------------------------------------------------
 
 select t.state('suspended');
-select t.throws(format('[P3-2 c2] suspended: %s: refused with SS002', what), actor, q, 'SS002') from t.w where k = 'new';
+select t.throws(format('[P3-2 c2] suspended: %s: refused with SS002', what), actor, q, 'SS002') from t.w where k <> 'fix' order by k;
 select t.none(format('[P3-2 c3] suspended: a Supervisor reads no row of %s', tbl), 'a_super',
   format('select id from public.%I where org_id = %L', tbl, t.a()))
 from t.tables order by tbl;
 select t.none('[P3-2 c4] suspended: the Administrator reads no photo', 'a_admin', t.photo(t.path('org_a', 'a_driller', 'p.jpg')));
+select t.none('[P3-2 c4] suspended: nor does its author', 'a_driller', t.photo(t.path('org_a', 'a_driller', 'p.jpg')));
+select t.none('[P3-2 c4] suspended: <org_id>/file follows THAT organization''s subscription, not the founding one''s (which is active)', 'a_admin',
+  t.photo(t.path('org_a', 'x.jpg')));
 select t.throws('[P3-2 c4] suspended: a photo upload is refused', 'a_driller',
   t.upload('a_driller', t.path('org_a', 'a_driller', 'n.jpg')), '42501', 'SS002');
 select t.ok('[P3-2 c5] suspended: my_organizations() still lists the organization, with access none', 'a_driller',

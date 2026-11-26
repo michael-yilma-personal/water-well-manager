@@ -264,6 +264,7 @@ test('expired (read_only): the list and deactivating a member work; adding, invi
   refused402(await w.send('PATCH', { ...change, action: 'reactivate' }), 'reactivate');
   refused402(await w.send('PATCH', { ...change, action: 'setRole', role: 'admin' }), 'setRole');
   refused402(await w.send('PATCH', { ...change, action: 'setBadge', badgeNumber: 'X' }), 'setBadge');
+  refused402(await w.send('DELETE', change), 'remove (D3-9)');
   assert.deepEqual(w.writes, []);
   assert.equal((await w.send('GET', {}, `?org_id=${ORG_A}`)).status, 200);
   w.memberships.find((m) => m.orgId === ORG_A && m.userId === MEMBER_A)!.status = 'active';
