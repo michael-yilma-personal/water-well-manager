@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createSupabaseTransport } from './syncTransport';
+import * as outboxModule from './outbox';
 import { NoSessionError, type OutboxItem } from './outbox';
 import type { PipeRecord } from '../types';
 
@@ -49,8 +50,13 @@ function item(overrides: Partial<OutboxItem> = {}): OutboxItem {
 function fakeClient() {
   const calls: { table: string; op: string; arg: unknown; eq?: unknown }[] = [];
   let nextError: { code?: string; message: string } | null = null;
+  let matched = 1;
   return {
     calls,
+    /** How many rows the next update matches (P3-3). */
+    matchRows(n: number) {
+      matched = n;
+    },
     failWith(err: { code?: string; message: string }) {
       nextError = err;
     },
@@ -65,7 +71,10 @@ function fakeClient() {
             return {
               eq(_col: string, val: unknown) {
                 calls.push({ table, op: 'update', arg: patch, eq: val });
-                return Promise.resolve({ error: nextError });
+                // The rows the update touched, whichever way the transport asks:
+                // `count` on the answer, or `data` after a chained .select().
+                const answer = { error: nextError, data: matched ? [{ id: val }] : [], count: matched };
+                return Object.assign(Promise.resolve(answer), { select: () => Promise.resolve(answer) });
               },
             };
           },
@@ -194,4 +203,39 @@ test('a borehole queued before the update is sent with no org_id at all', async 
 test('a child row never carries org_id, even when its item has an organization', async () => {
   const row = await sentRow({ orgId: ORG });
   assert.equal('org_id' in row, false, 'the database takes it from the borehole');
+});
+
+// --- P3-3: the subscription refuses, the work is held (criteria 2, 4) ---------
+// Assumed: SubscriptionHeldError exported by outbox.ts (see outbox.test.ts), and
+// TransportDeps gains  getAccess?: () => 'full' | 'read_only' | 'none' | null
+// (the cached access of the active organization; absent or null means full).
+// The deps are cast so this file type-checks before the field exists.
+
+const held = () => (outboxModule as unknown as { SubscriptionHeldError: new (m: string) => Error }).SubscriptionHeldError;
+
+test('a write refused with SS002 is held for renewal, not parked', async () => {
+  const fake = fakeClient();
+  fake.failWith({ code: 'SS002', message: 'subscription does not allow writes' });
+  const send = createSupabaseTransport({ getClient: () => fake.client as never, getUserId: async () => UID });
+
+  await assert.rejects(send(item()), (err: Error) => {
+    assert.ok(err instanceof held(), `${err.name}: ${err.message}`);
+    assert.notEqual((err as { permanent?: boolean }).permanent, true);
+    return true;
+  });
+});
+
+test('a soft delete that matched no row is unsent while access is none, and sent otherwise (RF-142)', async () => {
+  const sendDelete = (access: string) => {
+    const fake = fakeClient();
+    fake.matchRows(0);
+    const send = createSupabaseTransport(
+      { getClient: () => fake.client as never, getUserId: async () => UID, getAccess: () => access } as never
+    );
+    return send(item({ op: 'delete' }));
+  };
+
+  await assert.rejects(sendDelete('none'), (err: Error) => err instanceof held());
+  // Deleting a record that never reached the server matches nothing either, and is done.
+  await sendDelete('full');
 });
