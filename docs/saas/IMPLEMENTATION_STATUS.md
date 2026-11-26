@@ -21,8 +21,8 @@ Requirements: `docs/SAAS_ARCHITECTURE_PROPOSAL.md`. How the work is run: `docs/s
 | 0 Preparation | `saas/phase-0-preparation` | Done; CI green; awaiting the owner's merge (after pull request 3) | https://github.com/michael-yilma-personal/water-well-manager/pull/4 |
 | 1 Tenancy in the database | `saas/phase-1-tenancy` | Done on staging; awaiting the owner's review. **Production migration not approved** | https://github.com/michael-yilma-personal/water-well-manager/pull/5 |
 | 2 Organization-aware apps | `saas/phase-2-org-apps` | Approved 2026-11-23; in progress on staging | — |
-| 3 Subscriptions and entitlements | `saas/phase-3-subscriptions` | Done on staging; awaiting the owner's review. **Nothing on production** | pull request 7 |
-| 4 Platform console and audit | — | Approved 2026-11-25 (staging only); starts when Phase 3 is done | — |
+| 3 Subscriptions and entitlements | `saas/phase-3-subscriptions` | Done on staging; awaiting the owner's review. **Nothing on production** | https://github.com/michael-yilma-personal/water-well-manager/pull/7 |
+| 4 Platform console and audit | `saas/phase-4-platform` | Approved 2026-11-25; in progress on staging | — |
 | 5 Onboarding polish and cleanup | — | Not approved | — |
 | 6 Extract the foundation | — | Not approved | — |
 
@@ -38,6 +38,29 @@ Requirements: `docs/SAAS_ARCHITECTURE_PROPOSAL.md`. How the work is run: `docs/s
 | DEMO-1 | Static migration check: every table created in `supabase/migrations/` has RLS enabled | Done: RF-001 to RF-006 fixed and verified by the second review | TEST_RESULTS 8, 11 |
 | WF-4 | Harden the enforcement after the security review (RF-010 to RF-024) | Done; follow-ups in WF-5 | TEST_RESULTS 10 to 12 |
 | WF-5 | Final fix round: validation failures and second-review findings (RF-025 to RF-037) | Done: verified by the third review | TEST_RESULTS 13, 14 |
+
+### Phase 4 — Platform console and audit (approved 2026-11-25; staging only)
+
+Requirement: proposal sections 4, 6, 7, 8 ("Platform administrator actions"), 10 and the Phase 4 entry of section 12. Phase acceptance, from the proposal: a new company can be onboarded end to end from the console with no SQL; every administrative action appears in the audit log with actor, time and details; non-platform accounts cannot open or call any of it.
+
+Not in this phase: email invitations, password change and reset, removing the compatibility triggers (Phase 5); payments (never). A platform administrator is still added by SQL only (proposal 10).
+
+| Id | Task | Status | Evidence |
+|---|---|---|---|
+| P4-1 | Reusable migration `saas_platform`: the platform administrator's SQL functions (create an organization with its subscription; change a subscription: start trial, activate, extend, change plan, override the user limit, suspend, reactivate, cancel), each checking `is_platform_admin()` and writing its audit row in the same transaction; the read paths the console needs (organizations with subscription and member counts, members of an organization, audit history) | Not started | — |
+| P4-2 | Creating an organization's first Administrator through the Edge Function (the one step that needs the service role), for platform administrators only, audited | Not started | — |
+| P4-3 | The console: `platform.html` (third Vite entry) and `src/platform/`: sign-in, organizations list, create organization and first Administrator, members and dates, subscription actions, audit history | Not started | — |
+| P4-4 | Phase suite on staging: onboarding end to end from the console, the audit trail, non-platform accounts shut out; the existing suites still pass; CI | Not started | — |
+
+Criteria are written when each task starts.
+
+#### Decisions taken by the Lead for Phase 4 where the proposal left it open (2026-11-25; each can be changed)
+
+| Id | Decision |
+|---|---|
+| D4-1 | Platform administrators see organizations, members (name, email, role, status) and subscriptions, never Drill records (proposal 6): nothing in Phase 4 adds a read path to a Drill table. |
+| D4-2 | On staging the platform administrator is a test account the fixture adds to `platform_admins` through the database and removes afterwards. Which real account becomes the platform administrator on production is the owner's decision (proposal 14, item 8). |
+| D4-3 | The console is plain and small: one page, the existing dashboard's styles, no new dependency. |
 
 ### Phase 3 — Subscriptions and entitlements (approved 2026-11-25; staging only; starts after the Phase 2 gaps)
 
