@@ -12,6 +12,7 @@ const uuid = (c: string) => `${c.repeat(8)}-${c.repeat(4)}-4${c.repeat(3)}-8${c.
 const ORG_A = uuid('a'), ORG_B = uuid('b');
 const ADMIN_A = uuid('1'), MEMBER_A = uuid('2'), INVITED_A = uuid('3'), ADMIN_B = uuid('4'), MEMBER_B = uuid('5');
 const NEW_ID = uuid('9'), UNKNOWN = uuid('0');
+const PLATFORM = uuid('7'); // a platform administrator: a member of no organization
 const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase(); // as PostgreSQL compares uuids
 
 type Opts = { caller?: string | null; refuse?: string; fail?: keyof Ports; unconfirmed?: string; access?: Record<string, 'full' | 'read_only' | 'none'> };
@@ -61,6 +62,8 @@ function world(opts: Opts = {}) {
       return { data: fn === 'saas_remove_member' ? 'deactivated' : null };
     },
   };
+  // P4-2, ASSUMED: isPlatformAdmin(userId): Promise<boolean>. Attached until the port exists; then it moves into the literal.
+  (ports as any).isPlatformAdmin = async (userId: string) => same(userId, PLATFORM);
   if (opts.fail) (ports as any)[opts.fail] = async () => { throw new Error('connection refused at db.internal'); };
   const before = JSON.stringify(memberships);
   const send = async (method: string, body: Record<string, unknown> = {}, query = '') => {
@@ -292,6 +295,62 @@ test('the user-limit refusal (SS001) is 409 with a message that says the user li
   assert.match(res.body.error, /user limit/i);
   assert.equal(w.accounts.length, 5);
   assert.equal((await w.send('PATCH', { org_id: ORG_A, id: MEMBER_A, action: 'reactivate' })).status, 409);
+});
+
+// P4-2: a platform administrator, a member of nothing, creates an organization's administrator and does nothing else.
+const firstAdmin = { ...newPerson, role: 'admin' };
+
+test('a platform administrator who is not a member adds a new person as administrator: the account with the password sent, an active membership, themselves as actor', async () => {
+  const w = world({ caller: PLATFORM });
+  assert.deepEqual(await w.send('POST', firstAdmin), { status: 201, body: { id: NEW_ID, outcome: 'created' } });
+  assert.deepEqual(w.writes, [
+    { op: 'createAccount', args: { email: firstAdmin.email, password: firstAdmin.password, name: 'New', orgId: ORG_A } },
+    { op: 'saas_add_member', args: { org: ORG_A, member: NEW_ID, role: 'admin', badge: 'N-1', status: 'active', actor: PLATFORM } },
+  ]);
+});
+
+test('a platform administrator naming an existing account only invites it as administrator: the account is not touched', async () => {
+  const w = world({ caller: PLATFORM });
+  const res = await w.send('POST', { ...firstAdmin, email: 'user5@example.com' });
+  assert.deepEqual(res, { status: 201, body: { id: MEMBER_B, outcome: 'invited' } });
+  assert.deepEqual(w.writes, [
+    { op: 'saas_add_member', args: { org: ORG_A, member: MEMBER_B, role: 'admin', badge: 'N-1', status: 'invited', actor: PLATFORM } },
+  ]);
+});
+
+test('a platform administrator who is not a member can do nothing else: another role, the list and every change of a member are 403 with nothing written', async () => {
+  const w = world({ caller: PLATFORM });
+  assert.equal((await w.send('POST', newPerson)).status, 403, 'add a member');
+  assert.equal((await w.send('POST', { ...newPerson, email: 'user5@example.com' })).status, 403, 'invite a member');
+  assert.equal((await w.send('GET', {}, `?org_id=${ORG_A}`)).status, 403, 'list');
+  for (const action of ['setRole', 'setBadge', 'deactivate', 'reactivate']) {
+    assert.equal((await w.send('PATCH', { org_id: ORG_A, id: MEMBER_A, action, role: 'admin', badgeNumber: 'X' })).status, 403, action);
+  }
+  assert.equal((await w.send('DELETE', { org_id: ORG_A, id: MEMBER_A })).status, 403, 'remove');
+  assert.deepEqual(w.writes, []);
+  assert.ok(w.unchanged());
+});
+
+test('the subscription and the user limit hold for a platform administrator: 402 unless access is full, 409 at the limit with the account deleted again, an unknown organization refused', async () => {
+  const none = world({ caller: PLATFORM, access: { [ORG_A]: 'none', [ORG_B]: 'read_only', [uuid('c')]: 'none' } }); // no subscription row is 'none' (D3-1)
+  refused402(await none.send('POST', firstAdmin), 'none');
+  refused402(await none.send('POST', { ...firstAdmin, org_id: ORG_B }), 'read_only');
+  assert.ok([402, 403, 404].includes((await none.send('POST', { ...firstAdmin, org_id: uuid('c') })).status), 'unknown organization');
+  assert.deepEqual(none.writes, []);
+  const full = world({ caller: PLATFORM, refuse: 'SS001' });
+  const res = await full.send('POST', firstAdmin);
+  assert.equal(res.status, 409);
+  assert.match(res.body.error, /user limit/i);
+  assert.deepEqual(full.writes.map((x) => x.op), ['createAccount', 'saas_add_member', 'deleteAccount']);
+  assert.equal(full.accounts.length, 5);
+});
+
+test('someone who is neither a platform administrator nor an active administrator of the organization cannot add its administrator: 403, nothing written', async () => {
+  for (const caller of [ADMIN_B, INVITED_A, UNKNOWN]) {
+    const w = world({ caller });
+    assert.equal((await w.send('POST', firstAdmin)).status, 403, caller);
+    assert.deepEqual(w.writes, [], caller);
+  }
 });
 
 test('the function is reusable: neither source file names a Drill table, role or bucket', () => {
