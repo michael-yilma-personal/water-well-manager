@@ -7,7 +7,11 @@ import React, { useState } from 'react';
 import { LogIn, WifiOff } from 'lucide-react';
 import { signIn } from '../services/auth';
 import { getOutbox } from '../services/storage';
-import { isSupabaseConfigured } from '../services/supabaseClient';
+import { getSupabase, isSupabaseConfigured } from '../services/supabaseClient';
+import { ForgotPassword } from '../saas/PasswordForms';
+
+// A reset link opens the dashboard's page (D5-2): this phone cannot receive it.
+const dashboardUrl = () => import.meta.env.VITE_DASHBOARD_URL || new URL('admin.html', window.location.href).href;
 
 /**
  * One-time device provisioning.
@@ -106,6 +110,11 @@ export function SignInScreen({
             {busy ? 'Linking device…' : 'Link this device'}
           </button>
         </form>
+        {configured && (
+          <div className="mt-3 flex flex-col">
+            <ForgotPassword client={getSupabase()} redirectTo={dashboardUrl()} />
+          </div>
+        )}
 
         <button
           type="button"

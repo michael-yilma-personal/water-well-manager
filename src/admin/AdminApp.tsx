@@ -8,6 +8,7 @@ import {
   ArrowLeft,
   Download,
   FileText,
+  KeyRound,
   LogOut,
   Pause,
   Pencil,
@@ -33,8 +34,10 @@ import {
 import { signIn, signOut, getSession } from '../services/auth';
 import { EditPipeModal } from '../components/modals/EditPipeModal';
 import { CrewView } from './CrewView';
-import { isSupabaseConfigured } from '../services/supabaseClient';
-import { FORBIDDEN_EVENT, saas } from './saas';
+import { getSupabase, isSupabaseConfigured } from '../services/supabaseClient';
+import { FORBIDDEN_EVENT, dashboardUrl, saas } from './saas';
+import { ChangePassword, ForgotPassword, RecoverPassword } from '../saas/PasswordForms';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Membership } from '../saas/api';
 import { mayActivate, rememberOrg, rememberedOrg, resolveActiveOrg, subscriptionNotice } from '../saas/orgContext';
 import {
@@ -137,7 +140,29 @@ function SignIn({ onIn }: { onIn: () => void }) {
         >
           {busy ? 'Signing in…' : 'Sign in'}
         </button>
+        <ForgotPassword client={getSupabase()} redirectTo={dashboardUrl()} />
       </form>
+    </div>
+  );
+}
+
+/** Opened by a password-reset link: only the new password, nothing of the dashboard (D5-2). */
+export function Recovery({ client, session }: { client: SupabaseClient; session: Promise<boolean> }) {
+  const [state, setState] = useState<'checking' | 'ready' | 'expired'>('checking');
+  // The session comes from the link's tokens only: this client keeps nothing.
+  useEffect(() => { void session.then((ok) => setState(ok ? 'ready' : 'expired')); }, [session]);
+  return (
+    <div className="min-h-screen bg-slate-950 text-white flex items-center justify-center p-6">
+      <div className="w-full max-w-sm flex flex-col gap-3">
+        <h1 className="text-2xl font-black tracking-tight">Set a new password</h1>
+        {state === 'checking' && <p className="text-slate-500">Loading…</p>}
+        {state === 'expired' && (
+          <p className="text-sm font-bold text-rose-400">
+            This link is invalid or has expired. Ask for a new one with “Forgot password?”.
+          </p>
+        )}
+        {state === 'ready' && <RecoverPassword client={client} />}
+      </div>
     </div>
   );
 }
@@ -516,6 +541,7 @@ function BoreholeList({
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [busy, setBusy] = useState(false);
+  const [passwordOpen, setPasswordOpen] = useState(false);
 
   const load = useCallback(() => {
     setBusy(true);
@@ -573,6 +599,12 @@ function BoreholeList({
             </button>
           )}
           <button
+            onClick={() => setPasswordOpen((o) => !o)}
+            className="flex items-center gap-1.5 px-3 py-2 rounded bg-slate-800 border border-slate-700 text-xs font-black uppercase"
+          >
+            <KeyRound className="w-4 h-4" /> Password
+          </button>
+          <button
             onClick={onSignOut}
             className="flex items-center gap-1.5 px-3 py-2 rounded bg-slate-800 border border-slate-700 text-xs font-black uppercase"
           >
@@ -580,6 +612,12 @@ function BoreholeList({
           </button>
         </div>
       </header>
+
+      {passwordOpen && (
+        <div className="m-6 max-w-sm">
+          <ChangePassword client={getSupabase()} />
+        </div>
+      )}
 
       {error && (
         <div className="m-6 p-3 rounded border border-rose-500/40 bg-rose-500/10 text-rose-300 text-sm font-bold">

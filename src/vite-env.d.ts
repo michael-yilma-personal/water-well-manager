@@ -8,6 +8,8 @@ interface ImportMetaEnv {
    * Level Security is enabled on every table. Never put `sb_secret_...` here.
    */
   readonly VITE_SUPABASE_PUBLISHABLE_KEY?: string;
+  /** The dashboard's admin.html, where a password-reset link opens; for builds served elsewhere (the APK). */
+  readonly VITE_DASHBOARD_URL?: string;
 }
 
 interface ImportMeta {

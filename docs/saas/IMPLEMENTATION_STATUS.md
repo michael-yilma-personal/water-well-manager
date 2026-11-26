@@ -25,7 +25,7 @@ Requirements: `docs/SAAS_ARCHITECTURE_PROPOSAL.md`. How the work is run: `docs/s
 | 2 Organization-aware apps | `saas/phase-2-org-apps` | Approved 2026-11-23; in progress on staging | — |
 | 3 Subscriptions and entitlements | `saas/phase-3-subscriptions` | Done on staging; awaiting the owner's review. **Nothing on production** | https://github.com/michael-yilma-personal/water-well-manager/pull/7 |
 | 4 Platform console and audit | `saas/phase-4-platform` | Done on staging; awaiting the owner's review. **Nothing on production** | https://github.com/michael-yilma-personal/water-well-manager/pull/8 |
-| 5 Onboarding polish and cleanup | — | First half approved 2026-11-26 (staging only): change password, password reset. Email invitations wait for the owner's choice of sender; the cleanup (removing the compatibility code, which stops build 1.1.7) waits until the crews' phones run the new build | — |
+| 5 Onboarding polish and cleanup | `saas/phase-5-onboarding` | First half done on staging (https://github.com/michael-yilma-personal/water-well-manager/pull/9, CI green). Approved 2026-11-26 (staging only): change password, password reset. Email invitations wait for the owner's choice of sender; the cleanup (removing the compatibility code, which stops build 1.1.7) waits until the crews' phones run the new build | — |
 | 6 Extract the foundation | — | Not approved | — |
 
 ## Tasks
@@ -49,9 +49,9 @@ Not in this half: email invitations (waiting for the owner's choice of sender); 
 
 | Id | Task | Status | Evidence |
 |---|---|---|---|
-| P5-1 | Change your own password: in the field app (Rig Settings), the dashboard and the console | Not started | — |
-| P5-2 | Password reset: "Forgot password?" on the sign-in screens; the emailed link opens a page that sets a new password | Not started | — |
-| P5-3 | Phase suite on staging; the existing suites still pass; CI | Not started | — |
+| P5-1 | Change your own password: in the field app (Rig Settings), the dashboard and the console | **Done**: reviewed (SR29), RF-166 to RF-169 fixed or decided; on staging | TEST_RESULTS 120 to 122 |
+| P5-2 | Password reset: "Forgot password?" on the sign-in screens; the emailed link opens a page that sets a new password | **Done**: reviewed (SR29), RF-166 to RF-169 fixed or decided; on staging | TEST_RESULTS 120 to 122 |
+| P5-3 | Phase suite on staging; the existing suites still pass; CI | **Done on staging**: password suite 41 of 41; existing suites green | TEST_RESULTS 122 |
 
 Criteria are written when each task starts.
 
@@ -59,9 +59,16 @@ Criteria are written when each task starts.
 
 | Id | Decision |
 |---|---|
-| D5-1 | Changing a password asks for the current one, checked by signing in with it, and the new one twice. The person stays signed in on that device; nothing else is signed out. |
+| D5-1 | Changing a password asks for the current one, checked by signing in with it, and the new one twice. The person stays signed in on that device. **Changed 2026-11-26 after review SR29:** Supabase ends the account's other sessions when the password changes, and that is the safer behaviour, so it is kept: the form says that other devices will ask to sign in again. A phone's queued work is kept and uploads after it signs in. The server also requires a recent sign-in to change a password ("secure password change", on for staging; production checklist). |
 | D5-2 | The reset link from any app opens one page on the dashboard's site, which sets the new password; the person then signs in again in the app they use (the APK cannot receive the link itself). The sign-in screens never say whether an address has an account. |
 | D5-3 | On staging, reset emails are not sent to real inboxes: the suites take the link from the Auth admin API. Production needs the dashboard's address in the Auth redirect list and a working sender (production checklist). |
+
+#### P5-1 and P5-2 criteria (2026-11-26)
+
+1. Changing a password asks for the current one and the new one twice; refused without a server call when the two do not match, when it is shorter than 8 characters, or when it equals the current one; a wrong current password gives one plain sentence and changes nothing; the person stays signed in on that device, and the form says other devices will ask to sign in again (D5-1 as changed). Available in the field app (Rig Settings), the dashboard and the console.
+2. "Forgot password?" on each sign-in screen sends a reset email and then shows the same sentence whatever the server answered, rate limiting included (a different sentence would tell a known address from an unknown one); an empty address is refused without a server call.
+3. The link opens one page on the dashboard's site which, on a password-recovery session, asks for the new password twice (same rules, no current one), sets it, and tells the person to sign in again in the app they use.
+4. The password logic is in the reusable `src/saas/password.ts`, without Drill names.
 
 ### Phase 4 — Platform console and audit (approved 2026-11-25; staging only)
 
