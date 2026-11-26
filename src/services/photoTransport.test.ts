@@ -118,3 +118,25 @@ test('a photo refused by row-level security is held while access is not full, an
   });
   await assert.rejects(sendWith('full'), (err: Error & { permanent?: boolean }) => err.permanent === true);
 });
+
+// Review of P3-3. Assumed: PhotoTransportDeps gains
+//   refreshAccess?: () => Promise<'full' | 'read_only' | 'none' | null>
+// (reads the access level from the server; rejects when it cannot be read).
+
+test('a photo refused while the cached access is full is decided on a fresh read, and held if that read fails', async () => {
+  fakePhotoStore();
+  const upload = async () => ({ error: { message: 'new row violates row-level security policy' } });
+  const sendWith = (refreshAccess: () => Promise<string>) =>
+    createPhotoTransport({
+      getClient: () => ({ storage: { from: () => ({ upload }) } }) as never,
+      getUserId: async () => UID,
+      getAccess: () => 'full',
+      refreshAccess,
+    } as never)({ ...item('photo'), payload: { photoId: 'p1' }, orgId: ORG });
+  const { SubscriptionHeldError } = outboxModule as unknown as { SubscriptionHeldError: new (m: string) => Error };
+  const isHeld = (err: Error) => err instanceof SubscriptionHeldError;
+
+  await assert.rejects(sendWith(async () => 'read_only'), isHeld);
+  await assert.rejects(sendWith(async () => Promise.reject(new Error('offline'))), isHeld);
+  await assert.rejects(sendWith(async () => 'full'), (err: Error & { permanent?: boolean }) => err.permanent === true);
+});

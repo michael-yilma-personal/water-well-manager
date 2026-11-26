@@ -50,11 +50,11 @@ function item(overrides: Partial<OutboxItem> = {}): OutboxItem {
 function fakeClient() {
   const calls: { table: string; op: string; arg: unknown; eq?: unknown }[] = [];
   let nextError: { code?: string; message: string } | null = null;
-  let matched = 1;
+  let matched: number | null = 1;
   return {
     calls,
     /** How many rows the next update matches (P3-3). */
-    matchRows(n: number) {
+    matchRows(n: number | null) {
       matched = n;
     },
     failWith(err: { code?: string; message: string }) {
@@ -73,7 +73,7 @@ function fakeClient() {
                 calls.push({ table, op: 'update', arg: patch, eq: val });
                 // The rows the update touched, whichever way the transport asks:
                 // `count` on the answer, or `data` after a chained .select().
-                const answer = { error: nextError, data: matched ? [{ id: val }] : [], count: matched };
+                const answer = { error: nextError, data: matched === null ? null : matched ? [{ id: val }] : [], count: matched };
                 return Object.assign(Promise.resolve(answer), { select: () => Promise.resolve(answer) });
               },
             };
@@ -238,4 +238,35 @@ test('a soft delete that matched no row is unsent while access is none, and sent
   await assert.rejects(sendDelete('none'), (err: Error) => err instanceof held());
   // Deleting a record that never reached the server matches nothing either, and is done.
   await sendDelete('full');
+});
+
+// Review of P3-3. Assumed: TransportDeps gains
+//   refreshAccess?: () => Promise<'full' | 'read_only' | 'none' | null>
+// (reads the access level from the server; rejects when it cannot be read).
+
+function deleteWith(deps: Record<string, unknown>, rows: number | null = 0) {
+  const fake = fakeClient();
+  fake.matchRows(rows);
+  const send = createSupabaseTransport({ getClient: () => fake.client as never, getUserId: async () => UID, ...deps } as never);
+  return send(item({ op: 'delete' }));
+}
+
+test('under none a soft delete whose answer carries no count is held, not sent', async () => {
+  await assert.rejects(deleteWith({ getAccess: () => 'none' }, null), (err: Error) => err instanceof held());
+});
+
+test('a soft delete that matched no row while the cached access is full or unknown is decided on a fresh read', async () => {
+  let asked = 0;
+  const fresh = (answer: string | Error) => async () => {
+    asked++;
+    if (answer instanceof Error) throw answer;
+    return answer;
+  };
+  const isHeld = (err: Error) => err instanceof held();
+
+  await assert.rejects(deleteWith({ getAccess: () => 'full', refreshAccess: fresh('none') }), isHeld);
+  await assert.rejects(deleteWith({ getAccess: () => null, refreshAccess: fresh('none') }), isHeld);
+  await assert.rejects(deleteWith({ getAccess: () => 'full', refreshAccess: fresh(new Error('offline')) }), isHeld);
+  await deleteWith({ getAccess: () => 'full', refreshAccess: fresh('full') });
+  assert.equal(asked, 4, 'the fresh level was read each time');
 });
