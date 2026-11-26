@@ -1,6 +1,7 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
-import AdminApp from './AdminApp';
+import AdminApp, { Recovery } from './AdminApp';
+import { recoveryClient } from './saas';
 import '../index.css';
 
 // No id migration here: the dashboard is read-only and never touches the
@@ -11,7 +12,7 @@ const container = document.getElementById('root');
 if (container) {
   createRoot(container).render(
     <StrictMode>
-      <AdminApp />
+      {recoveryClient ? <Recovery client={recoveryClient} /> : <AdminApp />}
     </StrictMode>,
   );
 }

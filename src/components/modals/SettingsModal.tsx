@@ -7,6 +7,8 @@ import {
 } from '../../services/storage';
 import { X, Settings, Sun, Volume2, HardDrive, RefreshCw, AlertTriangle, Users } from 'lucide-react';
 import { ModalShell } from '../../ui/ModalShell';
+import { getSupabase } from '../../services/supabaseClient';
+import { ChangePassword } from '../../saas/PasswordForms';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -304,6 +306,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               </div>
             </div>
           </div>
+
+          {getSupabase() && (
+            <div className="p-3 rounded border-2 border-zinc-700 bg-zinc-900/40 space-y-2">
+              <div className="text-xs font-black uppercase text-gray-400">Change Password</div>
+              <ChangePassword client={getSupabase()} />
+            </div>
+          )}
 
           {/* Advanced / Destructive Actions */}
           <div className="pt-3 border-t border-zinc-800">

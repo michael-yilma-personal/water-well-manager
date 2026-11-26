@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { AuditEntry, Organization, Plan, PlatformApi, PlatformMember } from './api';
+import { ChangePassword, ForgotPassword } from '../saas/PasswordForms';
 
 /**
  * The platform administrator's console: organizations, their first
@@ -400,6 +401,7 @@ function SignIn({ client, title, onIn }: { client: SupabaseClient | null; title:
                onChange={(e) => setPassword(e.target.value)} className="p-3 rounded border-2 border-white/20 bg-black font-bold" />
         {error && <p className="text-xs font-bold text-rose-400 bg-rose-500/10 border border-rose-500/30 rounded p-2">{error}</p>}
         <button type="submit" disabled={busy} className={`mt-1 py-3 ${primary}`}>{busy ? 'Signing in…' : 'Sign in'}</button>
+        <ForgotPassword client={client} redirectTo={new URL('admin.html', window.location.href).href} />
       </form>
     </div>
   );
@@ -410,6 +412,7 @@ export default function PlatformApp({ api, client, title }: { api: PlatformApi; 
   const [user, setUser] = useState<User | null | undefined>(undefined);
   const [admin, setAdmin] = useState<boolean | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
+  const [passwordOpen, setPasswordOpen] = useState(false);
 
   // Follows the session, also when it changes in another tab: the first event carries the stored one.
   useEffect(() => {
@@ -447,10 +450,12 @@ export default function PlatformApp({ api, client, title }: { api: PlatformApi; 
         {user && (
           <>
             <span className="text-xs text-slate-400 font-semibold ml-auto">{user.email}</span>
+            <button onClick={() => setPasswordOpen((o) => !o)} className={plain}>Password</button>
             <button onClick={signOut} className={plain}>Sign out</button>
           </>
         )}
       </header>
+      {user && passwordOpen && <div className="p-6 max-w-sm"><ChangePassword client={client} /></div>}
       {user && admin === true ? <Console key={user.id} api={api} me={user} /> : (
         <div className="p-6 flex flex-col gap-3">
           {admin === undefined && <p className="text-slate-500">Checking…</p>}
