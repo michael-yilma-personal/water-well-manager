@@ -25,7 +25,7 @@ Requirements: `docs/SAAS_ARCHITECTURE_PROPOSAL.md`. How the work is run: `docs/s
 | 2 Organization-aware apps | `saas/phase-2-org-apps` | Approved 2026-11-23; in progress on staging | — |
 | 3 Subscriptions and entitlements | `saas/phase-3-subscriptions` | Done on staging; awaiting the owner's review. **Nothing on production** | https://github.com/michael-yilma-personal/water-well-manager/pull/7 |
 | 4 Platform console and audit | `saas/phase-4-platform` | Done on staging; awaiting the owner's review. **Nothing on production** | https://github.com/michael-yilma-personal/water-well-manager/pull/8 |
-| 5 Onboarding polish and cleanup | — | Not approved | — |
+| 5 Onboarding polish and cleanup | — | First half approved 2026-11-26 (staging only): change password, password reset. Email invitations wait for the owner's choice of sender; the cleanup (removing the compatibility code, which stops build 1.1.7) waits until the crews' phones run the new build | — |
 | 6 Extract the foundation | — | Not approved | — |
 
 ## Tasks
@@ -53,6 +53,7 @@ Not in this phase: email invitations, password change and reset, removing the co
 | P4-2 | Creating an organization's first Administrator through the Edge Function (the one step that needs the service role), for platform administrators only, audited | **Done**: reviewed (SR26), first Administrator only (D4-6); **deployed to staging** | TEST_RESULTS 104, 105, 110, 111 |
 | P4-3 | The console: `platform.html` (third Vite entry) and `src/platform/`: sign-in, organizations list, create organization and first Administrator, members and dates, subscription actions, audit history | **Done**: `platform.html`, `src/platformMain.tsx`, `src/platform/api.ts`, `PlatformApp.tsx`; reviewed (SR27), RF-162 to RF-164 fixed; driven on staging by the suite | TEST_RESULTS 108, 112 |
 | P4-4 | Phase suite on staging: onboarding end to end from the console, the audit trail, non-platform accounts shut out; the existing suites still pass; CI | **Done on staging**: new suite 33 of 33; existing suites green apart from tenant isolation, held while the owner's test company exists | TEST_RESULTS 114, 115, 116 |
+| P4-5 | Leftovers: the field app offers a waiting invitation to someone who already works for a company (RF-161); the console's audit list shows emails, not ids | In progress | — |
 
 Criteria are written when each task starts.
 
@@ -538,6 +539,7 @@ Harden the enforcement after the security review (RF-010 to RF-024).
 
 | Date | Decision | By |
 |---|---|---|
+| 2026-11-26 | **Phase 4 leftovers, then Phase 5** ("go ahead and do whatever you have left for 4 and proceed to 5"), after the Lead recommended doing only the first half of Phase 5 now. Recorded as: RF-161 and the audit list's emails on the Phase 4 branch; Phase 5 change password and password reset on staging; email invitations when the owner names a sender; the cleanup only after every crew phone runs the new build (it stops 1.1.7). | Owner |
 | 2026-11-25 | **No push to `main` after Phase 3** ("i will take your recommendation"): Phase 3 gets its own branch and pull request, Phase 4 continues from it, and `main` is updated together with the production migration, in the order database, functions, dashboard. | Owner |
 | 2026-11-25 | **Phase 4 approved, to start when Phase 3 is done** ("once you are done with phase 3, you can push it to main and continue on phase 4"). The Lead goes from task to task without asking. The push to `main` is not done by the Lead until the owner has answered the risk raised the same day: `main` would receive pull requests 3 to 6 unmerged-so-far in one step, and if Netlify builds from `main` the new dashboard would go live against a production database that has none of the migrations. | Owner |
 | 2026-11-25 | **Phase 3 approved, after the Phase 2 gaps** (answer "Both, gaps first" to the Lead's question). Staging only; production still needs the owner's approval of each specific action. The upgrade test on a real phone is done last. | Owner |
