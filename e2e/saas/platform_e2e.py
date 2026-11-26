@@ -64,6 +64,8 @@ def checks():
             print('\n== A. onboarding from the console ==', flush=True)
             page = console(browser, pa, errors)
             page.on('dialog', lambda d: (asked.append(d.message), d.accept()))
+            # Until the plans load, the required Plan select is empty and the browser blocks the submit.
+            page.get_by_label('Plan').locator('option').first.wait_for(state='attached')
             page.get_by_label('Name', exact=True).fill(name)
             page.get_by_label('Starts as').select_option('trial')
             page.get_by_label('End date (optional)').fill('2027-01-31')
