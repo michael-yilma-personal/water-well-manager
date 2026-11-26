@@ -24,7 +24,7 @@ Requirements: `docs/SAAS_ARCHITECTURE_PROPOSAL.md`. How the work is run: `docs/s
 | 1 Tenancy in the database | `saas/phase-1-tenancy` | Done on staging; awaiting the owner's review. **Production migration not approved** | https://github.com/michael-yilma-personal/water-well-manager/pull/5 |
 | 2 Organization-aware apps | `saas/phase-2-org-apps` | Approved 2026-11-23; in progress on staging | — |
 | 3 Subscriptions and entitlements | `saas/phase-3-subscriptions` | Done on staging; awaiting the owner's review. **Nothing on production** | https://github.com/michael-yilma-personal/water-well-manager/pull/7 |
-| 4 Platform console and audit | `saas/phase-4-platform` | Done on staging; awaiting the owner's review. **Nothing on production** | pull request 8 |
+| 4 Platform console and audit | `saas/phase-4-platform` | Done on staging; awaiting the owner's review. **Nothing on production** | https://github.com/michael-yilma-personal/water-well-manager/pull/8 |
 | 5 Onboarding polish and cleanup | — | Not approved | — |
 | 6 Extract the foundation | — | Not approved | — |
 
