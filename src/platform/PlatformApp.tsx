@@ -63,7 +63,7 @@ function PersonFields({ value, onChange }: { value: Person; onChange: (p: Person
         <input required value={value.name} onChange={set('name')} className={field} />
       </label>
       <label className={label}>Temporary password
-        <input required minLength={8} autoComplete="off" placeholder="at least 8 characters"
+        <input type="password" required minLength={8} autoComplete="new-password" placeholder="at least 8 characters"
                value={value.password} onChange={set('password')} className={field} />
       </label>
     </>
@@ -174,8 +174,9 @@ function OrgPage({ api, org, plans, me, version, busy, run }: {
   const [action, setAction] = useState('extend');
   const [ends, setEnds] = useState('');
   const [noEnd, setNoEnd] = useState(false);
-  const [plan, setPlan] = useState('');
-  const [maxUsers, setMaxUsers] = useState('');
+  // The form starts from what the organization has, so applying it unchanged changes nothing.
+  const [plan, setPlan] = useState(org.plan ?? '');
+  const [maxUsers, setMaxUsers] = useState(org.maxUsersOverride == null ? '' : String(org.maxUsersOverride));
   const [note, setNote] = useState(org.notes ?? '');
   const [person, setPerson] = useState(NO_PERSON);
 
@@ -186,6 +187,8 @@ function OrgPage({ api, org, plans, me, version, busy, run }: {
   }, [api, org.id, version]);
 
   const takesDate = ['start_trial', 'activate', 'reactivate', 'extend'].includes(action);
+  // A current plan that is no longer offered cannot be chosen again.
+  const chosenPlan = plans.find((p) => p.id === plan)?.id ?? plans[0]?.id ?? '';
   const actionLabel = ACTIONS.find(([id]) => id === action)?.[1] ?? action;
 
   const change = (e: React.FormEvent) => {
@@ -193,7 +196,7 @@ function OrgPage({ api, org, plans, me, version, busy, run }: {
     const args: Record<string, unknown> = {};
     if (takesDate && ends) args.ends_at = endOfDay(ends);
     else if (takesDate && action !== 'extend' && noEnd) args.ends_at = null;
-    if (action === 'change_plan') args.plan = plan || plans[0]?.id;
+    if (action === 'change_plan') args.plan = chosenPlan;
     if (action === 'override') args.max_users = maxUsers === '' ? null : Number(maxUsers);
     if (note !== (org.notes ?? '')) args.notes = note;
     if (action === 'suspend' || action === 'cancel') {
@@ -250,7 +253,7 @@ function OrgPage({ api, org, plans, me, version, busy, run }: {
           )}
           {action === 'change_plan' && (
             <label className={label}>Plan
-              <select value={plan || plans[0]?.id || ''} onChange={(e) => setPlan(e.target.value)} className={field}>
+              <select value={chosenPlan} onChange={(e) => setPlan(e.target.value)} className={field}>
                 {plans.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
               </select>
             </label>
@@ -408,9 +411,11 @@ export default function PlatformApp({ api, client, title }: { api: PlatformApi; 
   const [admin, setAdmin] = useState<boolean | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
 
+  // Follows the session, also when it changes in another tab: the first event carries the stored one.
   useEffect(() => {
     if (!client) return setUser(null);
-    client.auth.getSession().then(({ data }) => setUser(data.session?.user ?? null), () => setUser(null));
+    const { data } = client.auth.onAuthStateChange((_event, session) => setUser(session?.user ?? null));
+    return () => data.subscription.unsubscribe();
   }, [client]);
 
   const userId = user?.id;
@@ -428,7 +433,8 @@ export default function PlatformApp({ api, client, title }: { api: PlatformApi; 
   }, [api, userId]);
 
   const signOut = async () => {
-    await client?.auth.signOut().catch(() => undefined);
+    // This browser's console session only.
+    await client?.auth.signOut({ scope: 'local' }).catch(() => undefined);
     setUser(null);
   };
 
@@ -445,7 +451,7 @@ export default function PlatformApp({ api, client, title }: { api: PlatformApi; 
           </>
         )}
       </header>
-      {user && admin === true ? <Console api={api} me={user} /> : (
+      {user && admin === true ? <Console key={user.id} api={api} me={user} /> : (
         <div className="p-6 flex flex-col gap-3">
           {admin === undefined && <p className="text-slate-500">Checking…</p>}
           {admin === false && !error && <p className="font-bold">This account is not a platform administrator.</p>}
