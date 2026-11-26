@@ -13,7 +13,7 @@ type Api = {
   listAudit(orgId?: string): Promise<unknown[]>; // id, at, actorId, orgId, action, target, details
   createOrganization(input: { name: string; plan: string; status: string; endsAt?: string | null }): Promise<string>;
   updateSubscription(orgId: string, action: string, args?: Record<string, unknown>): Promise<unknown>; // args as the function takes them (ends_at, plan, max_users, features, notes)
-  addAdministrator(orgId: string, input: { email: string; name: string; password: string }): Promise<{ id: string; outcome: string }>;
+  addFirstAdmin(orgId: string, input: { email: string; name: string; password: string }): Promise<{ id: string; outcome: string }>;
 };
 
 const ORG = 'aaaaaaaa-0000-0000-0000-000000000001';
@@ -147,10 +147,10 @@ test('a refusal by the database rejects every call with the server message, and 
   for (const call of calls) await assert.rejects(call(), /Platform administrators only\./);
 });
 
-test('addAdministrator posts the person to saas-members with the configured administrator role and the session token', async () => {
+test('addFirstAdmin posts the person to saas-members with the configured administrator role and the session token', async () => {
   const { api, requests } = await setup({ status: 201, body: { id: USER, outcome: 'created' } });
   const person = { email: 'a@example.com', name: 'A', password: 'long-enough-1' };
-  assert.deepEqual(await api.addAdministrator(ORG, person), { id: USER, outcome: 'created' });
+  assert.deepEqual(await api.addFirstAdmin(ORG, person), { id: USER, outcome: 'created' });
   assert.equal(requests.length, 1);
   const [r] = requests;
   assert.equal(r.method, 'POST');
@@ -160,10 +160,10 @@ test('addAdministrator posts the person to saas-members with the configured admi
   assert.deepEqual(r.body, { org_id: ORG, ...person, role: 'app-admin-role' });
 });
 
-test('addAdministrator rejects a non-2xx answer with the function sentence and the status', async () => {
+test('addFirstAdmin rejects a non-2xx answer with the function sentence and the status', async () => {
   for (const [status, error] of [[402, 'The subscription does not allow changes'], [409, 'The user limit is reached']] as const) {
     const { api } = await setup({ status, body: { error } });
-    await assert.rejects(api.addAdministrator(ORG, { email: 'a@example.com', name: 'A', password: 'long-enough-1' }),
+    await assert.rejects(api.addFirstAdmin(ORG, { email: 'a@example.com', name: 'A', password: 'long-enough-1' }),
       (e: Error & { status?: number }) => e instanceof Error && e.message === error && e.status === status);
   }
 });
