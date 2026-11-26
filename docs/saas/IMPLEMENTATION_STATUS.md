@@ -49,7 +49,7 @@ Not in this phase: email invitations, password change and reset, removing the co
 |---|---|---|---|
 | P4-1 | Reusable migration `saas_platform`: the platform administrator's SQL functions (create an organization with its subscription; change a subscription: start trial, activate, extend, change plan, override the user limit, suspend, reactivate, cancel), each checking `is_platform_admin()` and writing its audit row in the same transaction; the read paths the console needs (organizations with subscription and member counts, members of an organization, audit history) | Implemented (migration 196 lines: four functions, no table or policy; rollback 10); local database suite green; review pending; not yet on staging | TEST_RESULTS 103, 106 |
 | P4-2 | Creating an organization's first Administrator through the Edge Function (the one step that needs the service role), for platform administrators only, audited | Implemented (16 lines in the function); unit 345 of 345; gate green; review with P4-1; not yet deployed to staging | TEST_RESULTS 104, 105 |
-| P4-3 | The console: `platform.html` (third Vite entry) and `src/platform/`: sign-in, organizations list, create organization and first Administrator, members and dates, subscription actions, audit history | Not started | — |
+| P4-3 | The console: `platform.html` (third Vite entry) and `src/platform/`: sign-in, organizations list, create organization and first Administrator, members and dates, subscription actions, audit history | Tests written (11 red as intended); with the Developer | TEST_RESULTS 108 |
 | P4-4 | Phase suite on staging: onboarding end to end from the console, the audit trail, non-platform accounts shut out; the existing suites still pass; CI | Not started | — |
 
 Criteria are written when each task starts.
@@ -82,6 +82,15 @@ Criteria are written when each task starts.
 3. Nothing else is open to a platform administrator there without a membership: any other role, listing, role change, deactivating, re-activating, removing are 403.
 4. The organization's subscription and user limit still apply (402, 409); an unknown organization is refused.
 5. Anyone who is neither a platform administrator nor an active Administrator of the organization still gets 403; an organization's Administrator is unaffected.
+
+#### P4-3 criteria (2026-11-25)
+
+1. `platform.html` is a third entry of the build. After sign-in an account that is not a platform administrator sees one sentence saying so and a way to sign out, and no data; an error answering "is this a platform administrator" is never taken as yes.
+2. The organizations list shows each organization's name, plan, status, end date, access level and member count.
+3. Creating an organization (name, plan, trial or active, optional end date) and its first Administrator (email, name, temporary password) is one flow with no SQL; a refusal shows the server's sentence.
+4. An organization's page shows its members (name, email, role, status) and its subscription, with the actions start trial, activate, extend, change plan, override the user limit, suspend, reactivate and cancel, and a note; suspend and cancel ask for confirmation.
+5. The audit history, for one organization and overall: time, actor, action, details.
+6. `src/platform` is reusable: no Drill name in it; the administrator role's name comes from outside the folder. No new dependency.
 
 ### Phase 3 — Subscriptions and entitlements (approved 2026-11-25; staging only; starts after the Phase 2 gaps)
 

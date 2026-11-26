@@ -58,23 +58,31 @@ test('a second person on the same browser never inherits the first one\'s organi
   assert.equal(rememberedOrg(storage, 'user-1'), 'a');
 });
 
-test('src/saas imports nothing from the rest of src and names nothing of Drill', () => {
-  const dir = fileURLToPath(new URL('.', import.meta.url));
+// The boundary of a reusable folder (proposal 11). `sibling`: another reusable folder it may import from.
+function checkBoundary(folder: string, sibling?: string) {
+  const dir = fileURLToPath(new URL(`../${folder}/`, import.meta.url));
   const files = readdirSync(dir, { recursive: true, encoding: 'utf8' })
     .filter((f) => /\.(ts|tsx|mts|js|mjs)$/.test(f) && !/\.test\.[a-z]+$/.test(f));
-  assert.ok(files.length > 0, 'src/saas holds no implementation file');
+  assert.ok(files.length > 0, `src/${folder} holds no implementation file`);
   const drill = ['boreholes', 'pipe_records', 'drilling_events', 'shift_logs', 'profiles',
     'Driller', 'Data Logger', 'Supervisor', 'Administrator', 'drilling-photos'];
   for (const file of files) {
     const text = readFileSync(join(dir, file), 'utf8');
     const depth = file.split(/[\\/]/).length - 1;
     for (const [, spec] of text.matchAll(/(?:from|import|require)\s*\(?\s*['"]([^'"]+)['"]/g)) {
+      const prefix = `${'../'.repeat(depth + 1)}${sibling}/`;
+      if (sibling && spec.startsWith(prefix) && !spec.slice(prefix.length).includes('..')) continue;
       const ups = spec.split('/').filter((p) => p === '..').length;
       assert.ok(ups <= depth && !/^(@\/|~\/|src\/|\/)/.test(spec), `${file} imports ${spec}`);
     }
     for (const name of drill) assert.ok(!text.includes(name), `${file} names ${name}`);
   }
-});
+}
+
+test('src/saas imports nothing from the rest of src and names nothing of Drill', () => checkBoundary('saas'));
+
+// P4-3. Red until src/platform holds an implementation file (its tests do not count).
+test('src/platform imports nothing from src but src/saas and names nothing of Drill', () => checkBoundary('platform', 'saas'));
 
 // --- P3-3: the subscription notice (criteria 1, 7) ----------------------------
 // Assumed, in src/saas/orgContext.ts:
