@@ -62,6 +62,11 @@ MIG_SAAS_PLATFORM="$(ls "$SUPA"/migrations/*_saas_platform.sql 2>/dev/null | hea
 MIG_SAAS_PLATFORM="${MIG_SAAS_PLATFORM:-$SUPA/migrations/<timestamp>_saas_platform.sql}"
 RB_SAAS_PLATFORM="$SUPA/rollback/$(basename "$MIG_SAAS_PLATFORM")"
 HAS_SAAS_PLATFORM=0; [ ! -f "$RB_SAAS_PLATFORM" ] || HAS_SAAS_PLATFORM=1
+# Task P4-5: the console's audit history (saas_platform is applied to staging, so a new migration).
+MIG_SAAS_PLATFORM_AUDIT="$(ls "$SUPA"/migrations/*_saas_platform_audit.sql 2>/dev/null | head -n 1)"
+MIG_SAAS_PLATFORM_AUDIT="${MIG_SAAS_PLATFORM_AUDIT:-$SUPA/migrations/<timestamp>_saas_platform_audit.sql}"
+RB_SAAS_PLATFORM_AUDIT="$SUPA/rollback/$(basename "$MIG_SAAS_PLATFORM_AUDIT")"
+HAS_SAAS_PLATFORM_AUDIT=0; [ ! -f "$RB_SAAS_PLATFORM_AUDIT" ] || HAS_SAAS_PLATFORM_AUDIT=1
 
 LABEL="${RUN_LABEL:+[$RUN_LABEL] }"
 
@@ -129,6 +134,7 @@ run_file() {
     -v rollback_saas_subscriptions="$RB_SAAS_SUBSCRIPTIONS" \
     -v rollback_drill_subscriptions="$RB_DRILL_SUBSCRIPTIONS" -v has_drill_subscriptions="$HAS_DRILL_SUBSCRIPTIONS" \
     -v rollback_saas_platform="$RB_SAAS_PLATFORM" -v has_saas_platform="$HAS_SAAS_PLATFORM" \
+    -v rollback_saas_platform_audit="$RB_SAAS_PLATFORM_AUDIT" -v has_saas_platform_audit="$HAS_SAAS_PLATFORM_AUDIT" \
     -f "$file" >"$out" 2>"$err"
   rc=$?
 
@@ -410,7 +416,8 @@ if grep -q 'SS002' "$MIG_DRILL_SUBSCRIPTIONS" 2>/dev/null; then pass "$name"; el
 
 # SaaS Phase 4, task P4-1 (criterion 7): the reusable platform migration and
 # its rollback script, which the rehearsals run first (sql/inc/roll_back_later.sql).
-for need in "$MIG_SAAS_PLATFORM" "$RB_SAAS_PLATFORM"; do
+# P4-5: and the audit history migration with its rollback.
+for need in "$MIG_SAAS_PLATFORM" "$RB_SAAS_PLATFORM" "$MIG_SAAS_PLATFORM_AUDIT" "$RB_SAAS_PLATFORM_AUDIT"; do
   what="[P4-1 c7] supabase/${need#"$SUPA"/} exists and contains no transaction control"
   if [ ! -f "$need" ]; then
     fail "$what :: file not found"

@@ -10,7 +10,7 @@ type Api = {
   listOrganizations(): Promise<unknown[]>; // id, name, createdAt, plan, status, startsAt, endsAt, graceDays, maxUsersOverride, featuresOverride, notes, access, members
   listMembers(orgId: string): Promise<unknown[]>; // id, name, email, role, status
   listPlans(): Promise<unknown[]>; // id, name, maxUsers, features, isActive
-  listAudit(orgId?: string): Promise<unknown[]>; // id, at, actorId, orgId, action, target, details
+  listAudit(orgId?: string): Promise<unknown[]>; // id, at, actorId, actorEmail, orgId, orgName, action, target, targetEmail, details (P4-5)
   createOrganization(input: { name: string; plan: string; status: string; endsAt?: string | null }): Promise<string>;
   updateSubscription(orgId: string, action: string, args?: Record<string, unknown>): Promise<unknown>; // args as the function takes them (ends_at, plan, max_users, features, notes)
   addFirstAdmin(orgId: string, input: { email: string; name: string; password: string }): Promise<{ id: string; outcome: string }>;
@@ -102,20 +102,20 @@ test('listPlans reads the plans table in camelCase', async () => {
   assert.deepEqual(queries.map((q) => q.table), ['plans']);
 });
 
-test('listAudit reads audit_log newest first with a limit, for one organization only when one is given', async () => {
-  const rows = [{ id: 9, at: '2026-11-25T10:00:00+00:00', actor_id: USER, org_id: ORG, action: 'org.create', target: null, details: { plan: 'basic' } }];
-  const { api, queries } = await setup({ table: { data: rows, error: null } });
-  assert.deepEqual(await api.listAudit(), [{ id: 9, at: '2026-11-25T10:00:00+00:00', actorId: USER, orgId: ORG, action: 'org.create', target: null, details: { plan: 'basic' } }]);
+// P4-5 changed the source: platform_audit(p_org, p_limit) instead of the audit_log table. It orders
+// and limits on the server (supabase/tests/sql/59_platform.sql); the API passes the organization.
+test('listAudit reads platform_audit, for one organization only when one is given, with the actor, organization and target names', async () => {
+  const rows = [{ id: 9, at: '2026-11-25T10:00:00+00:00', actor_id: USER, actor_email: 'p@example.com', org_id: ORG, org_name: 'Acme',
+    action: 'member.role', target: USER, target_email: 'p@example.com', details: { plan: 'basic' } }];
+  const { api, rpcCalls, queries } = await setup({ rpc: { data: rows, error: null } });
+  assert.deepEqual(await api.listAudit(), [{ id: 9, at: '2026-11-25T10:00:00+00:00', actorId: USER, actorEmail: 'p@example.com', orgId: ORG,
+    orgName: 'Acme', action: 'member.role', target: USER, targetEmail: 'p@example.com', details: { plan: 'basic' } }]);
   await api.listAudit(ORG);
-  assert.deepEqual(queries.map((q) => q.table), ['audit_log', 'audit_log']);
-  for (const { calls } of queries) {
-    const order = calls.find(([m]) => m === 'order') as [string, string, { ascending?: boolean }] | undefined;
-    assert.ok(order && ['at', 'id'].includes(order[1]) && order[2]?.ascending === false, 'newest first');
-    const limit = calls.find(([m]) => m === 'limit')?.[1] as number | undefined;
-    assert.ok(typeof limit === 'number' && limit >= 1 && limit <= 1000, 'a limit between 1 and 1000');
-  }
-  const filters = queries.map(({ calls }) => calls.filter(([m]) => m === 'eq'));
-  assert.deepEqual(filters, [[], [['eq', 'org_id', ORG]]]);
+  assert.deepEqual(queries, [], 'not the table');
+  assert.deepEqual(rpcCalls.map((c) => c.fn), ['platform_audit', 'platform_audit']);
+  const args = rpcCalls.map((c) => ({ p_org: null, ...(c.args as object) }) as { p_org: unknown; p_limit?: unknown });
+  assert.deepEqual(args.map((a) => a.p_org), [null, ORG]);
+  for (const a of args) assert.ok(a.p_limit === undefined || (typeof a.p_limit === 'number' && a.p_limit >= 1 && a.p_limit <= 1000), 'a limit between 1 and 1000');
 });
 
 test('createOrganization calls platform_create_organization and returns the new id; no end date is sent as null', async () => {

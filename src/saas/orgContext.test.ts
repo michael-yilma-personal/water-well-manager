@@ -112,3 +112,22 @@ test('no access level read yet is treated as full: no notice', () => {
   assert.equal(subscriptionNotice(null, null, NOW), null);
   assert.equal(subscriptionNotice(undefined, undefined, NOW), null);
 });
+
+// --- P4-5 (RF-161): a waiting invitation is offered next to an active organization ---
+// Assumed, in src/saas/orgContext.ts:
+//   invitationsToOffer(memberships: Membership[], activeOrgId: string | null): Membership[]
+// The invited memberships, in the order given, whether or not an organization is active.
+// Accepting one turns it active; resolveActiveOrg then keeps the remembered organization.
+const invitationsToOffer = (list: ReturnType<typeof m>[], activeOrgId: string | null) =>
+  (orgContext as unknown as { invitationsToOffer: (l: typeof list, a: string | null) => typeof list })
+    .invitationsToOffer(list, activeOrgId);
+
+test('a waiting invitation is offered while another organization is active, and accepting it does not switch', () => {
+  const before = [m('a', 'active'), m('b', 'invited'), m('c', 'deactivated'), m('d', 'invited')];
+  assert.deepEqual(invitationsToOffer(before, 'a'), [m('b', 'invited'), m('d', 'invited')]);
+  assert.deepEqual(invitationsToOffer(before, null), [m('b', 'invited'), m('d', 'invited')]);
+  assert.deepEqual(invitationsToOffer([m('a', 'active'), m('c', 'deactivated')], 'a'), []);
+  const after = [m('a', 'active'), m('b', 'active'), m('c', 'deactivated'), m('d', 'invited')];
+  assert.deepEqual(resolveActiveOrg(after, 'a'), { kind: 'active', orgId: 'a' });
+  assert.deepEqual(invitationsToOffer(after, 'a'), [m('d', 'invited')]);
+});

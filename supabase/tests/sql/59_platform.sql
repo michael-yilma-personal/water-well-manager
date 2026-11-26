@@ -28,7 +28,7 @@
 --     `notes` key in details.before / details.after.
 --
 -- A refusal raises, so it changes nothing: that is asserted once, by t.silent.
--- plan: 41
+-- plan: 47
 begin;
 \ir ../lib/helpers.sql
 \ir ../lib/fixture.sql
@@ -180,6 +180,35 @@ select t.act('activate', jsonb_build_object('ends_at', now() + interval '30 days
   $$s.status = 'active' and s.ends_at = now() + interval '30 days' and public.org_access(s.org_id) = 'full'$$);
 
 -- ---------------------------------------------------------------------------
+-- P4-5: the console's audit history, from the new reusable migration
+-- saas_platform_audit. ASSUMED: platform_audit(p_org uuid default null,
+-- p_limit int default 200) returns id, at, actor_id, actor_email, org_id,
+-- org_name, action, target, target_email, details, newest first (at, then id);
+-- target_email only when the target is a user id.
+-- ---------------------------------------------------------------------------
+
+insert into public.audit_log (actor_id, org_id, action, target)
+values (t.uid('a_admin'), t.a(), 'p45.user_target', t.uid('a_driller')::text), (t.uid('a_admin'), t.a(), 'p45.text_target', 'not-a-uuid');
+select t.ok('[P4-5] platform_audit(): a platform administrator gets every audit row newest first, with the actor''s email, the organization''s name, and the target''s email only when the target is a user', 'padmin',
+  format($$ select (select count(*) from public.platform_audit(null, 100000)) = %s
+               and (select array_agg(id order by ordinality) = array_agg(id order by at desc, id desc)
+                    from public.platform_audit(null, 100000) with ordinality)
+               and (select count(*) = 1 from public.platform_audit(null, 100000)
+                    where action = 'p45.user_target' and actor_id = %L and actor_email = 'a_admin@db-test.invalid'
+                      and org_id = %L and org_name = 'Org A' and target = %L and target_email = 'a_driller@db-test.invalid')
+               and (select count(*) = 1 from public.platform_audit(null, 100000)
+                    where action = 'p45.text_target' and target = 'not-a-uuid' and target_email is null)
+               and (select count(*) > 0 and bool_and(actor_email = 'padmin@db-test.invalid')
+                    from public.platform_audit(null, 100000) where actor_id = %L) $$,
+    (select count(*) from public.audit_log), t.uid('a_admin'), t.a(), t.uid('a_driller'), t.uid('padmin')));
+select t.ok('[P4-5] platform_audit(org): only the rows of that organization, all of them', 'padmin',
+  format($$ select count(*) = %s and bool_and(org_id = %L) from public.platform_audit(%L, 100000) $$,
+    (select count(*) from public.audit_log where org_id = t.a()), t.a(), t.a()));
+select t.ok('[P4-5] platform_audit(null, 3): the three newest rows only', 'padmin',
+  format($$ select array_agg(id order by ordinality) = %L::bigint[] from public.platform_audit(null, 3) with ordinality $$,
+    (select (array_agg(id order by at desc, id desc))[1:3] from public.audit_log)));
+
+-- ---------------------------------------------------------------------------
 -- Criteria 4 and 5: nobody else, and nothing more for the platform administrator
 -- ---------------------------------------------------------------------------
 
@@ -192,7 +221,11 @@ from (values
   ('platform_organizations',       'an ordinary member', 'a_driller', 'select * from public.platform_organizations()'),
   ('platform_members',             'an Administrator asking for their own organization', 'a_admin',
      format('select * from public.platform_members(%L)', t.a())),
-  ('platform_organizations',       'a signed-out client', 'anon', 'select * from public.platform_organizations()')
+  ('platform_organizations',       'a signed-out client', 'anon', 'select * from public.platform_organizations()'),
+  -- P4-5
+  ('platform_audit',               'an organization''s Administrator', 'a_admin', 'select * from public.platform_audit()'),
+  ('platform_audit',               'the service role (D4-4)', 'service', 'select * from public.platform_audit()'),
+  ('platform_audit',               'a signed-out client', 'anon', 'select * from public.platform_audit()')
 ) v(fn, who, actor, q);
 select t.ok('[P4-1 c4] anon holds no EXECUTE on any of the four functions',
   $$ select count(*) = 4 and not bool_or(coalesce(has_function_privilege('anon', to_regprocedure('public.' || f), 'EXECUTE'), true))
