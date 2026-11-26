@@ -46,7 +46,7 @@ Not in this phase: the platform console and the audited platform functions that 
 
 | Id | Task | Status | Evidence |
 |---|---|---|---|
-| P3-1 | Reusable migration `saas_subscriptions`: `plans`, `subscriptions` (RLS on), `org_access(org)`, the user-limit trigger on `memberships`, `my_organizations()` returning access level and end date; a subscription row for every existing organization | Not started | — |
+| P3-1 | Reusable migration `saas_subscriptions`: `plans`, `subscriptions` (RLS on), `org_access(org)`, the user-limit trigger on `memberships`, `my_organizations()` returning access level and end date; a subscription row for every existing organization | Tests written (red as intended); with the Developer | TEST_RESULTS 92 |
 | P3-2 | Drill migration `drill_subscriptions`: `org_access()` in the Drill policies and the photo bucket; a distinct error code for a write refused by the subscription; `saas-members` follows the "Manage members" column | Not started | — |
 | P3-3 | Apps: notices in both (grace, expired, suspended, canceled); the field app holds subscription-refused work in the queue and uploads it after renewal; the dashboard is read-only when expired | Not started | — |
 | P3-4 | Phase suite on staging: the three phase acceptance points with real sign-ins; the existing suites still pass; CI | Not started | — |
@@ -61,6 +61,19 @@ Criteria are written when each task starts.
 | D3-2 | The user limit counts `active` and `invited` memberships; `deactivated` ones do not count. Re-activating a member is checked like adding one. |
 | D3-3 | The functions a platform administrator uses to change a subscription are written in Phase 4 with the console. In Phase 3 the tests set dates and statuses through the fixture. |
 | D3-4 | Feature flags (`plans.features`) are stored but nothing is gated by them in Phase 3: no plan differs in features yet. |
+| D3-5 | An organization without a subscription row has no user limit (its access is `none` anyway). |
+| D3-6 | One plan is seeded, `standard`, with `max_users` 100. The real plans and limits are the owner's to set. |
+| D3-7 | `plans` is on the allowlist of `schema_check.sql` (tables without `org_id`): it is a catalog shared by all organizations and holds no tenant data. |
+
+#### P3-1 criteria (2026-11-25)
+
+1. `plans` and `subscriptions` as in proposal 5.1, RLS on; an active member reads their own organization's subscription and the plans; no write through the API; no read of another organization's subscription.
+2. `org_access(org)` returns `full`, `read_only` or `none` per section 8, and `none` without a row.
+3. The user-limit trigger refuses with SQLSTATE `SS001`; deactivated memberships do not count; two concurrent inserts cannot both take the last seat.
+4. `my_organizations()` also returns `access` and `ends_at`; existing callers unchanged.
+5. Every existing organization gets a `standard`, `active` subscription without end date.
+6. The existing database suite stays green; nothing is wired into a policy yet.
+7. A rollback restores the previous state exactly.
 
 ### Phase 2 — Organization-aware apps (approved 2026-11-23; staging only)
 

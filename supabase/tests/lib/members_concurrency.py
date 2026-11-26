@@ -34,13 +34,18 @@ Before the nine cases the tool is tried on two writes that nothing guards
 (two plain UPDATEs, each deactivating one of two Drillers): it must see both
 succeed and neither left active, or its verdicts mean nothing.
 
+SaaS Phase 3, task P3-1, criterion 3, with the same tool: an organization
+with two members and a limit of three users, and two plain INSERTs that each
+add a different person. One must be refused with the user-limit SQLSTATE
+(SEAT_STATE: the tests' assumption, see sql/56_subscriptions.sql).
+
 Everything it creates is committed, so everything is deleted again whatever
 happens, and the last line says whether the database is as it was. Accounts
 are *@db-test.invalid; the organizations are named "Concurrency test N".
 
 Talks only to the database named by the PG* environment (run.sh has already
 refused any host that is not this machine) through psql. Prints one line per
-check, `ok<TAB>name` or `FAIL<TAB>name :: detail`, twelve in all, and exits 0;
+check, `ok<TAB>name` or `FAIL<TAB>name :: detail`, thirteen in all, and exits 0;
 run.sh counts the lines. Standard library only.
 """
 
@@ -57,7 +62,8 @@ from in_flight import Harness, Session, lit  # noqa: E402
 
 DEADLINE_SECONDS = 60
 OPS = ("remove", "deactivate", "demote")
-LINES = 12
+LINES = 13
+SEAT_STATE = "SS001"
 
 # An error that says the call is broken, not that the function refused.
 BROKEN_STATES = {"42883", "42P01", "42703", "42601", "42804", "42725", "42846", "42P02", "3F000"}
@@ -127,6 +133,9 @@ def fixture(h, n, role="Administrator"):
 def cleanup(h):
     h.q(
         "begin;"
+        "do $$ begin if to_regclass('public.subscriptions') is not null then"
+        " delete from public.subscriptions where org_id in (select id from public.organizations where name like 'Concurrency test %');"
+        " end if; end $$;"
         "delete from public.audit_log where org_id in (select id from public.organizations where name like 'Concurrency test %');"
         "delete from public.memberships where org_id in (select id from public.organizations where name like 'Concurrency test %')"
         "   or user_id in (select id from auth.users where email ~ '^conc-[0-9]+-[ab]@db-test[.]invalid$');"
@@ -141,7 +150,7 @@ def left_behind(h):
         "select (select count(*) from public.organizations where name like 'Concurrency test %%')"
         " || ' organization(s), ' || (select count(*) from auth.users where email ~ '^conc-[0-9]+-[ab]@db-test[.]invalid$')"
         " || ' account(s), ' || (select count(*) from public.profiles where id in (%s))"
-        " || ' profile(s)'" % ", ".join(lit(uid("conc-%d-%s" % (n, x))) for n in range(0, 10) for x in "ab"))
+        " || ' profile(s)'" % ", ".join(lit(uid("conc-%d-%s" % (n, x))) for n in range(0, 12) for x in "ab"))
 
 
 def race(h, n, sql1, sql2, as_service, role="Administrator"):
@@ -279,6 +288,24 @@ def main():
         crashed = str(exc)[:240]
     for name in names[done:10]:
         line(False, name, "not checked, the tool stopped: " + (crashed or "?"))
+
+    # P3-1 criterion 3: the last free seat. Two members, a limit of three,
+    # and two people (the members of a second organization) added at once.
+    seat = ("[P3-1 c3] two inserts at the same moment, each adding a different person to an organization "
+            "with one free seat: they cannot both succeed, and the loser gets %s" % SEAT_STATE)
+    try:
+        org, a, b = fixture(h, 10, role="Driller")
+        _, c, d = fixture(h, 11, role="Driller")
+        h.q("insert into public.subscriptions (org_id, plan_id, status, max_users_override) values (%s, 'standard', 'active', 3) "
+            "on conflict (org_id) do update set plan_id = 'standard', status = 'active', ends_at = null, max_users_override = 3" % lit(org))
+        add = "insert into public.memberships (org_id, user_id, role, status) values (%s, %s, 'Driller', 'active');"
+        res = race(h, 10, add % (lit(org), lit(c)), add % (lit(org), lit(d)), as_service=False, role="Driller")
+        lost = res["err2"] if res["ok1"] else res["err1"]
+        line(res["problem"] is None and res["ok1"] != res["ok2"] and lost is not None and lost[0] == SEAT_STATE
+             and res["admins"] == "3", seat, res["problem"] or describe(res))
+    except Exception as exc:
+        line(False, seat, "not checked: " + str(exc)[:240])
+
     line(crashed is None, names[10], crashed or "")
 
     try:

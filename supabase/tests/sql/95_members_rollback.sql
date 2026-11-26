@@ -26,6 +26,8 @@ begin;
 \ir inc/members.sql
 \ir inc/catalog.sql
 \ir inc/marker_key.sql
+-- A migration later than the ones this file rehearses is rolled back first.
+\ir inc/roll_back_later.sql
 
 create table t.founding as select id from public.organizations;
 grant select on t.founding to public;

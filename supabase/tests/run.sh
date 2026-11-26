@@ -48,6 +48,10 @@ MIG_SAAS_MEMBERS="$SUPA/migrations/20261123000000_saas_members.sql"
 MIG_DRILL_MEMBERS="$SUPA/migrations/20261123010000_drill_members.sql"
 RB_SAAS_MEMBERS="$SUPA/rollback/20261123000000_saas_members.sql"
 RB_DRILL_MEMBERS="$SUPA/rollback/20261123010000_drill_members.sql"
+# SaaS Phase 3, task P3-1: subscriptions. The timestamp is the Developer's.
+MIG_SAAS_SUBSCRIPTIONS="$(ls "$SUPA"/migrations/*_saas_subscriptions.sql 2>/dev/null | head -n 1)"
+MIG_SAAS_SUBSCRIPTIONS="${MIG_SAAS_SUBSCRIPTIONS:-$SUPA/migrations/<timestamp>_saas_subscriptions.sql}"
+RB_SAAS_SUBSCRIPTIONS="$SUPA/rollback/$(basename "$MIG_SAAS_SUBSCRIPTIONS")"
 
 LABEL="${RUN_LABEL:+[$RUN_LABEL] }"
 
@@ -106,6 +110,7 @@ run_file() {
     -v rollback_core="$RB_CORE" -v rollback_drill="$RB_DRILL" \
     -v mig_saas_members="$MIG_SAAS_MEMBERS" -v mig_drill_members="$MIG_DRILL_MEMBERS" \
     -v rollback_saas_members="$RB_SAAS_MEMBERS" -v rollback_drill_members="$RB_DRILL_MEMBERS" \
+    -v rollback_saas_subscriptions="$RB_SAAS_SUBSCRIPTIONS" \
     -f "$file" >"$out" 2>"$err"
   rc=$?
 
@@ -333,6 +338,41 @@ for need in "$MIG_SAAS_MEMBERS" "$MIG_DRILL_MEMBERS" "$RB_DRILL_MEMBERS" "$RB_SA
   fi
 done
 
+# SaaS Phase 3, task P3-1: the reusable subscriptions migration and its
+# rollback script. Once they exist the rehearsals roll the migration back
+# first (sql/inc/roll_back_later.sql), so they wait on these two as well.
+for need in "$MIG_SAAS_SUBSCRIPTIONS" "$RB_SAAS_SUBSCRIPTIONS"; do
+  what="[P3-1] supabase/${need#"$SUPA"/} exists and contains no transaction control"
+  if [ ! -f "$need" ]; then
+    fail "$what :: file not found"
+  elif [ "$have_python" -eq 0 ] || has_txn_control "$need" || ! python3 "$SPLITTER" txn-control "$need" >/dev/null 2>&1; then
+    fail "$what :: $(python3 "$SPLITTER" txn-control "$need" 2>&1 | head -n 3 | tr '\n' ';')"
+    ready=0
+    ready_members=0
+  else
+    pass "$what"
+  fi
+done
+
+name="[P3-1] saas_subscriptions names no Drill table, column, role, function or bucket in its code"
+if [ -f "$MIG_SAAS_SUBSCRIPTIONS" ]; then
+  hits="$(sed -e 's/--.*$//' "$MIG_SAAS_SUBSCRIPTIONS" \
+    | grep -n -E -i '(^|[^a-z_])(boreholes|pipe_records|drilling_events|shift_logs|profiles|is_admin|is_reviewer|handle_new_user|drilling[-_]photos|created_by|is_founding|deactivated_by_ban)([^a-z_]|$)' || true)"
+  roles="$(sed -e 's/--.*$//' "$MIG_SAAS_SUBSCRIPTIONS" \
+    | grep -n -E '(Driller|Data Logger|Supervisor|Administrator)' || true)"
+  if [ -z "$hits$roles" ]; then
+    pass "$name"
+  else
+    fail "$name :: $(printf '%s\n%s' "$hits" "$roles" | grep -v '^$' | head -n 5 | tr '\n' ';')"
+  fi
+else
+  fail "$name :: file not found"
+fi
+# Criterion 3: the refusal's code is documented where the Edge Function's
+# author will look for it. SS001 is the tests' assumption (56_subscriptions.sql).
+name="[P3-1 c3] the migration documents the SQLSTATE of the user-limit refusal (SS001)"
+if grep -q 'SS001' "$MIG_SAAS_SUBSCRIPTIONS" 2>/dev/null; then pass "$name"; else fail "$name :: not found in the migration"; fi
+
 # P2-1 criterion 4: the last-administrator rule with two real sessions
 # (lib/members_concurrency.py says how). What it creates is committed and
 # deleted again; its last line says whether the database is as it was.
@@ -351,9 +391,9 @@ members_concurrency() {
       *)        echo "# members_concurrency.py: $line" ;;
     esac
   done <"$out"
-  # The tool's own check, nine cases, its end and the cleanup.
-  if [ "$n" -ne 12 ] || [ -s "$err" ]; then
-    fail "[harness] concurrency: lib/members_concurrency.py printed its twelve lines and nothing else :: $n line(s); $(head -n 1 "$err" | cut -c 1-200)"
+  # The tool's own check, nine cases, the last seat (P3-1), its end and the cleanup.
+  if [ "$n" -ne 13 ] || [ -s "$err" ]; then
+    fail "[harness] concurrency: lib/members_concurrency.py printed its thirteen lines and nothing else :: $n line(s); $(head -n 1 "$err" | cut -c 1-200)"
   fi
 }
 
