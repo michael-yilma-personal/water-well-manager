@@ -4,7 +4,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { PermanentSyncError, type OutboxEntity, type OutboxItem, type OutboxTransport } from './outbox';
+import { NoSessionError, PermanentSyncError, type OutboxEntity, type OutboxItem, type OutboxTransport } from './outbox';
 import {
   boreholeToRow,
   eventToRow,
@@ -86,7 +86,7 @@ export function createSupabaseTransport(deps: TransportDeps): OutboxTransport {
     const userId = await deps.getUserId();
     if (!userId) {
       // Transient by design - retry once the session refreshes.
-      throw new Error('no active session; will retry after sign-in');
+      throw new NoSessionError('no active session; will retry after sign-in');
     }
 
     if (item.entity === 'photo') {

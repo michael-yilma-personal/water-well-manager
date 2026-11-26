@@ -4,7 +4,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { PermanentSyncError, type OutboxItem } from './outbox';
+import { NoSessionError, PermanentSyncError, type OutboxItem } from './outbox';
 import { PHOTO_BUCKET } from './supabaseClient';
 import { deleteLocalPhoto, photoNames, readLocalPhoto } from './photos';
 
@@ -45,7 +45,7 @@ export function createPhotoTransport(deps: PhotoTransportDeps) {
     if (!client) throw new Error('Supabase is not configured on this build');
 
     const userId = await deps.getUserId();
-    if (!userId) throw new Error('no active session; will retry after sign-in');
+    if (!userId) throw new NoSessionError('no active session; will retry after sign-in');
 
     const payload = item.payload as PhotoUploadPayload;
     if (!payload?.photoId) {

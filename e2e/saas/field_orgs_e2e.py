@@ -133,6 +133,26 @@ def field_app():
         check('RF-123: work queued when the session is lost stays queued for retry, it is not given up on',
               not waited(page, PARKED, timeout=20000) and page.evaluate(QUEUED),
               m.short([(o['entity'], o.get('parked'), o.get('lastError')) for o in stored(page, 'wwdm_outbox')], 300))
+        # RF-124, RF-126: the sign-in screen, another account over the queue, then the same account.
+        link = page.get_by_role('button', name='Link this device')
+        check('the sign-in screen shows', link.count() == 1)
+        page.fill('input[type="email"]', two.email)
+        page.fill('input[type="password"]', two.secret)
+        link.click()
+        held = "() => [localStorage.getItem('wwdm_auth_user_id'), localStorage.getItem('wwdm_active_org')]"
+        check('a different account is refused over the unsent work',
+              seen(page, 'This device holds unsent work of another account, which must sign in first.'))
+        check('and the queue, the linked account and its organization are as they were; no session is kept',
+              page.evaluate(QUEUED) and not page.evaluate(PARKED) and page.evaluate(held) == [one.id, F]
+              and not page.evaluate("() => Object.keys(localStorage).some(k => /^sb-.*-auth-token$/.test(k))"),
+              m.short(page.evaluate(held)))
+        page.fill('input[type="email"]', one.email)
+        page.fill('input[type="password"]', one.secret)
+        link.click()
+        check('the same account signs in again and the queue uploads', waited(page, DRAINED),
+              m.short(stored(page, 'wwdm_outbox'), 300))
+        check('with the first account as author: its second pipe is in the founding organization',
+              fx.record_counts(one) == {F: 3}, m.short(fx.record_counts(one)))
         ctx.close()
 
         print('\n== 4. a person active in two organizations ==', flush=True)

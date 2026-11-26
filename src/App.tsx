@@ -56,6 +56,7 @@ import {
   fetchMyProfile,
   setCachedOrgId,
   signOut,
+  undoSignIn,
 } from './services/auth';
 import { saas } from './services/saas';
 import { decideActivation } from './services/orgSwitch';
@@ -190,11 +191,15 @@ export default function App() {
             getUserId: getCurrentUserId,
           })
         ),
-        onChange: (result) => {
+        hasSession: async () => {
+          if (await getCurrentUserId()) return true;
+          // The session went while the app was open: stop and ask (RF-123).
+          if (await sessionLost()) setSignedIn(false);
+          return false;
+        },
+        onChange: () => {
           setPendingSync(DrillingStorage.getPendingSyncCount());
           setParkedSync(DrillingStorage.getParkedSyncCount());
-          // The session went while the app was open: stop and ask (RF-123).
-          if (result.failed > 0) void sessionLost().then((lost) => lost && setSignedIn(false));
         },
         pull: pullRunner,
         onPulled: () => setDataVersion((v) => v + 1),
@@ -850,7 +855,7 @@ export default function App() {
           // must not open for an account whose organization is unknown.
           const outcome = await refreshAccount().catch(() => 'unread' as const);
           if (outcome !== 'ok') {
-            await signOut();
+            await undoSignIn();
             throw new Error(
               outcome === 'no-profile'
                 ? 'This account has no profile. Ask an Administrator.'
