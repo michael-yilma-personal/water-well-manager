@@ -123,8 +123,8 @@ def field_app():
         check('the borehole and the pipe are in the founding organization',
               fx.record_counts(one) == {F: 2}, m.short(fx.record_counts(one)))
 
-        # RF-123 (open defect; red until it is fixed). The session is gone, the
-        # device still holds its link marks and unsent work.
+        # RF-123 (fixed in 81d234f). The session is gone, the device still holds
+        # its link marks and unsent work.
         log_offline(ctx, page, one_well)
         page.evaluate("() => Object.keys(localStorage).filter(k => /^sb-.*-auth-token$/.test(k))"
                       ".forEach(k => localStorage.removeItem(k))")
@@ -153,6 +153,48 @@ def field_app():
               m.short(stored(page, 'wwdm_outbox'), 300))
         check('with the first account as author: its second pipe is in the founding organization',
               fx.record_counts(one) == {F: 3}, m.short(fx.record_counts(one)))
+
+        # RF-130: the session is lost over unsent work and the person works offline.
+        drop_session = ("() => Object.keys(localStorage).filter(k => /^sb-.*-auth-token$/.test(k))"
+                        ".forEach(k => localStorage.removeItem(k))")
+        queue = log_offline(ctx, page, one_well)
+        page.evaluate(drop_session)
+        ctx.set_offline(False)
+        page.reload(wait_until='networkidle')
+        page.get_by_text('Work offline for now').click()
+        page.get_by_text(one_well, exact=False).first.click()
+        page.get_by_text('Rig Settings', exact=True).click()
+        out = page.get_by_role('button', name='Sign Out', exact=True)
+        offered = out.is_enabled()
+        dialog['accept'] = False
+        out.click()
+        dialog['accept'] = True
+        check('RF-130: Sign Out is offered, asks naming the unsent records, and cancelling keeps them',
+              offered and f'{len(queue)} record(s)' in dialog['asked'] and 'permanently discarded' in dialog['asked']
+              and len(stored(page, 'wwdm_outbox')) == len(queue) and page.evaluate(HAS_WELL, one_well),
+              m.short(dialog['asked']))
+        out.click()
+        check('confirming empties the device and shows the sign-in screen',
+              seen(page, 'Link this device') and stored(page, 'wwdm_outbox') == []
+              and stored(page, 'wwdm_boreholes') == [] and page.evaluate(held) == [None, None],
+              m.short(page.evaluate(held)))
+
+        # RF-131: the first account links again and loses its session with nothing
+        # queued; another account of the same organization then signs in.
+        other = fx['fl']
+        for who in (one, other):
+            page.fill('input[type="email"]', who.email)
+            page.fill('input[type="password"]', who.secret)
+            link.click()
+            if who is one:
+                had = waited(page, HAS_WELL, one_well)
+                page.evaluate(drop_session)
+                page.reload(wait_until='networkidle')
+        # The button is renamed while linking; the form goes only when the sign-in is complete.
+        done = waited(page, "() => !document.querySelector('input[type=\"password\"]')")
+        check('RF-131: a different account of the same organization holds none of the first account\'s boreholes',
+              had and done and page.evaluate(held) == [other.id, F] and stored(page, 'wwdm_boreholes') == [],
+              m.short([had, done, page.evaluate(held), [b['name'] for b in stored(page, 'wwdm_boreholes')]], 300))
         ctx.close()
 
         print('\n== 4. a person active in two organizations ==', flush=True)
