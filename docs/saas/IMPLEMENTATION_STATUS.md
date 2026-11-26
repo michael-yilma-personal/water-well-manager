@@ -38,6 +38,30 @@ Requirements: `docs/SAAS_ARCHITECTURE_PROPOSAL.md`. How the work is run: `docs/s
 | WF-4 | Harden the enforcement after the security review (RF-010 to RF-024) | Done; follow-ups in WF-5 | TEST_RESULTS 10 to 12 |
 | WF-5 | Final fix round: validation failures and second-review findings (RF-025 to RF-037) | Done: verified by the third review | TEST_RESULTS 13, 14 |
 
+### Phase 3 — Subscriptions and entitlements (approved 2026-11-25; staging only; starts after the Phase 2 gaps)
+
+Requirement: proposal sections 5.1, 5.2, 8 and the Phase 3 entry of section 12. Phase acceptance, from the proposal: each state in the section 8 table behaves as listed, verified by tests that set dates and statuses; records captured offline during a lapse upload after renewal with nothing lost; the user limit cannot be exceeded.
+
+Not in this phase: the platform console and the audited platform functions that change a subscription (Phase 4, where they are first used); payments (never). On staging a subscription is set by the test fixture.
+
+| Id | Task | Status | Evidence |
+|---|---|---|---|
+| P3-1 | Reusable migration `saas_subscriptions`: `plans`, `subscriptions` (RLS on), `org_access(org)`, the user-limit trigger on `memberships`, `my_organizations()` returning access level and end date; a subscription row for every existing organization | Not started | — |
+| P3-2 | Drill migration `drill_subscriptions`: `org_access()` in the Drill policies and the photo bucket; a distinct error code for a write refused by the subscription; `saas-members` follows the "Manage members" column | Not started | — |
+| P3-3 | Apps: notices in both (grace, expired, suspended, canceled); the field app holds subscription-refused work in the queue and uploads it after renewal; the dashboard is read-only when expired | Not started | — |
+| P3-4 | Phase suite on staging: the three phase acceptance points with real sign-ins; the existing suites still pass; CI | Not started | — |
+
+Criteria are written when each task starts.
+
+#### Decisions taken by the Lead for Phase 3 where the proposal left it open (2026-11-25; each can be changed)
+
+| Id | Decision |
+|---|---|
+| D3-1 | An organization without a subscription row has access `none` (fail closed). The migration gives every existing organization a row: plan `standard`, status `active`, no end date, so nothing changes for the founding organization. |
+| D3-2 | The user limit counts `active` and `invited` memberships; `deactivated` ones do not count. Re-activating a member is checked like adding one. |
+| D3-3 | The functions a platform administrator uses to change a subscription are written in Phase 4 with the console. In Phase 3 the tests set dates and statuses through the fixture. |
+| D3-4 | Feature flags (`plans.features`) are stored but nothing is gated by them in Phase 3: no plan differs in features yet. |
+
 ### Phase 2 — Organization-aware apps (approved 2026-11-23; staging only)
 
 Requirement: proposal sections 4, 6, 7, 11 and the Phase 2 entry of section 12. Phase acceptance, from the proposal: an Administrator sees and manages only their organization's members; a user in two organizations can switch and data never crosses; deactivating a member in one organization leaves their other membership working; offline capture → sync still passes on a device (`test:apk`).
