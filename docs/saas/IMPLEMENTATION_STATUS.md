@@ -75,7 +75,7 @@ Not in this phase: email invitations, password change and reset, removing the co
 | P4-2 | Creating an organization's first Administrator through the Edge Function (the one step that needs the service role), for platform administrators only, audited | **Done**: reviewed (SR26), first Administrator only (D4-6); **deployed to staging** | TEST_RESULTS 104, 105, 110, 111 |
 | P4-3 | The console: `platform.html` (third Vite entry) and `src/platform/`: sign-in, organizations list, create organization and first Administrator, members and dates, subscription actions, audit history | **Done**: `platform.html`, `src/platformMain.tsx`, `src/platform/api.ts`, `PlatformApp.tsx`; reviewed (SR27), RF-162 to RF-164 fixed; driven on staging by the suite | TEST_RESULTS 108, 112 |
 | P4-4 | Phase suite on staging: onboarding end to end from the console, the audit trail, non-platform accounts shut out; the existing suites still pass; CI | **Done on staging**: new suite 33 of 33; existing suites green apart from tenant isolation, held while the owner's test company exists | TEST_RESULTS 114, 115, 116 |
-| P4-5 | Leftovers: the field app offers a waiting invitation to someone who already works for a company (RF-161); the console's audit list shows emails, not ids | In progress | — |
+| P4-5 | Leftovers: the field app offers a waiting invitation to someone who already works for a company (RF-161); the console's audit list shows emails, not ids | **Done**: reviewed (SR28), no blocking finding; `saas_platform_audit` **applied to staging** | TEST_RESULTS 119 |
 
 Criteria are written when each task starts.
 
