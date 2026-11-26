@@ -124,6 +124,12 @@
 #             member migrations, so the suite (sql/56_subscriptions.sql) runs
 #             on organizations that existed before it, and rolled back first.
 #             In the core phase it is applied to the foundation alone.
+#   platform (SaaS Phase 4, task P4-1; checks named [P4-1 ...])
+#             the same for saas_platform (sql/59_platform.sql): applied last
+#             in the upgrade phase and rolled back first, where the catalog
+#             must be exactly what it was before it; applied to the
+#             foundation alone in the core phase. saas_platform_audit (P4-5,
+#             checks named [P4-5 ...]) likewise, just after it.
 #
 # Output and exit status are as for run.sh: one line per check, a total,
 # non-zero when anything failed.
@@ -161,6 +167,14 @@ RB_SAAS_SUBSCRIPTIONS="$SUPA/rollback/$(basename "$MIG_SAAS_SUBSCRIPTIONS")"
 MIG_DRILL_SUBSCRIPTIONS="$(ls "$MIGRATIONS"/*_drill_subscriptions.sql 2>/dev/null | head -n 1)"
 MIG_DRILL_SUBSCRIPTIONS="${MIG_DRILL_SUBSCRIPTIONS:-$MIGRATIONS/<timestamp>_drill_subscriptions.sql}"
 RB_DRILL_SUBSCRIPTIONS="$SUPA/rollback/$(basename "$MIG_DRILL_SUBSCRIPTIONS")"
+# The platform migration of SaaS Phase 4 (task P4-1).
+MIG_SAAS_PLATFORM="$(ls "$MIGRATIONS"/*_saas_platform.sql 2>/dev/null | head -n 1)"
+MIG_SAAS_PLATFORM="${MIG_SAAS_PLATFORM:-$MIGRATIONS/<timestamp>_saas_platform.sql}"
+RB_SAAS_PLATFORM="$SUPA/rollback/$(basename "$MIG_SAAS_PLATFORM")"
+# Task P4-5: the console's audit history, a newer reusable migration.
+MIG_SAAS_PLATFORM_AUDIT="$(ls "$MIGRATIONS"/*_saas_platform_audit.sql 2>/dev/null | head -n 1)"
+MIG_SAAS_PLATFORM_AUDIT="${MIG_SAAS_PLATFORM_AUDIT:-$MIGRATIONS/<timestamp>_saas_platform_audit.sql}"
+RB_SAAS_PLATFORM_AUDIT="$SUPA/rollback/$(basename "$MIG_SAAS_PLATFORM_AUDIT")"
 
 for tool in initdb pg_ctl postgres psql python3; do
   command -v "$tool" >/dev/null 2>&1 || { echo "local.sh: $tool is not on PATH (brew install postgresql@17)." >&2; exit 2; }
@@ -257,7 +271,12 @@ apply() {
 # In a database built from EVERY migration, what is newer than the member
 # migrations goes before the foundation's tables can (P3-1: subscriptions
 # reference organizations). A failure shows in the saas_core rollback after it.
-undo_later() { [ ! -f "$RB_SAAS_SUBSCRIPTIONS" ] || apply "$1" "$RB_SAAS_SUBSCRIPTIONS" || true; }
+# P4-1: the platform functions read the subscriptions, so they go first.
+undo_later() {
+  [ ! -f "$RB_SAAS_PLATFORM_AUDIT" ] || apply "$1" "$RB_SAAS_PLATFORM_AUDIT" || true
+  [ ! -f "$RB_SAAS_PLATFORM" ] || apply "$1" "$RB_SAAS_PLATFORM" || true
+  [ ! -f "$RB_SAAS_SUBSCRIPTIONS" ] || apply "$1" "$RB_SAAS_SUBSCRIPTIONS" || true
+}
 # P3-2: and Drill's use of them goes before the Drill tenancy rollback is
 # tried (newest first). A failure shows in the tenancy rollback after it.
 undo_drill_later() { [ ! -f "$RB_DRILL_SUBSCRIPTIONS" ] || apply "$1" "$RB_DRILL_SUBSCRIPTIONS" || true; }
@@ -337,7 +356,7 @@ phase_fresh() {
 # --- upgrade: legacy data first, then the tenancy migrations, then rollback ---
 
 phase_upgrade() {
-  local world="$1" db="upgrade_$1" f d s tbl what migrated rolled_back members_saas members_drill subscriptions drill_subscriptions
+  local world="$1" db="upgrade_$1" f d s tbl what migrated rolled_back members_saas members_drill subscriptions drill_subscriptions platform platform_audit
   PHASE="$world, upgrade"
   new_db "$db"
   load_stub "$db" "$world" || fail "[harness] the Supabase stand-in loads :: $(first_error)"
@@ -413,6 +432,14 @@ phase_upgrade() {
   snapshot "$db" "$WORK/snap.p32" || fail "[harness] catalog snapshot before drill_subscriptions :: $(head -n 1 "$WORK/snap.err")"
   drill_subscriptions=0
   apply_checked "$db" "$MIG_DRILL_SUBSCRIPTIONS" "[P3-2 c10] drill_subscriptions applies on top of existing data" && drill_subscriptions=1
+  # Task P4-1 (criterion 7): saas_platform last, with the catalog just before it.
+  snapshot "$db" "$WORK/snap.p41" || fail "[harness] catalog snapshot before saas_platform :: $(head -n 1 "$WORK/snap.err")"
+  platform=0
+  apply_checked "$db" "$MIG_SAAS_PLATFORM" "[P4-1 c7] saas_platform applies on top of existing data" && platform=1
+  # Task P4-5: saas_platform_audit after it, with the catalog just before it.
+  snapshot "$db" "$WORK/snap.p45" || fail "[harness] catalog snapshot before saas_platform_audit :: $(head -n 1 "$WORK/snap.err")"
+  platform_audit=0
+  apply_checked "$db" "$MIG_SAAS_PLATFORM_AUDIT" "[P4-5] saas_platform_audit applies on top of existing data" && platform_audit=1
 
   # The whole suite again, now with the legacy data underneath it.
   PHASE="$world, upgrade, full suite"
@@ -423,6 +450,22 @@ phase_upgrade() {
   # one before the reusable one. What follows (criterion 14) then compares
   # with the pre-tenancy database, so anything they leave behind shows there.
   # P3-1: newest first. What it leaves behind shows in criterion 14 below.
+  if [ "$platform_audit" -eq 1 ] && apply_checked "$db" "$RB_SAAS_PLATFORM_AUDIT" "[P4-5] the saas_platform_audit rollback script runs on the migrated database with its data"; then
+    snapshot "$db" "$WORK/snap.p45rb"
+    for s in $SECTIONS; do
+      same_section "$s" "$WORK/snap.p45" "$WORK/snap.p45rb" "[P4-5] after the saas_platform_audit rollback the $s are exactly what they were"
+    done
+  else
+    fail "[P4-5] the saas_platform_audit rollback restores the catalog exactly :: not run, saas_platform_audit or its rollback did not apply"
+  fi
+  if [ "$platform" -eq 1 ] && apply_checked "$db" "$RB_SAAS_PLATFORM" "[P4-1 c7] the saas_platform rollback script runs on the migrated database with its data"; then
+    snapshot "$db" "$WORK/snap.p41rb"
+    for s in $SECTIONS; do
+      same_section "$s" "$WORK/snap.p41" "$WORK/snap.p41rb" "[P4-1 c7] after the saas_platform rollback the $s are exactly what they were"
+    done
+  else
+    fail "[P4-1 c7] the saas_platform rollback restores the catalog exactly :: not run, saas_platform or its rollback did not apply"
+  fi
   if [ "$drill_subscriptions" -eq 1 ] && apply_checked "$db" "$RB_DRILL_SUBSCRIPTIONS" "[P3-2 c10] the drill_subscriptions rollback script runs on the migrated database with its data"; then
     snapshot "$db" "$WORK/snap.p32rb"
     for s in $SECTIONS; do
@@ -1769,6 +1812,15 @@ fi
 PHASE="core, subscriptions"
 apply core "$MIG_SAAS_MEMBERS" || fail "[harness] saas_members applies to the foundation again :: $(first_error)"
 if apply_checked core "$MIG_SAAS_SUBSCRIPTIONS" "[P3-1] saas_subscriptions applies to a database with the foundation alone and nothing of Drill's"; then
+  # P4-1: and saas_platform on top of that, rolled back first.
+  if apply_checked core "$MIG_SAAS_PLATFORM" "[P4-1 c7] saas_platform applies to a database with the foundation alone and nothing of Drill's"; then
+    # P4-5: and saas_platform_audit on top, rolled back first.
+    apply_checked core "$MIG_SAAS_PLATFORM_AUDIT" "[P4-5] saas_platform_audit applies to a database with the foundation alone and nothing of Drill's" \
+      && apply_checked core "$RB_SAAS_PLATFORM_AUDIT" "[P4-5] the saas_platform_audit rollback script runs on the foundation alone"
+    apply_checked core "$RB_SAAS_PLATFORM" "[P4-1 c7] the saas_platform rollback script runs on the foundation alone"
+  else
+    fail "[P4-1 c7] the saas_platform rollback script runs on the foundation alone :: not run, saas_platform did not apply"
+  fi
   apply_checked core "$RB_SAAS_SUBSCRIPTIONS" "[P3-1] the saas_subscriptions rollback script runs on the foundation alone"
 else
   fail "[P3-1] the saas_subscriptions rollback script runs on the foundation alone :: not run, saas_subscriptions did not apply"

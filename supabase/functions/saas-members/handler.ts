@@ -21,6 +21,8 @@ export type Ports = {
   callerId(authorization: string | null): Promise<string | null>;
   adminRoles(): Promise<string[]>;
   roles(): Promise<string[]>;
+  /** Whether the account is a platform administrator (a row of platform_admins). */
+  isPlatformAdmin(userId: string): Promise<boolean>;
   membershipsOf(userId: string): Promise<Membership[]>;
   membersOf(orgId: string): Promise<Membership[]>;
   recordCount(orgId: string, userId: string): Promise<number>;
@@ -99,7 +101,17 @@ export async function handle(req: Request, ports: Ports): Promise<Response> {
     const adminRoles = await ports.adminRoles();
     const mayAdminister = (await ports.membershipsOf(caller)).some(
       (m) => sameId(m.orgId, org) && m.status === 'active' && adminRoles.includes(m.role));
-    if (!mayAdminister) return json({ error: 'Organization administrators only' }, 403);
+    // A platform administrator who is not one of them may do one thing: add the
+    // organization's first administrator, never themselves. Once it has an
+    // active administrator, nothing is open to them here.
+    if (!mayAdminister) {
+      const platform = req.method === 'POST' && typeof body.role === 'string'
+        && adminRoles.includes(body.role) && await ports.isPlatformAdmin(caller);
+      if (!platform) return json({ error: 'Organization administrators only' }, 403);
+      if ((await ports.membersOf(org)).some((m) => m.status === 'active' && adminRoles.includes(m.role))) {
+        return json({ error: "This organization already has an administrator; add more people from the organization's own dashboard." }, 403);
+      }
+    }
 
     // The subscription: full access allows everything, read-only access the
     // list and deactivating a member, anything else nothing.
@@ -148,6 +160,9 @@ export async function handle(req: Request, ports: Ports): Promise<Response> {
       // An existing account is only invited: nothing of the account is touched
       // and the password sent is ignored. Being a member already is SM003.
       const existing = await ports.accountIdByEmail(email);
+      if (existing && !mayAdminister && sameId(existing, caller)) {
+        return json({ error: 'Organization administrators only' }, 403);
+      }
       if (existing) {
         const added = await ports.call('saas_add_member',
           { org, member: existing.toLowerCase(), role, badge, status: 'invited', actor: caller });

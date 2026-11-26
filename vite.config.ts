@@ -14,12 +14,14 @@ export default defineConfig(() => {
     plugins: [react(), tailwindcss()],
     build: {
       rollupOptions: {
-        // Two entry points: the field app (index.html) and the administrator's
-        // dashboard (admin.html). They share the Supabase client, the row
-        // mappers and reports.ts rather than duplicating them.
+        // Three entry points: the field app (index.html), the administrator's
+        // dashboard (admin.html) and the platform console (platform.html).
+        // The first two share the Supabase client, the row mappers and
+        // reports.ts rather than duplicating them.
         input: {
           main: path.resolve(__dirname, 'index.html'),
           admin: path.resolve(__dirname, 'admin.html'),
+          platform: path.resolve(__dirname, 'platform.html'),
         },
       },
     },

@@ -4,11 +4,13 @@ Requirements: `docs/SAAS_ARCHITECTURE_PROPOSAL.md`. How the work is run: `docs/s
 
 ## Current state
 
-- **Phase:** Phase 4 — Platform console and audit (approved by the owner on 2026-11-25, to start when Phase 3 is done). Staging only; nothing may reach production without the owner approving that specific action. No push to `main` (owner, 2026-11-25): `main` is updated together with the production migration.
-- **Branch:** `saas/phase-4-platform`, from `saas/phase-3-subscriptions`. Pull requests 3 (tooling), 4 (Phase 0), 5 (Phase 1), 6 (Phase 2) and 7 (Phase 3) are open, each based on the one before, awaiting the owner's merge in that order.
+- **Phase:** Phases 3 and 4 are done on staging (approved 2026-11-25). Phase 5 (onboarding polish and cleanup) and Phase 6 are **not approved**. Nothing from Phases 1 to 4 is on production. No push to `main` (owner, 2026-11-25): `main` is updated together with the production migration.
+- **Branches:** pull requests 3 (tooling), 4 (Phase 0), 5 (Phase 1), 6 (Phase 2), 7 (Phase 3) and 8 (Phase 4), each based on the one before, await the owner's merge in that order.
+- **Phase 4 is done on staging** (TEST_RESULTS 103 to 116): `saas_platform` applied, `saas-members` deployed, the console at `platform.html`; reviews SR26 and SR27, no blocking finding left. Open for the owner: which account is the platform administrator on production (D4-2; remove its founding membership after creating it, RF-160) and where the console is hosted (not on the Hostinger field-app site, RF-162).
 - **Phase 3 is done on staging** (TEST_RESULTS 92 to 102): tasks P3-1 to P3-4; both migrations applied to staging, `saas-members` and `admin-users` redeployed there; five reviews (SR21, SR23, SR24, SR25 and the session-loss rounds), no blocking finding left. Not run for Phase 3: the APK on a device or emulator. The field app's version is still 1.2.0.
 - **Open for the owner from Phase 3:** RF-143 (phones on 1.1.7 can lose records captured during a lapse: update the phones or accept it before any organization gets an end date); RF-152 (held work that will never be renewed leaves no exit: export and discard, or keep blocking); the real plans and user limits (D3-6 seeds one plan of 100 users). The upgrade test on a real phone is last (owner, 2026-11-25).
 - **Next step:** plan Phase 4 and run its tasks one after the other without asking (owner, 2026-11-25).
+- **Manual testing on staging (owner, 2026-11-26):** done. Test Company B, its memberships, subscription and audit rows, `platform1@example.com` (and its `platform_admins` row), `adminb`, `drillerb` and `drillerab` were removed afterwards by the Lead; staging holds the founding organization and the five kept accounts again (TEST_RESULTS 118).
 - **Phase 1** is done on staging; its production migration is **not approved**. **Do not check out `main` or any branch that predates the tooling until the pull requests are merged (RF-059).**
 - `.claude/settings.json`: found on 2026-11-25 (14:44) with every line commented out again, which turns the four hooks off (the same edit as on 2026-11-17). Not made by the Lead or an agent as far as known; left as found and not committed. While it stands the Stop gate and the Bash guard do not run: the Lead runs `scripts/gate.sh` by hand.
 - **Waiting on the owner:** the production decision for Phase 1; the action recorded for RF-050 (deferred by the owner; does not block development); approval to delete the `probe` function from production (RF-049); confirmation of the staging rule (RF-054); branch protection on `main`; merging the three pull requests (RF-059).
@@ -21,9 +23,9 @@ Requirements: `docs/SAAS_ARCHITECTURE_PROPOSAL.md`. How the work is run: `docs/s
 | 0 Preparation | `saas/phase-0-preparation` | Done; CI green; awaiting the owner's merge (after pull request 3) | https://github.com/michael-yilma-personal/water-well-manager/pull/4 |
 | 1 Tenancy in the database | `saas/phase-1-tenancy` | Done on staging; awaiting the owner's review. **Production migration not approved** | https://github.com/michael-yilma-personal/water-well-manager/pull/5 |
 | 2 Organization-aware apps | `saas/phase-2-org-apps` | Approved 2026-11-23; in progress on staging | — |
-| 3 Subscriptions and entitlements | `saas/phase-3-subscriptions` | Done on staging; awaiting the owner's review. **Nothing on production** | pull request 7 |
-| 4 Platform console and audit | — | Approved 2026-11-25 (staging only); starts when Phase 3 is done | — |
-| 5 Onboarding polish and cleanup | — | Not approved | — |
+| 3 Subscriptions and entitlements | `saas/phase-3-subscriptions` | Done on staging; awaiting the owner's review. **Nothing on production** | https://github.com/michael-yilma-personal/water-well-manager/pull/7 |
+| 4 Platform console and audit | `saas/phase-4-platform` | Done on staging; awaiting the owner's review. **Nothing on production** | https://github.com/michael-yilma-personal/water-well-manager/pull/8 |
+| 5 Onboarding polish and cleanup | — | First half approved 2026-11-26 (staging only): change password, password reset. Email invitations wait for the owner's choice of sender; the cleanup (removing the compatibility code, which stops build 1.1.7) waits until the crews' phones run the new build | — |
 | 6 Extract the foundation | — | Not approved | — |
 
 ## Tasks
@@ -38,6 +40,82 @@ Requirements: `docs/SAAS_ARCHITECTURE_PROPOSAL.md`. How the work is run: `docs/s
 | DEMO-1 | Static migration check: every table created in `supabase/migrations/` has RLS enabled | Done: RF-001 to RF-006 fixed and verified by the second review | TEST_RESULTS 8, 11 |
 | WF-4 | Harden the enforcement after the security review (RF-010 to RF-024) | Done; follow-ups in WF-5 | TEST_RESULTS 10 to 12 |
 | WF-5 | Final fix round: validation failures and second-review findings (RF-025 to RF-037) | Done: verified by the third review | TEST_RESULTS 13, 14 |
+
+### Phase 5 — Onboarding polish (first half approved 2026-11-26; staging only)
+
+Requirement: proposal section 7 (onboarding) and the Phase 5 entry of section 12. Acceptance for this half, from the proposal: a user can change their own password; and a user who forgot it can set a new one without their Administrator.
+
+Not in this half: email invitations (waiting for the owner's choice of sender); removing the compatibility triggers, `profiles.role`, `profiles.badge_number` and `admin-users` (stops build 1.1.7: only after every crew phone runs the new build); the README.
+
+| Id | Task | Status | Evidence |
+|---|---|---|---|
+| P5-1 | Change your own password: in the field app (Rig Settings), the dashboard and the console | Not started | — |
+| P5-2 | Password reset: "Forgot password?" on the sign-in screens; the emailed link opens a page that sets a new password | Not started | — |
+| P5-3 | Phase suite on staging; the existing suites still pass; CI | Not started | — |
+
+Criteria are written when each task starts.
+
+#### Decisions taken by the Lead for Phase 5 where the proposal left it open (2026-11-26; each can be changed)
+
+| Id | Decision |
+|---|---|
+| D5-1 | Changing a password asks for the current one, checked by signing in with it, and the new one twice. The person stays signed in on that device; nothing else is signed out. |
+| D5-2 | The reset link from any app opens one page on the dashboard's site, which sets the new password; the person then signs in again in the app they use (the APK cannot receive the link itself). The sign-in screens never say whether an address has an account. |
+| D5-3 | On staging, reset emails are not sent to real inboxes: the suites take the link from the Auth admin API. Production needs the dashboard's address in the Auth redirect list and a working sender (production checklist). |
+
+### Phase 4 — Platform console and audit (approved 2026-11-25; staging only)
+
+Requirement: proposal sections 4, 6, 7, 8 ("Platform administrator actions"), 10 and the Phase 4 entry of section 12. Phase acceptance, from the proposal: a new company can be onboarded end to end from the console with no SQL; every administrative action appears in the audit log with actor, time and details; non-platform accounts cannot open or call any of it.
+
+Not in this phase: email invitations, password change and reset, removing the compatibility triggers (Phase 5); payments (never). A platform administrator is still added by SQL only (proposal 10).
+
+| Id | Task | Status | Evidence |
+|---|---|---|---|
+| P4-1 | Reusable migration `saas_platform`: the platform administrator's SQL functions (create an organization with its subscription; change a subscription: start trial, activate, extend, change plan, override the user limit, suspend, reactivate, cancel), each checking `is_platform_admin()` and writing its audit row in the same transaction; the read paths the console needs (organizations with subscription and member counts, members of an organization, audit history) | **Done**: reviewed (SR26), RF-157 and RF-158 fixed and tested; **applied to staging** | TEST_RESULTS 103, 106, 109, 111 |
+| P4-2 | Creating an organization's first Administrator through the Edge Function (the one step that needs the service role), for platform administrators only, audited | **Done**: reviewed (SR26), first Administrator only (D4-6); **deployed to staging** | TEST_RESULTS 104, 105, 110, 111 |
+| P4-3 | The console: `platform.html` (third Vite entry) and `src/platform/`: sign-in, organizations list, create organization and first Administrator, members and dates, subscription actions, audit history | **Done**: `platform.html`, `src/platformMain.tsx`, `src/platform/api.ts`, `PlatformApp.tsx`; reviewed (SR27), RF-162 to RF-164 fixed; driven on staging by the suite | TEST_RESULTS 108, 112 |
+| P4-4 | Phase suite on staging: onboarding end to end from the console, the audit trail, non-platform accounts shut out; the existing suites still pass; CI | **Done on staging**: new suite 33 of 33; existing suites green apart from tenant isolation, held while the owner's test company exists | TEST_RESULTS 114, 115, 116 |
+| P4-5 | Leftovers: the field app offers a waiting invitation to someone who already works for a company (RF-161); the console's audit list shows emails, not ids | **Done**: reviewed (SR28), no blocking finding; `saas_platform_audit` **applied to staging** | TEST_RESULTS 119 |
+
+Criteria are written when each task starts.
+
+#### Decisions taken by the Lead for Phase 4 where the proposal left it open (2026-11-25; each can be changed)
+
+| Id | Decision |
+|---|---|
+| D4-1 | Platform administrators see organizations, members (name, email, role, status) and subscriptions, never Drill records (proposal 6): nothing in Phase 4 adds a read path to a Drill table. |
+| D4-2 | On staging the platform administrator is a test account the fixture adds to `platform_admins` through the database and removes afterwards. Which real account becomes the platform administrator on production is the owner's decision (proposal 14, item 8). |
+| D4-3 | The console is plain and small: one page, the existing dashboard's styles, no new dependency. |
+| D4-4 | No transition between subscription states is forbidden, and changing to a smaller plan is allowed (the user limit then only stops new members). `start_trial` takes an optional end date. The service role cannot call the platform functions: only a signed-in platform administrator can. |
+| D4-5 | The audit rows of subscription changes carry the subscription before and after without `notes`: an organization's Administrators can read their own audit rows, and a note is for the platform administrator only. A change of note alone is therefore not in the history. |
+| D4-6 | Through `saas-members` a platform administrator can add an organization's first Administrator only: refused once the organization has an active Administrator, and refused for the platform administrator's own email. Support access to an existing organization stays a deliberate act in SQL (proposal 6). |
+
+#### P4-1 criteria (2026-11-25)
+
+1. `platform_create_organization(name, plan, status, ends_at)` creates the organization and its subscription (trial or active) in one transaction with an `org.create` audit row; an unknown plan or another status is refused.
+2. `platform_update_subscription(org, action, args)` with the actions start_trial, activate, extend, change_plan, override, suspend, reactivate, cancel, and optional notes; one audit row `subscription.<action>` with the values before and after; an unknown action, a missing argument or an organization without a subscription is refused.
+3. Reads for the console: `platform_organizations()`, `platform_members(org)`, and the audit log through its existing policy.
+4. Every function refuses a caller who is not a platform administrator with 42501; `anon` has no execute; `platform_admins` has no insert path through the API.
+5. A platform administrator who is not a member reads no Drill record and cannot change an audit row.
+6. An organization created by the function behaves like any other (access from its subscription, user limit).
+7. The existing database suite stays green; the rollback restores the catalog exactly; the reusable boundary holds.
+
+#### P4-2 criteria (2026-11-25)
+
+1. A platform administrator who is not a member may add a member with the organization's administrator role through `saas-members`: a new email gets an account with the temporary password and an active membership; the actor recorded is the platform administrator.
+2. An email that already has an account gets a membership only (`invited`, as when an organization's Administrator adds an existing account); the account is never touched.
+3. Nothing else is open to a platform administrator there without a membership: any other role, listing, role change, deactivating, re-activating, removing are 403.
+4. The organization's subscription and user limit still apply (402, 409); an unknown organization is refused.
+5. Anyone who is neither a platform administrator nor an active Administrator of the organization still gets 403; an organization's Administrator is unaffected.
+
+#### P4-3 criteria (2026-11-25)
+
+1. `platform.html` is a third entry of the build. After sign-in an account that is not a platform administrator sees one sentence saying so and a way to sign out, and no data; an error answering "is this a platform administrator" is never taken as yes.
+2. The organizations list shows each organization's name, plan, status, end date, access level and member count.
+3. Creating an organization (name, plan, trial or active, optional end date) and its first Administrator (email, name, temporary password) is one flow with no SQL; a refusal shows the server's sentence.
+4. An organization's page shows its members (name, email, role, status) and its subscription, with the actions start trial, activate, extend, change plan, override the user limit, suspend, reactivate and cancel, and a note; suspend and cancel ask for confirmation.
+5. The audit history, for one organization and overall: time, actor, action, details.
+6. `src/platform` is reusable: no Drill name in it; the administrator role's name comes from outside the folder. No new dependency.
 
 ### Phase 3 — Subscriptions and entitlements (approved 2026-11-25; staging only; starts after the Phase 2 gaps)
 
@@ -483,6 +561,7 @@ Harden the enforcement after the security review (RF-010 to RF-024).
 
 | Date | Decision | By |
 |---|---|---|
+| 2026-11-26 | **Phase 4 leftovers, then Phase 5** ("go ahead and do whatever you have left for 4 and proceed to 5"), after the Lead recommended doing only the first half of Phase 5 now. Recorded as: RF-161 and the audit list's emails on the Phase 4 branch; Phase 5 change password and password reset on staging; email invitations when the owner names a sender; the cleanup only after every crew phone runs the new build (it stops 1.1.7). | Owner |
 | 2026-11-25 | **No push to `main` after Phase 3** ("i will take your recommendation"): Phase 3 gets its own branch and pull request, Phase 4 continues from it, and `main` is updated together with the production migration, in the order database, functions, dashboard. | Owner |
 | 2026-11-25 | **Phase 4 approved, to start when Phase 3 is done** ("once you are done with phase 3, you can push it to main and continue on phase 4"). The Lead goes from task to task without asking. The push to `main` is not done by the Lead until the owner has answered the risk raised the same day: `main` would receive pull requests 3 to 6 unmerged-so-far in one step, and if Netlify builds from `main` the new dashboard would go live against a production database that has none of the migrations. | Owner |
 | 2026-11-25 | **Phase 3 approved, after the Phase 2 gaps** (answer "Both, gaps first" to the Lead's question). Staging only; production still needs the owner's approval of each specific action. The upgrade test on a real phone is done last. | Owner |

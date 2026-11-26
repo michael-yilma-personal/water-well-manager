@@ -64,7 +64,7 @@ import {
 import { saas } from './services/saas';
 import { decideActivation } from './services/orgSwitch';
 import type { Membership } from './saas/api';
-import { mayActivate, rememberOrg, rememberedOrg, resolveActiveOrg, subscriptionNotice } from './saas/orgContext';
+import { invitationsToOffer, mayActivate, rememberOrg, rememberedOrg, resolveActiveOrg, subscriptionNotice } from './saas/orgContext';
 import { SignInScreen } from './components/SignInScreen';
 import { NO_ORG_MESSAGE, OrgScreen } from './components/OrgScreen';
 import { SPRING_DEFAULT, CROSSFADE } from './ui/springs';
@@ -1238,6 +1238,13 @@ export default function App() {
         organizations={activeOrgs}
         activeOrgId={activeOrgId}
         onSwitchOrg={chooseOrg}
+        invitations={invitationsToOffer(account?.memberships ?? [], activeOrgId)}
+        onAnswerInvitation={async (orgId, accept) => {
+          // Remembered first, so a second active membership still opens this one.
+          if (account && activeOrgId) rememberOrg(localStorage, account.profile.id, activeOrgId);
+          await (accept ? saas.acceptMembership(orgId) : saas.declineMembership(orgId));
+          setOrgReload((k) => k + 1);
+        }}
         pendingCount={sessionGone ? 0 : pendingSync}
         heldForSubscription={heldForSubscription()}
         parkedCount={sessionGone ? pendingSync + parkedSync : parkedSync}
