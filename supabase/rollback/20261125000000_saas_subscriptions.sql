@@ -1,9 +1,17 @@
 -- Rollback of 20261125000000_saas_subscriptions.sql.
 --
--- Run BEFORE the member and tenancy rollbacks (newest first). This DELETES
--- every plan and subscription; memberships stay. my_organizations() is put
--- back as saas_core creates it, grants included. No transaction statements:
--- the caller wraps it.
+-- Run BEFORE the member and tenancy rollbacks (newest first).
+--
+-- This DELETES EVERY SUBSCRIPTION AND EVERY PLAN: statuses, end dates, days of
+-- grace, overrides and notes are gone. Applying the migration again afterwards
+-- does not bring them back: it gives EVERY organization the default (plan
+-- 'standard', status 'active', no end date), including organizations that
+-- were suspended, canceled or deliberately left without a subscription row.
+-- EXPORT THE ROWS OF public.subscriptions AND public.plans FIRST and restore
+-- them after re-applying.
+--
+-- Memberships stay. my_organizations() is put back as saas_core creates it,
+-- grants included. No transaction statements: the caller wraps it.
 
 drop trigger if exists memberships_user_limit on public.memberships;
 drop function if exists public.saas_enforce_user_limit();

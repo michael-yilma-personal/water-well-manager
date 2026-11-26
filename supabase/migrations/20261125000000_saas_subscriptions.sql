@@ -2,8 +2,10 @@
 -- the access level it gives, and the user limit.
 --
 -- Reusable like saas_core: it names nothing that belongs to an application.
--- Clients only read these tables; a subscription is changed by the service
--- role or by SQL.
+-- Clients read the plans and nothing else here: an application learns an
+-- organization's access level and end date from my_organizations(), and the
+-- subscription row itself (its notes and overrides) is for the service role
+-- and SQL only.
 --
 -- Refusal, with its own SQLSTATE:
 --   SS001  the organization's user limit is reached (raised by the trigger on
@@ -27,7 +29,7 @@ begin
   create table if not exists public.plans (
     id        text primary key,
     name      text not null,
-    max_users integer not null,
+    max_users integer not null check (max_users >= 0),
     features  jsonb not null default '{}',
     is_active boolean not null default true
   );
@@ -42,8 +44,8 @@ begin
     starts_at          timestamptz not null default now(),
     -- null = no end date
     ends_at            timestamptz,
-    grace_days         integer not null default 7,
-    max_users_override integer,
+    grace_days         integer not null default 7 check (grace_days >= 0),
+    max_users_override integer check (max_users_override >= 0),
     features_override  jsonb,
     notes              text
   );
@@ -52,7 +54,7 @@ begin
   alter table public.subscriptions enable row level security;
 
   revoke all on public.plans, public.subscriptions from anon, authenticated;
-  grant select on public.plans, public.subscriptions to authenticated;
+  grant select on public.plans to authenticated;
   grant all on public.plans, public.subscriptions to service_role;
 
   insert into public.plans (id, name, max_users)
@@ -76,8 +78,8 @@ $do$;
 do $do$
 begin
   -- 'full', 'read_only' or 'none'. A trial or active subscription gives full
-  -- access until its end date plus its days of grace, and read-only access
-  -- after that. Suspended, canceled or no subscription row: none.
+  -- access until its end date plus its days of grace (24 hours each, whatever
+  -- the session's time zone), and read-only access after that. Suspended, canceled or no subscription row: none.
   create or replace function public.org_access(org uuid)
   returns text
   language sql
@@ -89,15 +91,16 @@ begin
       select case
                when s.status not in ('trial', 'active') then 'none'
                when s.ends_at is null
-                 or now() <= s.ends_at + make_interval(days => s.grace_days) then 'full'
+                 or now() <= s.ends_at + s.grace_days * interval '24 hours' then 'full'
                else 'read_only'
              end
       from public.subscriptions s
       where s.org_id = org), 'none');
   $fn$;
 
-  -- As in saas_core, with the organization's access level and end date. The
-  -- return type changes, so it is dropped rather than replaced.
+  -- As in saas_core, with the organization's access level and end date; both
+  -- are null for a membership that is not active. The return type changes,
+  -- so it is dropped rather than replaced.
   drop function if exists public.my_organizations();
   create function public.my_organizations()
   returns table (org_id uuid, name text, role text, status text, access text, ends_at timestamptz)
@@ -106,7 +109,9 @@ begin
   security definer
   set search_path = public
   as $fn$
-    select m.org_id, o.name, m.role, m.status, public.org_access(m.org_id), s.ends_at
+    select m.org_id, o.name, m.role, m.status,
+           case when m.status = 'active' then public.org_access(m.org_id) end,
+           case when m.status = 'active' then s.ends_at end
     from public.memberships m
     join public.organizations o on o.id = m.org_id
     left join public.subscriptions s on s.org_id = m.org_id
@@ -166,16 +171,13 @@ end
 $do$;
 
 -- ---------------------------------------------------------------------------
--- Read policies
+-- Read policy
 -- ---------------------------------------------------------------------------
+--
+-- subscriptions has row level security enabled and no policy: no client reads
+-- or writes it.
 
 drop policy if exists plans_select on public.plans;
 create policy plans_select on public.plans
   for select to authenticated
   using (true);
-
--- An active member reads their own organization's subscription.
-drop policy if exists subscriptions_select on public.subscriptions;
-create policy subscriptions_select on public.subscriptions
-  for select to authenticated
-  using (public.is_org_member(org_id));
