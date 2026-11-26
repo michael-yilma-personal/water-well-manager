@@ -336,7 +336,9 @@ export default function App() {
    * in for it, and rejects when the profile could not be read.
    */
   const refreshAccount = async (
-    isStale: () => boolean = () => false
+    isStale: () => boolean = () => false,
+    // Runs once the answer is known to be 'ok', before anything is activated.
+    beforeActivate: () => void = () => {}
   ): Promise<'ok' | 'no-profile' | 'unread'> => {
     const [profile, memberships] = await Promise.all([
       fetchMyProfile(),
@@ -358,6 +360,7 @@ export default function App() {
     if (!profile) return 'no-profile';
     if (!memberships) {
       if (getCachedOrgId() === null && !noOrgBackend.current) return 'unread';
+      beforeActivate();
       // The organizations could not be read. Name and badge are refreshed as
       // before; a role already taken from a membership is not overwritten.
       const me = DrillingStorage.adoptSignedInUser({
@@ -371,6 +374,7 @@ export default function App() {
       if (noOrgBackend.current) void syncWorker.pullNow();
       return 'ok';
     }
+    beforeActivate();
     const who = { profile, memberships };
     setAccount(who);
     const cached = getCachedOrgId();
@@ -730,11 +734,13 @@ export default function App() {
   const handleSignOut = async () => {
     // Only retryable work blocks. Parked work can never be uploaded by this
     // account, so blocking on it would leave no way out of the account at all.
-    if (DrillingStorage.getPendingSyncCount() > 0 && !sessionGone) return;
+    // Checked again here, not trusted from the last render (RF-141).
+    const discard = sessionGone && (await sessionLost());
+    if (DrillingStorage.getPendingSyncCount() > 0 && !discard) return;
     syncWorker.stop();
     await signOut();
     // The person confirmed that the unsent work is discarded (RF-130).
-    if (sessionGone) getOutbox().clear();
+    if (discard) getOutbox().clear();
     DrillingStorage.clearForAccountSwitch();
     setAccount(null);
     setSignedIn(false);
@@ -854,12 +860,6 @@ export default function App() {
     return (
       <SignInScreen
         onSignedIn={async (previousId) => {
-          // Another account than the one this device was linked to (RF-131):
-          // it must not see that account's records or inherit its watermark.
-          if (previousId && previousId !== getCachedUserId()) {
-            DrillingStorage.clearForAccountSwitch();
-          }
-
           // A linked device belongs to a real crew, so the seeded sample job
           // is just a confusing fake borehole on the rig. Anything actually
           // recorded before linking is kept and will still sync.
@@ -875,7 +875,14 @@ export default function App() {
           // Its organization is settled here too, before the rig screens show.
           // When it cannot be read the device is not linked: the rig screens
           // must not open for an account whose organization is unknown.
-          const outcome = await refreshAccount().catch(() => 'unread' as const);
+          // Another account than the one this device was linked to (RF-131):
+          // it must not see that account's records or inherit its watermark.
+          // Cleared only once the sign-in is known to stand (RF-140).
+          const outcome = await refreshAccount(undefined, () => {
+            if (previousId && previousId !== getCachedUserId()) {
+              DrillingStorage.clearForAccountSwitch();
+            }
+          }).catch(() => 'unread' as const);
           if (outcome !== 'ok') {
             await undoSignIn(previousId);
             throw new Error(
