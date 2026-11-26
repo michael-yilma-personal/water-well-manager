@@ -63,6 +63,7 @@ Criteria are written when each task starts.
 | D4-3 | The console is plain and small: one page, the existing dashboard's styles, no new dependency. |
 | D4-4 | No transition between subscription states is forbidden, and changing to a smaller plan is allowed (the user limit then only stops new members). `start_trial` takes an optional end date. The service role cannot call the platform functions: only a signed-in platform administrator can. |
 | D4-5 | The audit rows of subscription changes carry the subscription before and after without `notes`: an organization's Administrators can read their own audit rows, and a note is for the platform administrator only. A change of note alone is therefore not in the history. |
+| D4-6 | Through `saas-members` a platform administrator can add an organization's first Administrator only: refused once the organization has an active Administrator, and refused for the platform administrator's own email. Support access to an existing organization stays a deliberate act in SQL (proposal 6). |
 
 #### P4-1 criteria (2026-11-25)
 
