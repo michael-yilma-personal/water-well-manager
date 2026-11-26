@@ -64,6 +64,7 @@ Criteria are written when each task starts.
 | D3-5 | An organization without a subscription row has no user limit (its access is `none` anyway). |
 | D3-6 | One plan is seeded, `standard`, with `max_users` 100. The real plans and limits are the owner's to set. |
 | D3-7 | `plans` is on the allowlist of `schema_check.sql` (tables without `org_id`): it is a catalog shared by all organizations and holds no tenant data. |
+| D3-8 | Clients do not read `subscriptions` directly (it holds `notes` and overrides meant for the platform administrator). The apps get `access` and `ends_at` from `my_organizations()`, for active memberships only. This replaces the first half of P3-1 criterion 1. |
 
 #### P3-1 criteria (2026-11-25)
 
