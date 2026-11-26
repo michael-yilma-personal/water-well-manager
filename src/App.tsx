@@ -49,12 +49,14 @@ import { createPullRunner, createSupabasePull } from './services/pullTransport';
 import { createCompositeTransport, createPhotoTransport } from './services/photoTransport';
 import { getSupabase, isSupabaseConfigured } from './services/supabaseClient';
 import {
+  getCachedAccess,
   getCachedOrgId,
   getCachedUserId,
   getCurrentUserId,
   isProvisioned,
   sessionLost,
   fetchMyProfile,
+  setCachedAccess,
   setCachedOrgId,
   signOut,
   undoSignIn,
@@ -62,7 +64,7 @@ import {
 import { saas } from './services/saas';
 import { decideActivation } from './services/orgSwitch';
 import type { Membership } from './saas/api';
-import { mayActivate, rememberOrg, rememberedOrg, resolveActiveOrg } from './saas/orgContext';
+import { mayActivate, rememberOrg, rememberedOrg, resolveActiveOrg, subscriptionNotice } from './saas/orgContext';
 import { SignInScreen } from './components/SignInScreen';
 import { NO_ORG_MESSAGE, OrgScreen } from './components/OrgScreen';
 import { SPRING_DEFAULT, CROSSFADE } from './ui/springs';
@@ -186,10 +188,12 @@ export default function App() {
           createSupabaseTransport({
             getClient: getSupabase,
             getUserId: getCurrentUserId,
+            getAccess: getCachedAccess,
           }),
           createPhotoTransport({
             getClient: getSupabase,
             getUserId: getCurrentUserId,
+            getAccess: getCachedAccess,
           })
         ),
         hasSession: async () => {
@@ -317,6 +321,9 @@ export default function App() {
     const mustClear = decision !== 'activate';
     if (mustClear) DrillingStorage.clearForAccountSwitch();
     setCachedOrgId(m.orgId);
+    // Read again on launch, when signal returns and on a manual sync, so work
+    // held during a lapse goes out after renewal.
+    setCachedAccess(m.access);
     // The role is the one held in this organization, not the profile's.
     const me = DrillingStorage.adoptSignedInUser({ ...who.profile, role: m.role });
     setUsers([me]);
@@ -699,10 +706,13 @@ export default function App() {
       // work one - otherwise the only route out of a parked queue is a
       // reinstall, which takes the records with it.
       if (getOutbox().parked().length > 0) getOutbox().retryParked();
+      // The subscription may have been renewed, or have lapsed, since launch.
+      await refreshAccount().catch(() => {});
       const result = await syncWorker.syncNow();
       setPendingSync(storage.getPendingSyncCount());
       setParkedSync(storage.getParkedSyncCount());
-      if (result.failed > 0 && result.sent === 0) {
+      // Work held for the subscription is explained by the notice, not as an error.
+      if (result.failed > 0 && result.sent === 0 && (getCachedAccess() ?? 'full') === 'full') {
         // Silence here would look identical to a successful upload, which is
         // the failure mode this whole feature exists to remove.
         const parked = getOutbox().parked();
@@ -904,12 +914,18 @@ export default function App() {
   const activeOrgs = (account?.memberships ?? []).filter((m) => m.status === 'active');
   const activeOrgId = getCachedOrgId();
   // Only with an answer from the server: offline, the cached organization stands.
-  if (signedIn && account && !activeOrgs.some((m) => m.orgId === activeOrgId)) {
+  const activeOrg = activeOrgs.find((m) => m.orgId === activeOrgId);
+  const notice = subscriptionNotice(activeOrg?.access, activeOrg?.endsAt, Date.now());
+  if (signedIn && account && (!activeOrg || notice === 'inactive')) {
     const resolved = resolveActiveOrg(account.memberships, null);
     return (
       <OrgScreen
         message={
-          resolved.kind === 'none' ? NO_ORG_MESSAGE[resolved.reason] : 'Choose an organization.'
+          activeOrg
+            ? "This organization's subscription is not active."
+            : resolved.kind === 'none'
+              ? NO_ORG_MESSAGE[resolved.reason]
+              : 'Choose an organization.'
         }
         memberships={account.memberships}
         onChoose={chooseOrg}
@@ -933,6 +949,14 @@ export default function App() {
     );
   }
 
+  const subscriptionBanner = notice && (
+    <div className="mx-3 mt-2 p-2.5 rounded border border-amber-500/40 bg-amber-500/10 text-amber-300 text-[11px] font-bold">
+      {notice === 'grace'
+        ? `This organization's subscription ended on ${new Date(activeOrg!.endsAt!).toLocaleDateString()}. Renew it to keep uploading.`
+        : "This organization's subscription has expired. Records are kept on this device and upload after renewal."}
+    </div>
+  );
+
   // A device with no boreholes is a real state, not an error: it is exactly what
   // a crew sees the moment their device is linked and the sample job is cleared.
   // Rendering the rig UI here would dereference an undefined active borehole.
@@ -940,6 +964,7 @@ export default function App() {
     return (
       <div className="min-h-screen bg-[#0A0A0A] text-white flex flex-col items-center justify-center p-6 text-center">
         <h1 className="text-2xl font-black tracking-tight">PERIPLUS DRILL</h1>
+        {subscriptionBanner}
         <p className="mt-2 mb-6 text-sm text-slate-400 font-semibold max-w-xs">
           No borehole on this device yet. Create one to start logging pipes.
           Everything is saved on the rig and uploads when you next have signal.
@@ -997,6 +1022,7 @@ export default function App() {
       />
 
       {/* Main Content Area */}
+      {subscriptionBanner}
       {syncError && (
         <div className="mx-3 mt-2 p-2.5 rounded border border-rose-500/40 bg-rose-500/10 text-rose-300 text-[11px] font-bold flex items-start justify-between gap-2">
           <span>{syncError}</span>

@@ -19,6 +19,7 @@ import { getSupabase } from './supabaseClient';
 
 const CACHED_USER_ID_KEY = 'wwdm_auth_user_id';
 const CACHED_ORG_ID_KEY = 'wwdm_active_org';
+const CACHED_ACCESS_KEY = 'wwdm_active_org_access';
 
 export interface AuthProfile {
   id: string;
@@ -72,6 +73,16 @@ export function setCachedOrgId(orgId: string): void {
   localStorage.setItem(CACHED_ORG_ID_KEY, orgId);
 }
 
+/** That organization's subscription access as last read online; null until read, which counts as full. */
+export function getCachedAccess(): 'full' | 'read_only' | 'none' | null {
+  return localStorage.getItem(CACHED_ACCESS_KEY) as 'full' | 'read_only' | 'none' | null;
+}
+
+export function setCachedAccess(access: string | null | undefined): void {
+  if (access) localStorage.setItem(CACHED_ACCESS_KEY, access);
+  else localStorage.removeItem(CACHED_ACCESS_KEY);
+}
+
 /**
  * `holdsUnsentWork`: the outbox has pending or parked work. Another account
  * may then not sign in over the one this device is linked to (RF-124): the
@@ -123,6 +134,7 @@ export async function signOut(): Promise<void> {
   if (client) await client.auth.signOut();
   localStorage.removeItem(CACHED_USER_ID_KEY);
   localStorage.removeItem(CACHED_ORG_ID_KEY);
+  localStorage.removeItem(CACHED_ACCESS_KEY);
 }
 
 /**

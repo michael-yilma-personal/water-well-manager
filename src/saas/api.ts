@@ -2,7 +2,18 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 type MembershipStatus = 'invited' | 'active' | 'deactivated';
 
-export type Membership = { orgId: string; name: string; role: string; status: MembershipStatus };
+export type Access = 'full' | 'read_only' | 'none';
+
+// `access` and `endsAt` are null for a membership that is not active, and
+// absent or null on a backend without subscriptions: both mean full access.
+export type Membership = {
+  orgId: string;
+  name: string;
+  role: string;
+  status: MembershipStatus;
+  access?: Access | null;
+  endsAt?: string | null;
+};
 
 export type Member = {
   id: string;
@@ -61,8 +72,13 @@ export function createSaasApi(deps: Deps) {
 
   return {
     async fetchMyOrganizations(): Promise<Membership[]> {
-      const rows = await rpc<{ org_id: string; name: string; role: string; status: MembershipStatus }[] | null>('my_organizations');
-      return (rows ?? []).map((r) => ({ orgId: r.org_id, name: r.name, role: r.role, status: r.status }));
+      const rows = await rpc<
+        { org_id: string; name: string; role: string; status: MembershipStatus; access?: Access | null; ends_at?: string | null }[] | null
+      >('my_organizations');
+      return (rows ?? []).map((r) => ({
+        orgId: r.org_id, name: r.name, role: r.role, status: r.status,
+        access: r.access ?? null, endsAt: r.ends_at ?? null,
+      }));
     },
     acceptMembership: (orgId: string) => rpc<unknown>('accept_membership', { org: orgId }),
     declineMembership: (orgId: string) => rpc<unknown>('decline_membership', { org: orgId }),

@@ -36,7 +36,7 @@ import { CrewView } from './CrewView';
 import { isSupabaseConfigured } from '../services/supabaseClient';
 import { FORBIDDEN_EVENT, saas } from './saas';
 import type { Membership } from '../saas/api';
-import { mayActivate, rememberOrg, rememberedOrg, resolveActiveOrg } from '../saas/orgContext';
+import { mayActivate, rememberOrg, rememberedOrg, resolveActiveOrg, subscriptionNotice } from '../saas/orgContext';
 import {
   generateBoreholeExcelReport,
   generateShiftReportPDF,
@@ -214,12 +214,15 @@ function EventPhoto({ event, orgId }: { event: AdminEvent; orgId: string }) {
 function BoreholeDetail({
   borehole,
   orgId,
+  readOnly,
   profiles,
   me,
   onBack,
 }: {
   borehole: AdminBorehole;
   orgId: string;
+  /** The subscription has expired: records are read and exported, not edited. */
+  readOnly: boolean;
   profiles: Map<string, Profile>;
   me: Me | null;
   onBack: () => void;
@@ -245,7 +248,7 @@ function BoreholeDetail({
   }, [borehole.id, reloadKey]);
 
   const canEdit = (p: AdminPipeRecord) =>
-    !p.deletedAt && (isReviewer(me) || p.createdBy === me?.id);
+    !readOnly && !p.deletedAt && (isReviewer(me) || p.createdBy === me?.id);
 
   const live = (pipes ?? []).filter((p) => !p.deletedAt);
   const depth = measuredDepth(pipes ?? []);
@@ -871,10 +874,32 @@ export default function AdminApp() {
     );
   }
 
+  const subscription = subscriptionNotice(current.access, current.endsAt, Date.now());
+  if (subscription === 'inactive') {
+    return (
+      <OrgGate
+        message="This organization's subscription is not active."
+        choices={active.filter((m) => m.orgId !== current.orgId)}
+        onChoose={choose}
+        invitations={invitations}
+        onSignOut={leave}
+      />
+    );
+  }
+  const readOnly = subscription === 'expired';
+
   const me: Me = { id: orgs.userId, role: current.role };
+  const invited = orgs.memberships.some((m) => m.status === 'invited');
 
   if (showCrew && me.role === 'Administrator') {
-    return <CrewView key={current.orgId} orgId={current.orgId} onBack={() => setShowCrew(false)} />;
+    return (
+      <CrewView
+        key={current.orgId}
+        orgId={current.orgId}
+        readOnly={readOnly}
+        onBack={() => setShowCrew(false)}
+      />
+    );
   }
 
   if (selected) {
@@ -882,6 +907,7 @@ export default function AdminApp() {
       <BoreholeDetail
         borehole={selected}
         orgId={current.orgId}
+        readOnly={readOnly}
         profiles={profiles}
         me={me}
         onBack={() => setSelected(null)}
@@ -908,7 +934,20 @@ export default function AdminApp() {
           </select>
         )
       }
-      notice={orgs.memberships.some((m) => m.status === 'invited') ? invitations : undefined}
+      notice={
+        (subscription || invited) && (
+          <>
+            {subscription && (
+              <div className="mb-3 p-3 rounded border border-amber-500/40 bg-amber-500/10 text-amber-300 text-sm font-bold">
+                {subscription === 'grace'
+                  ? `This organization's subscription ended on ${new Date(current.endsAt!).toLocaleDateString()}. Renew it to keep access.`
+                  : "This organization's subscription has expired. Records can be read and exported, but not changed."}
+              </div>
+            )}
+            {invited && invitations}
+          </>
+        )
+      }
       profiles={profiles}
       onOpen={setSelected}
       onOpenCrew={me.role === 'Administrator' ? () => setShowCrew(true) : undefined}

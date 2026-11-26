@@ -138,7 +138,16 @@ function AddForm({ orgId, onAdded }: { orgId: string; onAdded: (notice: string) 
   );
 }
 
-export function CrewView({ orgId, onBack }: { orgId: string; onBack: () => void }) {
+export function CrewView({
+  orgId,
+  readOnly,
+  onBack,
+}: {
+  orgId: string;
+  /** The subscription has expired: the server allows only listing and deactivating. */
+  readOnly: boolean;
+  onBack: () => void;
+}) {
   const [crew, setCrew] = useState<Member[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -155,14 +164,18 @@ export function CrewView({ orgId, onBack }: { orgId: string; onBack: () => void 
   useEffect(load, [load]);
 
   const remove = async (m: Member) => {
-    const willDeactivate = m.records > 0;
+    const willDeactivate = readOnly || m.records > 0;
     const message = willDeactivate
       ? `${label(m)} has logged ${m.records} record(s).\n\nTheir membership will be deactivated, so they lose access to this organization, but their records and their name stay in the drilling log. Continue?`
       : `${label(m)} has logged nothing here, so they will be removed from this organization. Continue?`;
     if (!window.confirm(message)) return;
     try {
-      const r = await saas.removeMember(orgId, m.id);
-      setNotice(r.action === 'deactivated'
+      // With an expired subscription the server allows deactivating only.
+      if (readOnly) await saas.deactivateMember(orgId, m.id);
+      const r = readOnly ? null : await saas.removeMember(orgId, m.id);
+      setNotice(!r
+        ? `${label(m)} was deactivated in this organization. The records are untouched.`
+        : r.action === 'deactivated'
         ? `${label(m)} was deactivated in this organization because they have ${r.records} record(s) here. The records are untouched.`
         : `${label(m)} was removed from this organization.`);
       load();
@@ -284,9 +297,9 @@ export function CrewView({ orgId, onBack }: { orgId: string; onBack: () => void 
                       </button>
                     ) : (
                       <button onClick={() => remove(m)}
-                              title={m.records > 0 ? 'Deactivates the membership; records are kept' : 'Removes them from this organization'}
+                              title={readOnly || m.records > 0 ? 'Deactivates the membership; records are kept' : 'Removes them from this organization'}
                               className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded border border-rose-500/40 text-rose-300 text-xs font-black uppercase">
-                        <UserX className="w-3.5 h-3.5" /> {m.records > 0 ? 'Disable' : 'Delete'}
+                        <UserX className="w-3.5 h-3.5" /> {readOnly || m.records > 0 ? 'Disable' : 'Delete'}
                       </button>
                     )}
                   </td>

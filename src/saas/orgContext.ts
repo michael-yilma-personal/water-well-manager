@@ -1,4 +1,4 @@
-import type { Membership } from './api';
+import type { Access, Membership } from './api';
 
 type ActiveOrg =
   | { kind: 'active'; orgId: string }
@@ -29,4 +29,18 @@ export function rememberOrg(storage: Pick<Storage, 'setItem'>, userId: string, o
 
 export function rememberedOrg(storage: Pick<Storage, 'getItem'>, userId: string): string | null {
   return storage.getItem(key(userId));
+}
+
+/**
+ * What to tell the person about the organization's subscription. No access
+ * level read yet counts as full: nothing to tell.
+ */
+export function subscriptionNotice(
+  access: Access | null | undefined,
+  endsAt: string | null | undefined,
+  now: number
+): 'grace' | 'expired' | 'inactive' | null {
+  if (access === 'none') return 'inactive';
+  if (access === 'read_only') return 'expired';
+  return access === 'full' && endsAt && Date.parse(endsAt) < now ? 'grace' : null;
 }

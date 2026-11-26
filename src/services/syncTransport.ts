@@ -4,7 +4,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { NoSessionError, PermanentSyncError, type OutboxEntity, type OutboxItem, type OutboxTransport } from './outbox';
+import { NoSessionError, PermanentSyncError, SubscriptionHeldError, type OutboxEntity, type OutboxItem, type OutboxTransport } from './outbox';
 import {
   boreholeToRow,
   eventToRow,
@@ -32,6 +32,8 @@ export interface TransportDeps {
   getClient: () => SupabaseClient | null;
   /** Resolves the signed-in user's id, or null when there is no session. */
   getUserId: () => Promise<string | null>;
+  /** The active organization's access as last read; absent or null means full. */
+  getAccess?: () => 'full' | 'read_only' | 'none' | null;
   /** Injected for tests; defaults to wall clock. */
   now?: () => string;
 }
@@ -60,6 +62,8 @@ function toRow(
 
 function classify(error: { code?: string; message?: string } | null, context: string): Error {
   const message = `${context}: ${error?.message ?? 'unknown error'}`;
+  // The subscription refused the write: held until renewal, not parked.
+  if (error?.code === 'SS002') return new SubscriptionHeldError(message);
   if (error?.code && PERMANENT_PG_CODES.has(error.code)) {
     return new PermanentSyncError(message);
   }
@@ -97,11 +101,16 @@ export function createSupabaseTransport(deps: TransportDeps): OutboxTransport {
 
     if (item.op === 'delete') {
       // Soft delete: this is an audit log, so the row stays and is marked.
-      const { error } = await client
+      const { error, count } = await client
         .from(table)
-        .update({ deleted_at: now() })
+        .update({ deleted_at: now() }, { count: 'exact' })
         .eq('id', item.entityId);
       if (error) throw classify(error, `soft-delete ${table}/${item.entityId}`);
+      // While access is `none` the row is hidden and the update matches nothing
+      // without an error: that is not a delivery (RF-142).
+      if (count === 0 && deps.getAccess?.() === 'none') {
+        throw new SubscriptionHeldError(`soft-delete ${table}/${item.entityId}: subscription not active`);
+      }
       return;
     }
 
